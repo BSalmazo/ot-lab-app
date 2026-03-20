@@ -28,7 +28,8 @@ jobs:
           python -c "import os; print('\n'.join(sorted(os.listdir('.'))))"
 
       - name: Find agent.py
-        run: find . -name "agent.py"
+        run: |
+          python -c "import pathlib; print('\n'.join(str(p) for p in pathlib.Path('.').rglob('agent.py')))"
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -42,10 +43,11 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          pyinstaller --onefile --name otlab-agent "$(find . -name 'agent.py' | head -n 1)"
+          python -c "import pathlib, subprocess; p=list(pathlib.Path('.').rglob('agent.py')); subprocess.check_call(['pyinstaller','--onefile','--name','otlab-agent', str(p[0])])"
 
       - name: List dist files
-        run: ls -la dist || true
+        run: |
+          python -c "import os, pathlib; d=pathlib.Path('dist'); print('\n'.join(str(p) for p in d.iterdir()) if d.exists() else 'dist not found')"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
