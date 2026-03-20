@@ -22,7 +22,7 @@ jobs:
       - name: Debug repo structure
         run: |
           pwd
-          ls -la
+          ls
           find . -maxdepth 3 -type f
 
       - name: Setup Python
