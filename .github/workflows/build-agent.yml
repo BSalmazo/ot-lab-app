@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "agent.py"
+      - "./agent.py"
       - ".github/workflows/build-agent.yml"
 
 jobs:
@@ -19,26 +19,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Debug repo structure
+        run: |
+          pwd
+          ls -la
+          find . -maxdepth 3 -type f
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install dependencies (Linux/macOS)
-        if: runner.os != 'Windows'
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller requests scapy
-
-      - name: Install dependencies (Windows)
-        if: runner.os == 'Windows'
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller requests scapy
 
       - name: Build with PyInstaller
         run: |
-          pyinstaller --onefile --name otlab-agent agent.py
+          pyinstaller --onefile --name otlab-agent ./agent.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
