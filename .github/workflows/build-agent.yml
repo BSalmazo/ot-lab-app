@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "./agent.py"
+      - "agent.py"
       - ".github/workflows/build-agent.yml"
 
 jobs:
@@ -19,11 +19,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Debug repo structure
-        run: |
-          pwd
-          ls
-          find . -maxdepth 3 -type f
+      - name: Show current directory
+        run: pwd
+
+      - name: List repository files
+        run: ls -la
+
+      - name: Find agent.py
+        run: find . -name "agent.py"
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -37,7 +40,10 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          pyinstaller --onefile --name otlab-agent ./agent.py
+          pyinstaller --onefile --name otlab-agent "$(find . -name 'agent.py' | head -n 1)"
+
+      - name: List dist files
+        run: ls -la dist || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
