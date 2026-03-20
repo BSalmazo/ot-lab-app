@@ -25,7 +25,7 @@
         <div class="card-head">
           <h2>Agente Local</h2>
           <div class="card-tools">
-            <button id="openAgentDownloadBtn" class="download-btn">Download Agent</button>
+            <button id="openAgentDownloadBtn" class="download-btn" type="button">Download Agent</button>
           </div>
         </div>
         <div id="agentStatus" class="status slim">-</div>
@@ -35,7 +35,7 @@
         <div class="card-head">
           <h2>Monitor IDS</h2>
           <div class="card-tools">
-            <button class="secondary small" id="openMonitorConfigBtn">Configurar</button>
+            <button class="secondary small" id="openMonitorConfigBtn" type="button">Configurar</button>
           </div>
         </div>
         <div id="monitorStatus" class="status slim">-</div>
@@ -45,8 +45,8 @@
         <div class="card-head">
           <h2>Servidor Modbus</h2>
           <div class="card-tools">
-            <button class="secondary small" id="openServerConfigBtn">Configurar</button>
-            <button id="toggleServerBtn" class="small">Start</button>
+            <button class="secondary small" id="openServerConfigBtn" type="button">Configurar</button>
+            <button id="toggleServerBtn" class="small" type="button">Start</button>
           </div>
         </div>
         <div id="serverStatus" class="status slim">-</div>
@@ -56,8 +56,8 @@
         <div class="card-head">
           <h2>Cliente Modbus</h2>
           <div class="card-tools">
-            <button class="secondary small" id="openClientConfigBtn">Configurar</button>
-            <button id="toggleClientBtn" class="small">Start</button>
+            <button class="secondary small" id="openClientConfigBtn" type="button">Configurar</button>
+            <button id="toggleClientBtn" class="small" type="button">Start</button>
           </div>
         </div>
         <div id="clientStatus" class="status slim">-</div>
@@ -67,7 +67,7 @@
         <div class="card-head">
           <h2>Processo Simulado</h2>
           <div class="card-tools">
-            <button id="resetProcessBtn" class="secondary small">Reset</button>
+            <button id="resetProcessBtn" class="secondary small" type="button">Reset</button>
           </div>
         </div>
 
@@ -91,12 +91,12 @@
         </div>
 
         <div class="actions tight">
-          <button id="togglePumpBtn">Toggle Bomba</button>
-          <button id="toggleValveBtn">Toggle Válvula</button>
+          <button id="togglePumpBtn" type="button">Toggle Bomba</button>
+          <button id="toggleValveBtn" type="button">Toggle Válvula</button>
           <div class="inline-set">
             <label for="forceLevel">Forçar nível</label>
             <input id="forceLevel" type="number" value="20" />
-            <button id="setLevelBtn">Aplicar</button>
+            <button id="setLevelBtn" type="button">Aplicar</button>
           </div>
         </div>
       </section>
@@ -111,7 +111,7 @@
           <div class="row compact-row">
             <input id="readStart" type="number" value="0" placeholder="Start" />
             <input id="readQty" type="number" value="4" placeholder="Qty" />
-            <button id="sendReadBtn">Enviar READ</button>
+            <button id="sendReadBtn" type="button">Enviar READ</button>
           </div>
         </div>
 
@@ -120,7 +120,7 @@
           <div class="row compact-row">
             <input id="writeRegister" type="number" value="1" placeholder="Reg" />
             <input id="writeValue" type="number" value="1" placeholder="Valor" />
-            <button id="sendWriteBtn">Enviar WRITE</button>
+            <button id="sendWriteBtn" type="button">Enviar WRITE</button>
           </div>
         </div>
 
@@ -152,7 +152,7 @@
         <div class="card-head">
           <h2>Logs do Sistema</h2>
           <div class="card-tools">
-            <button id="resetSystemBtn" class="secondary small">Reset</button>
+            <button id="resetSystemBtn" class="secondary small" type="button">Reset</button>
           </div>
         </div>
         <div id="logsPanel" class="log-panel compact-log"></div>
@@ -164,7 +164,7 @@
     <div class="modal-box">
       <div class="modal-head">
         <h3>Configuração do Monitor</h3>
-        <button class="icon-btn" data-close="monitorModal">✕</button>
+        <button class="icon-btn" type="button" data-close="monitorModal">✕</button>
       </div>
       <div class="modal-body">
         <div class="row">
@@ -186,7 +186,7 @@
         <div id="monitorConfigStatus" class="status slim">-</div>
 
         <div class="actions tight">
-          <button id="saveMonitorConfigBtn">Salvar</button>
+          <button id="saveMonitorConfigBtn" type="button">Salvar</button>
         </div>
       </div>
     </div>
@@ -196,7 +196,7 @@
     <div class="modal-box">
       <div class="modal-head">
         <h3>Configuração do Servidor Modbus</h3>
-        <button class="icon-btn" data-close="serverModal">✕</button>
+        <button class="icon-btn" type="button" data-close="serverModal">✕</button>
       </div>
       <div class="modal-body">
         <div class="row">
@@ -215,7 +215,7 @@
     <div class="modal-box">
       <div class="modal-head">
         <h3>Configuração do Cliente Modbus</h3>
-        <button class="icon-btn" data-close="clientModal">✕</button>
+        <button class="icon-btn" type="button" data-close="clientModal">✕</button>
       </div>
       <div class="modal-body">
         <div class="row">
@@ -246,13 +246,13 @@
     <div class="modal-box">
       <div class="modal-head">
         <h3>Download do Agente Local</h3>
-        <button class="icon-btn" data-close="agentDownloadModal">✕</button>
+        <button class="icon-btn" type="button" data-close="agentDownloadModal">✕</button>
       </div>
       <div class="modal-body">
         <div class="download-grid">
-          <button class="download-btn" data-agent-platform="windows">Windows</button>
-          <button class="download-btn" data-agent-platform="macos">macOS</button>
-          <button class="download-btn" data-agent-platform="linux">Linux</button>
+          <a class="download-btn" href="/downloads/agent/windows">Windows</a>
+          <a class="download-btn" href="/downloads/agent/mac">macOS</a>
+          <a class="download-btn" href="/downloads/agent/linux">Linux</a>
         </div>
       </div>
     </div>

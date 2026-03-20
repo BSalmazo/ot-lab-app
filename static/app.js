@@ -308,16 +308,6 @@ async function scanInterfaces() {
   setText("monitorConfigStatus", `Interfaces encontradas: ${(data.interfaces || []).join(", ") || "-"}`);
 }
 
-function setupAgentDownloadButtons() {
-  const buttons = document.querySelectorAll("[data-agent-platform]");
-  buttons.forEach(btn => {
-    btn.addEventListener("click", () => {
-      window.location.href = "/api/agent/download";
-      closeModal("agentDownloadModal");
-    });
-  });
-}
-
 window.addEventListener("DOMContentLoaded", () => {
   byId("toggleServerBtn").addEventListener("click", toggleServer);
   byId("toggleClientBtn").addEventListener("click", toggleClient);
@@ -350,8 +340,6 @@ window.addEventListener("DOMContentLoaded", () => {
       }
     });
   });
-
-  setupAgentDownloadButtons();
 
   refreshAll();
   setInterval(refreshAll, 1000);
