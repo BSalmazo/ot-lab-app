@@ -292,7 +292,7 @@ def download_agent_windows():
 
 @app.get("/downloads/agent/mac")
 def download_agent_mac():
-    path = Path("downloads/agent/mac/otlab-agent")
+    path = Path("downloads/agent/mac/otlab-agent-mac")
     return FileResponse(
         path=path,
         filename="otlab-agent-mac",
@@ -301,7 +301,7 @@ def download_agent_mac():
 
 @app.get("/downloads/agent/linux")
 def download_agent_linux():
-    path = Path("downloads/agent/linux/otlab-agent")
+    path = Path("downloads/agent/linux/otlab-agent-linux")
     return FileResponse(
         path=path,
         filename="otlab-agent-linux",
