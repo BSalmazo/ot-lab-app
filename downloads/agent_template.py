@@ -27,7 +27,7 @@ from scapy.all import AsyncSniffer, IP, TCP, get_if_list
 
 
 MODBUS_KNOWN_FUNCTION_CODES = {1, 2, 3, 4, 5, 6, 15, 16}
-DEFAULT_SERVER_URL = "__SERVER_URL__"
+DEFAULT_SERVER_URL = "https://web-production-56599.up.railway.app/"
 DEFAULT_SESSION_ID = "__SESSION_ID__"
 DEFAULT_IFACE = "ALL"
 DEFAULT_MODE = "__MODE__"
