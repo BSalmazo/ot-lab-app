@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "agent.py"
+      - "agent_template.py"
       - ".github/workflows/build-agent.yml"
 
 jobs:
@@ -27,9 +27,9 @@ jobs:
         run: |
           python -c "import os; print('\n'.join(sorted(os.listdir('.'))))"
 
-      - name: Find agent.py
+      - name: Find_template.py
         run: |
-          python -c "import pathlib; print('\n'.join(str(p) for p in pathlib.Path('.').rglob('agent.py')))"
+          python -c "import pathlib; print('\n'.join(str(p) for p in pathlib.Path('.').rglob('agent_template.py')))"
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -43,7 +43,7 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          python -c "import pathlib, subprocess; p=list(pathlib.Path('.').rglob('agent.py')); subprocess.check_call(['pyinstaller','--onefile','--name','otlab-agent', str(p[0])])"
+          python -c "import pathlib, subprocess; p=list(pathlib.Path('.').rglob('agent_template.py')); subprocess.check_call(['pyinstaller','--onefile','--name','otlab-agent', str(p[0])])"
 
       - name: List dist files
         run: |
