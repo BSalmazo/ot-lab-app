@@ -7,7 +7,7 @@ from threading import Lock
 from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
@@ -280,6 +280,33 @@ def download_agent(request: Request):
 
     set_session_cookie_if_needed(request, response, session_id)
     return response
+
+@app.get("/downloads/agent/windows")
+def download_agent_windows():
+    path = Path("downloads/windows/otlab-agent.exe")
+    return FileResponse(
+        path=path,
+        filename="otlab-agent.exe",
+        media_type="application/octet-stream"
+    )
+
+@app.get("/downloads/agent/mac")
+def download_agent_mac():
+    path = Path("downloads/mac/otlab-agent")
+    return FileResponse(
+        path=path,
+        filename="otlab-agent-mac",
+        media_type="application/octet-stream"
+    )
+
+@app.get("/downloads/agent/linux")
+def download_agent_linux():
+    path = Path("downloads/linux/otlab-agent")
+    return FileResponse(
+        path=path,
+        filename="otlab-agent-linux",
+        media_type="application/octet-stream"
+    )
 
 
 @app.post("/api/server/start")
