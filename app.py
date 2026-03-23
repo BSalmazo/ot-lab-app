@@ -136,7 +136,14 @@ def push_log_for_session(session_id: str, message: str):
         state["logs"].append(message)
 
 def build_agent_config(request: Request, session_id: str, state: dict):
-    server_url = str(request.base_url).rstrip("/")
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    forwarded_host = request.headers.get("x-forwarded-host")
+
+    scheme = forwarded_proto or request.url.scheme
+    host = forwarded_host or request.url.netloc
+
+    server_url = f"{scheme}://{host}".rstrip("/")
+
     return {
         "server_url": server_url,
         "session_id": session_id,
