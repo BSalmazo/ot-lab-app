@@ -11,7 +11,7 @@ class ModbusTCPServer:
     - FC06 (Write Single Register)
     """
 
-    def __init__(self, process, host="127.0.0.1", port=15020, on_log=None):
+    def __init__(self, process, host="127.0.0.1", port=5020, on_log=None):
         self.process = process
         self.host = host
         self.port = port

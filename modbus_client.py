@@ -5,7 +5,7 @@ import time
 
 
 class ModbusTCPClient:
-    def __init__(self, host="127.0.0.1", port=15020, unit_id=1, on_log=None):
+    def __init__(self, host="127.0.0.1", port=5020, unit_id=1, on_log=None):
         self.host = host
         self.port = port
         self.unit_id = unit_id
