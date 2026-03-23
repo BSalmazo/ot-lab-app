@@ -27,21 +27,23 @@ from scapy.all import AsyncSniffer, IP, TCP, get_if_list
 
 
 MODBUS_KNOWN_FUNCTION_CODES = {1, 2, 3, 4, 5, 6, 15, 16}
-DEFAULT_SERVER_URL = "https://web-production-56599.up.railway.app/"
-DEFAULT_SESSION_ID = "__SESSION_ID__"
+DEFAULT_SERVER_URL = "__SERVER_URL__"
+DEFAULT_SESSION_ID = ""
 DEFAULT_IFACE = "ALL"
 DEFAULT_MODE = "__MODE__"
 
 CONFIG_DIR = Path.home() / ".ot_lab_agent"
-CONFIG_FILE = CONFIG_DIR / "agent_config.json"
+IDENTITY_FILE = CONFIG_DIR / "identity.json"
+INSTALLED_CONFIG_FILE = CONFIG_DIR / "agent_config.json"
+LOCAL_BUNDLED_CONFIG = Path(__file__).resolve().parent / "agent-config.json"
 
 
 def load_or_create_local_identity():
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
-    if CONFIG_FILE.exists():
+    if IDENTITY_FILE.exists():
         try:
-            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            data = json.loads(IDENTITY_FILE.read_text(encoding="utf-8"))
             if data.get("agent_id"):
                 return data
         except Exception:
@@ -51,8 +53,25 @@ def load_or_create_local_identity():
         "agent_id": str(uuid.uuid4()),
         "created_at": time.time(),
     }
-    CONFIG_FILE.write_text(json.dumps(identity, indent=2), encoding="utf-8")
+    IDENTITY_FILE.write_text(json.dumps(identity, indent=2), encoding="utf-8")
     return identity
+
+def load_agent_config():
+    candidates = [
+        LOCAL_BUNDLED_CONFIG,
+        INSTALLED_CONFIG_FILE,
+    ]
+
+    for path in candidates:
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    return data
+            except Exception:
+                pass
+
+    return {}
 
 
 class AgentMonitor:
@@ -574,16 +593,37 @@ class AgentMonitor:
 
 
 def main():
+    bundled_config = load_agent_config()
+
     parser = argparse.ArgumentParser(description="OT Lab Agent")
-    parser.add_argument("--server", default=DEFAULT_SERVER_URL, help="URL da dashboard/backend")
-    parser.add_argument("--session-id", default=DEFAULT_SESSION_ID, help="Session ID")
-    parser.add_argument("--iface", default=DEFAULT_IFACE, help="Interface de rede inicial")
-    parser.add_argument("--mode", default=DEFAULT_MODE, choices=["LEARNING", "MONITORING"])
+    parser.add_argument(
+        "--server",
+        default=bundled_config.get("server_url", DEFAULT_SERVER_URL),
+        help="URL da dashboard/backend"
+    )
+    parser.add_argument(
+        "--session-id",
+        default=bundled_config.get("session_id", DEFAULT_SESSION_ID),
+        help="Session ID"
+    )
+    parser.add_argument(
+        "--iface",
+        default=bundled_config.get("iface", DEFAULT_IFACE),
+        help="Interface de rede inicial"
+    )
+    parser.add_argument(
+        "--mode",
+        default=bundled_config.get("mode", DEFAULT_MODE),
+        choices=["LEARNING", "MONITORING"]
+    )
     args = parser.parse_args()
 
     print("\n=== OT LAB AGENT ===")
     print("Interfaces disponíveis:", ", ".join(sorted(set(get_if_list()))))
     print(f"Interface pedida: {args.iface}")
+
+    if bundled_config:
+        print(f"[agent] config carregada de ficheiro")
 
     agent = AgentMonitor(
         iface=args.iface,

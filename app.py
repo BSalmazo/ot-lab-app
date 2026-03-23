@@ -1,6 +1,8 @@
 import time
 import json
 import uuid
+import io
+import zipfile
 
 from collections import deque
 from threading import Lock
@@ -132,6 +134,15 @@ def push_log_for_session(session_id: str, message: str):
     state = ensure_session_state(session_id)
     with lock:
         state["logs"].append(message)
+
+def build_agent_config(request: Request, session_id: str, state: dict):
+    server_url = str(request.base_url).rstrip("/")
+    return {
+        "server_url": server_url,
+        "session_id": session_id,
+        "iface": state["agent_config"].get("iface") or "ALL",
+        "mode": state["agent_config"].get("mode") or "MONITORING",
+    }
 
 
 agents_by_session = {}
@@ -282,31 +293,104 @@ def download_agent(request: Request):
     return response
 
 @app.get("/api/downloads/agent/windows")
-def download_agent_windows():
-    path = BASE_DIR / "downloads" / "agent" / "windows" / "otlab-agent.exe"
-    return FileResponse(
-        path=path,
-        filename="otlab-agent.exe",
-        media_type="application/octet-stream"
+def download_agent_windows(request: Request):
+    session_id, state = get_session_state_from_request(request)
+
+    agent_path = BASE_DIR / "downloads" / "agent" / "windows" / "otlab-agent.exe"
+    if not agent_path.exists():
+        return JSONResponse({"ok": False, "error": "Agent file not found"}, status_code=404)
+
+    config = build_agent_config(request, session_id, state)
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(agent_path, arcname="otlab-agent.exe")
+        zf.writestr("agent-config.json", json.dumps(config, indent=2))
+
+    zip_buffer.seek(0)
+
+    response = Response(
+        content=zip_buffer.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": "attachment; filename=otlab-agent-windows.zip"
+        }
     )
+
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
 
 @app.get("/api/downloads/agent/mac")
-def download_agent_mac():
-    path = BASE_DIR / "downloads" / "agent" / "mac" / "otlab-agent-mac"
-    return FileResponse(
-        path=path,
-        filename="otlab-agent-mac",
-        media_type="application/octet-stream"
+def download_agent_mac(request: Request):
+    session_id, state = get_session_state_from_request(request)
+
+    agent_path = BASE_DIR / "downloads" / "agent" / "mac" / "otlab-agent-mac"
+    if not agent_path.exists():
+        return JSONResponse({"ok": False, "error": "Agent file not found"}, status_code=404)
+
+    config = build_agent_config(request, session_id, state)
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(agent_path, arcname="otlab-agent-mac")
+        zf.writestr("agent-config.json", json.dumps(config, indent=2))
+
+    zip_buffer.seek(0)
+
+    response = Response(
+        content=zip_buffer.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": "attachment; filename=otlab-agent-mac.zip"
+        }
     )
 
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
 @app.get("/api/downloads/agent/linux")
-def download_agent_linux():
-    path = BASE_DIR / "downloads" / "agent" / "linux" / "otlab-agent-linux"
-    return FileResponse(
-        path=path,
-        filename="otlab-agent-linux",
-        media_type="application/octet-stream"
+def download_agent_linux(request: Request):
+    session_id, state = get_session_state_from_request(request)
+
+    agent_path = BASE_DIR / "downloads" / "agent" / "linux" / "otlab-agent-linux"
+    if not agent_path.exists():
+        return JSONResponse({"ok": False, "error": "Agent file not found"}, status_code=404)
+
+    config = build_agent_config(request, session_id, state)
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(agent_path, arcname="otlab-agent-linux")
+        zf.writestr("agent-config.json", json.dumps(config, indent=2))
+
+    zip_buffer.seek(0)
+
+    response = Response(
+        content=zip_buffer.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": "attachment; filename=otlab-agent-linux.zip"
+        }
     )
+
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+@app.get("/api/agent/config/download")
+def download_agent_config(request: Request):
+    session_id, state = get_session_state_from_request(request)
+    config = build_agent_config(request, session_id, state)
+
+    response = Response(
+        content=json.dumps(config, indent=2),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": "attachment; filename=agent-config.json"
+        }
+    )
+
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
 
 
 @app.post("/api/server/start")
