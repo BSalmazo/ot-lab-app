@@ -20,23 +20,38 @@ function byId(id) {
 }
 
 function setText(id, text) {
-  byId(id).textContent = text;
+  const el = byId(id);
+  if (el) el.textContent = text;
+}
+
+function setHtml(id, html) {
+  const el = byId(id);
+  if (el) el.innerHTML = html;
 }
 
 function setBadge(id, label, running) {
   const el = byId(id);
+  if (!el) return;
   el.textContent = `${label}: ${running ? "RUNNING" : "STOPPED"}`;
   el.style.color = running ? "var(--ok)" : "var(--muted)";
 }
 
 function setToggleButton(id, running) {
   const btn = byId(id);
+  if (!btn) return;
   btn.textContent = running ? "Stop" : "Start";
   btn.classList.toggle("danger", running);
 }
 
+function setDisabled(id, disabled) {
+  const el = byId(id);
+  if (el) el.disabled = disabled;
+}
+
 function renderList(containerId, items, formatter) {
   const container = byId(containerId);
+  if (!container) return;
+
   container.innerHTML = "";
 
   if (!items || items.length === 0) {
@@ -53,67 +68,109 @@ function renderList(containerId, items, formatter) {
 }
 
 function openModal(id) {
-  byId(id).classList.remove("hidden");
+  const el = byId(id);
+  if (el) el.classList.remove("hidden");
 }
 
 function closeModal(id) {
-  byId(id).classList.add("hidden");
+  const el = byId(id);
+  if (el) el.classList.add("hidden");
+}
+
+function populateIfaceSelect(interfaces, selectedValue) {
+  const select = byId("ifaceSelect");
+  if (!select) return;
+
+  select.innerHTML = "";
+
+  const allOption = document.createElement("option");
+  allOption.value = "ALL";
+  allOption.textContent = "ALL";
+  if ((selectedValue || "ALL") === "ALL") {
+    allOption.selected = true;
+  }
+  select.appendChild(allOption);
+
+  (interfaces || []).forEach(iface => {
+    const option = document.createElement("option");
+    option.value = iface;
+    option.textContent = iface;
+    if (iface === selectedValue) {
+      option.selected = true;
+    }
+    select.appendChild(option);
+  });
 }
 
 async function refreshStatus() {
   const data = await apiGet("/api/status");
 
-  if (data.agent) {
-    const lastSeen = data.agent.last_seen
-      ? new Date(data.agent.last_seen * 1000).toLocaleTimeString()
-      : "-";
+  const agentConnected = !!data.agent?.connected;
+  const lastSeen = data.agent?.last_seen
+    ? new Date(data.agent.last_seen * 1000).toLocaleTimeString()
+    : "-";
 
-    setText(
-      "agentStatus",
-      `${data.agent.connected ? "CONNECTED" : "DISCONNECTED"} | id=${data.agent.agent_id || "-"} | host=${data.agent.hostname || "-"} | iface=${data.agent.iface || "-"} | mode=${data.agent.mode || "-"} | running=${data.agent.running ? "YES" : "NO"} | last_seen=${lastSeen}`
-    );
-  }
+  setText(
+    "agentStatus",
+    `${agentConnected ? "CONNECTED" : "DISCONNECTED"} | id=${data.agent?.agent_id || "-"} | host=${data.agent?.hostname || "-"} | iface=${data.agent?.iface || "-"} | mode=${data.agent?.mode || "-"} | running=${data.agent?.running ? "YES" : "NO"} | last_seen=${lastSeen}`
+  );
 
   setText(
     "monitorStatus",
-    `${data.monitor.running ? "RUNNING" : "STOPPED"} | current_iface=${data.monitor.iface} | current_mode=${data.monitor.mode} | target_iface=${data.agent_config?.iface || "-"} | target_mode=${data.agent_config?.mode || "-"}`
+    `${data.monitor?.running ? "RUNNING" : "STOPPED"} | current_iface=${data.monitor?.iface || "-"} | current_mode=${data.monitor?.mode || "-"} | target_iface=${data.agent_config?.iface || "-"} | target_mode=${data.agent_config?.mode || "-"}`
   );
 
   setText(
     "serverStatus",
-    `${data.server.running ? "RUNNING" : "STOPPED"} | ${data.server.host}:${data.server.port}`
+    `${data.server?.running ? "RUNNING" : "STOPPED"} | ${data.server?.host || "-"}:${data.server?.port || "-"}`
   );
 
   setText(
     "clientStatus",
-    `${data.client.running ? "RUNNING" : "STOPPED"} | ${data.client.host}:${data.client.port} | poll=${data.client.poll_interval}s`
+    `${data.client?.running ? "RUNNING" : "STOPPED"} | ${data.client?.host || "-"}:${data.client?.port || "-"} | poll=${data.client?.poll_interval ?? "-"}s`
   );
 
-  setBadge("globalMonitorBadge", "MONITOR", data.monitor.running);
-  setBadge("globalServerBadge", "SERVER", data.server.running);
-  setBadge("globalClientBadge", "CLIENT", data.client.running);
+  setBadge("globalMonitorBadge", "MONITOR", !!data.monitor?.running);
+  setBadge("globalServerBadge", "SERVER", !!data.server?.running);
+  setBadge("globalClientBadge", "CLIENT", !!data.client?.running);
 
-  setToggleButton("toggleServerBtn", data.server.running);
-  setToggleButton("toggleClientBtn", data.client.running);
+  setToggleButton("toggleServerBtn", !!data.server?.running);
+  setToggleButton("toggleClientBtn", !!data.client?.running);
 
-  setText("levelValue", data.process.level);
-  byId("pumpValue").innerHTML = `<span class="${data.process.pump_on ? "on" : "off"}">${data.process.pump_on ? "ON" : "OFF"}</span>`;
-  byId("valveValue").innerHTML = `<span class="${data.process.valve_open ? "on" : "off"}">${data.process.valve_open ? "OPEN" : "CLOSED"}</span>`;
-  byId("alarmValue").innerHTML = `<span class="${data.process.alarm_high ? "on" : "off"}">${data.process.alarm_high ? "ON" : "OFF"}</span>`;
+  setDisabled("toggleServerBtn", !agentConnected);
+  setDisabled("toggleClientBtn", !agentConnected);
+  setDisabled("openMonitorConfigBtn", !agentConnected);
+  setDisabled("openServerConfigBtn", !agentConnected);
+  setDisabled("openClientConfigBtn", !agentConnected);
 
-  byId("monitorSnapshot").textContent = JSON.stringify(data.monitor.snapshot, null, 2);
+  if (byId("serverHost")) byId("serverHost").value = data.server?.host || "127.0.0.1";
+  if (byId("serverPort")) byId("serverPort").value = data.server?.port || 5020;
+
+  if (byId("clientHost")) byId("clientHost").value = data.client?.host || "127.0.0.1";
+  if (byId("clientPort")) byId("clientPort").value = data.client?.port || 5020;
+  if (byId("pollInterval")) byId("pollInterval").value = data.client?.poll_interval ?? 1.0;
+  if (byId("pollStart")) byId("pollStart").value = data.client?.poll_start ?? 0;
+  if (byId("pollQuantity")) byId("pollQuantity").value = data.client?.poll_quantity ?? 4;
+
+  setText("monitorSnapshot", JSON.stringify(data.monitor?.snapshot || {}, null, 2));
+
+  // Como o backend novo não tem mais processo local, deixamos a área como placeholder.
+  setText("levelValue", "-");
+  setHtml("pumpValue", `<span class="off">-</span>`);
+  setHtml("valveValue", `<span class="off">-</span>`);
+  setHtml("alarmValue", `<span class="off">-</span>`);
 }
 
 async function refreshEvents() {
   const data = await apiGet("/api/events");
 
   renderList("eventsPanel", data.events, (e) => {
-    const base = `[${e.type}] ${e.src_ip}:${e.src_port} -> ${e.dst_ip}:${e.dst_port}`;
+    const base = `[${e.type || "UNKNOWN"}] ${e.src_ip || "-"}:${e.src_port || "-"} -> ${e.dst_ip || "-"}:${e.dst_port || "-"}`;
     if (e.type === "READ_REQUEST") {
       return `${base} | start=${e.start_addr} qty=${e.quantity}`;
     }
     if (e.type === "READ_RESPONSE") {
-      return `${base} | values=${JSON.stringify(e.register_values)} | rtt=${e.rtt}`;
+      return `${base} | values=${JSON.stringify(e.register_values || [])} | rtt=${e.rtt ?? "-"}`;
     }
     if (e.type === "WRITE_REQUEST" || e.type === "WRITE_RESPONSE") {
       return `${base} | reg=${e.register} value=${e.value} | rtt=${e.rtt ?? "-"}`;
@@ -122,9 +179,9 @@ async function refreshEvents() {
   });
 
   renderList("alertsPanel", data.alerts, (a) => {
-    return `<div class="alert-${a.severity}">
-      <strong>${a.severity}</strong> score=${a.score}<br>
-      ${a.event_type} | ${a.src} -> ${a.dst}<br>
+    return `<div class="alert-${a.severity || "INFO"}">
+      <strong>${a.severity || "INFO"}</strong> score=${a.score ?? "-"}<br>
+      ${a.event_type || "-"} | ${a.src || "-"} -> ${a.dst || "-"}<br>
       ${(a.reasons || []).join(" | ")}
     </div>`;
   });
@@ -142,102 +199,89 @@ async function refreshAll() {
 }
 
 async function startServer() {
-  const host = byId("serverHost").value;
-  const port = Number(byId("serverPort").value);
-  await apiPost("/api/server/start", { host, port });
+  const host = byId("serverHost")?.value || "127.0.0.1";
+  const port = Number(byId("serverPort")?.value || 5020);
+
+  const result = await apiPost("/api/agent/server/start", { host, port });
+  if (!result.ok) {
+    setText("serverStatus", `Erro ao iniciar servidor.`);
+  }
 }
 
 async function stopServer() {
-  await apiPost("/api/server/stop");
+  const result = await apiPost("/api/agent/server/stop");
+  if (!result.ok) {
+    setText("serverStatus", `Erro ao parar servidor.`);
+  }
 }
 
 async function toggleServer() {
   const status = await apiGet("/api/status");
-  if (status.server.running) {
+  if (!status.agent?.connected) {
+    setText("serverStatus", "Agente desconectado.");
+    return;
+  }
+
+  if (status.server?.running) {
     await stopServer();
   } else {
     await startServer();
   }
-  refreshAll();
+
+  await refreshAll();
 }
 
 async function startClient() {
-  const host = byId("clientHost").value;
-  const port = Number(byId("clientPort").value);
-  const poll_interval = Number(byId("pollInterval").value);
-  const poll_start = Number(byId("pollStart").value);
-  const poll_quantity = Number(byId("pollQuantity").value);
+  const host = byId("clientHost")?.value || "127.0.0.1";
+  const port = Number(byId("clientPort")?.value || 5020);
+  const poll_interval = Number(byId("pollInterval")?.value || 1.0);
+  const poll_start = Number(byId("pollStart")?.value || 0);
+  const poll_quantity = Number(byId("pollQuantity")?.value || 4);
 
-  await apiPost("/api/client/start", {
+  const result = await apiPost("/api/agent/client/start", {
     host,
     port,
     poll_interval,
     poll_start,
     poll_quantity
   });
+
+  if (!result.ok) {
+    setText("clientStatus", `Erro ao iniciar cliente.`);
+  }
 }
 
 async function stopClient() {
-  await apiPost("/api/client/stop");
+  const result = await apiPost("/api/agent/client/stop");
+  if (!result.ok) {
+    setText("clientStatus", `Erro ao parar cliente.`);
+  }
 }
 
 async function toggleClient() {
   const status = await apiGet("/api/status");
-  if (status.client.running) {
+  if (!status.agent?.connected) {
+    setText("clientStatus", "Agente desconectado.");
+    return;
+  }
+
+  if (status.client?.running) {
     await stopClient();
   } else {
     await startClient();
   }
-  refreshAll();
-}
 
-async function sendRead() {
-  const start = Number(byId("readStart").value);
-  const quantity = Number(byId("readQty").value);
-  const result = await apiPost("/api/client/read", { start, quantity });
-  setText("actionResult", result.ok ? `READ OK: ${JSON.stringify(result.values)}` : `ERRO: ${result.error}`);
-  refreshAll();
-}
-
-async function sendWrite() {
-  const register = Number(byId("writeRegister").value);
-  const value = Number(byId("writeValue").value);
-  const result = await apiPost("/api/client/write", { register, value });
-  setText("actionResult", result.ok ? `WRITE OK: ${JSON.stringify(result.result)}` : `ERRO: ${result.error}`);
-  refreshAll();
-}
-
-async function togglePump() {
-  const status = await apiGet("/api/status");
-  await apiPost("/api/process/set", { pump_on: !status.process.pump_on });
-  refreshAll();
-}
-
-async function toggleValve() {
-  const status = await apiGet("/api/status");
-  await apiPost("/api/process/set", { valve_open: !status.process.valve_open });
-  refreshAll();
-}
-
-async function resetProcess() {
-  await apiPost("/api/process/reset");
-  refreshAll();
-}
-
-async function setLevel() {
-  const level = Number(byId("forceLevel").value);
-  await apiPost("/api/process/set", { level });
-  refreshAll();
+  await refreshAll();
 }
 
 async function resetSystem() {
   await apiPost("/api/reset");
-  refreshAll();
+  await refreshAll();
 }
 
 async function saveMonitorConfig() {
-  const iface = byId("ifaceSelect").value;
-  const mode = byId("monitorMode").value;
+  const iface = byId("ifaceSelect")?.value || "ALL";
+  const mode = byId("monitorMode")?.value || "MONITORING";
 
   const result = await apiPost("/api/agent/config", { iface, mode });
 
@@ -253,46 +297,17 @@ async function saveMonitorConfig() {
 async function openMonitorConfig() {
   const status = await apiGet("/api/status");
 
-  if (status.agent_config) {
-    byId("monitorMode").value = status.agent_config.mode || "MONITORING";
+  if (byId("monitorMode")) {
+    byId("monitorMode").value = status.agent_config?.mode || "MONITORING";
   }
 
   openModal("monitorModal");
   await scanInterfaces();
 
-  if (status.agent_config) {
-    populateIfaceSelect(
-      status.agent?.available_ifaces || [],
-      status.agent_config.iface || ""
-    );
-  }
-}
-
-function populateIfaceSelect(interfaces, selectedValue) {
-  const select = byId("ifaceSelect");
-  select.innerHTML = "";
-
-  const allOption = document.createElement("option");
-  allOption.value = "ALL";
-  allOption.textContent = "ALL";
-  if (selectedValue === "ALL") {
-    allOption.selected = true;
-  }
-  select.appendChild(allOption);
-
-  if (!interfaces || interfaces.length === 0) {
-    return;
-  }
-
-  interfaces.forEach(iface => {
-    const option = document.createElement("option");
-    option.value = iface;
-    option.textContent = iface;
-    if (iface === selectedValue) {
-      option.selected = true;
-    }
-    select.appendChild(option);
-  });
+  populateIfaceSelect(
+    status.agent?.available_ifaces || [],
+    status.agent_config?.iface || "ALL"
+  );
 }
 
 async function scanInterfaces() {
@@ -304,30 +319,33 @@ async function scanInterfaces() {
     return;
   }
 
-  populateIfaceSelect(data.interfaces || [], data.current || "");
+  populateIfaceSelect(data.interfaces || [], data.current || "ALL");
   setText("monitorConfigStatus", `Interfaces encontradas: ${(data.interfaces || []).join(", ") || "-"}`);
 }
 
+function disableLegacySections() {
+  setDisabled("sendReadBtn", true);
+  setDisabled("sendWriteBtn", true);
+  setDisabled("togglePumpBtn", true);
+  setDisabled("toggleValveBtn", true);
+  setDisabled("resetProcessBtn", true);
+  setDisabled("setLevelBtn", true);
+
+  setText("actionResult", "Ações READ/WRITE locais desativadas nesta versão.");
+}
+
 window.addEventListener("DOMContentLoaded", () => {
-  byId("toggleServerBtn").addEventListener("click", toggleServer);
-  byId("toggleClientBtn").addEventListener("click", toggleClient);
-  byId("resetSystemBtn").addEventListener("click", resetSystem);
+  byId("toggleServerBtn")?.addEventListener("click", toggleServer);
+  byId("toggleClientBtn")?.addEventListener("click", toggleClient);
+  byId("resetSystemBtn")?.addEventListener("click", resetSystem);
 
-  byId("sendReadBtn").addEventListener("click", sendRead);
-  byId("sendWriteBtn").addEventListener("click", sendWrite);
+  byId("openMonitorConfigBtn")?.addEventListener("click", openMonitorConfig);
+  byId("saveMonitorConfigBtn")?.addEventListener("click", saveMonitorConfig);
+  byId("scanIfacesBtn")?.addEventListener("click", scanInterfaces);
 
-  byId("togglePumpBtn").addEventListener("click", togglePump);
-  byId("toggleValveBtn").addEventListener("click", toggleValve);
-  byId("resetProcessBtn").addEventListener("click", resetProcess);
-  byId("setLevelBtn").addEventListener("click", setLevel);
-
-  byId("openMonitorConfigBtn").addEventListener("click", openMonitorConfig);
-  byId("saveMonitorConfigBtn").addEventListener("click", saveMonitorConfig);
-  byId("scanIfacesBtn").addEventListener("click", scanInterfaces);
-
-  byId("openServerConfigBtn").addEventListener("click", () => openModal("serverModal"));
-  byId("openClientConfigBtn").addEventListener("click", () => openModal("clientModal"));
-  byId("openAgentDownloadBtn").addEventListener("click", () => openModal("agentDownloadModal"));
+  byId("openServerConfigBtn")?.addEventListener("click", () => openModal("serverModal"));
+  byId("openClientConfigBtn")?.addEventListener("click", () => openModal("clientModal"));
+  byId("openAgentDownloadBtn")?.addEventListener("click", () => openModal("agentDownloadModal"));
 
   document.querySelectorAll("[data-close]").forEach(btn => {
     btn.addEventListener("click", () => closeModal(btn.dataset.close));
@@ -341,6 +359,7 @@ window.addEventListener("DOMContentLoaded", () => {
     });
   });
 
+  disableLegacySections();
   refreshAll();
   setInterval(refreshAll, 1000);
 });
