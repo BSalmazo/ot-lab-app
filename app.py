@@ -31,9 +31,9 @@ app.add_middleware(
 BASE_DIR = Path(__file__).resolve().parent
 SESSION_COOKIE = "scada_session_id"
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
-app.mount("/downloads", StaticFiles(directory=BASE_DIR / "downloads"), name="downloads")
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+app.mount("/downloads", StaticFiles(directory=str(BASE_DIR / "downloads")), name="downloads")
 
 lock = Lock()
 
