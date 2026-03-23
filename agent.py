@@ -35,7 +35,13 @@ DEFAULT_IFACE = "ALL"
 CONFIG_DIR = Path.home() / ".ot_lab_agent"
 IDENTITY_FILE = CONFIG_DIR / "identity.json"
 INSTALLED_CONFIG_FILE = CONFIG_DIR / "agent_config.json"
-LOCAL_BUNDLED_CONFIG = Path(__file__).resolve().parent / "agent-config.json"
+
+def get_executable_dir():
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+LOCAL_BUNDLED_CONFIG = get_executable_dir() / "agent-config.json"
 
 
 def load_or_create_local_identity():
@@ -67,10 +73,13 @@ def load_agent_config():
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
+                    print(f"[agent] config encontrada em: {path}")
+                    print(f"[agent] config lida: {data}")
                     return data
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[agent] falha ao ler config {path}: {e}")
 
+    print("[agent] nenhuma config encontrada")
     return {}
 
 
@@ -585,26 +594,10 @@ def main():
     bundled_config = load_agent_config()
 
     parser = argparse.ArgumentParser(description="OT Lab Agent")
-    parser.add_argument(
-        "--server",
-        default=bundled_config.get("server_url", DEFAULT_SERVER_URL),
-        help="URL da dashboard/backend"
-    )
-    parser.add_argument(
-        "--session-id",
-        default=bundled_config.get("session_id", DEFAULT_SESSION_ID),
-        help="Session ID"
-    )
-    parser.add_argument(
-        "--iface",
-        default=bundled_config.get("iface", DEFAULT_IFACE),
-        help="Interface de rede inicial"
-    )
-    parser.add_argument(
-        "--mode",
-        default=bundled_config.get("mode", DEFAULT_MODE),
-        choices=["LEARNING", "MONITORING"]
-    )
+    parser.add_argument("--server", default=bundled_config.get("server_url") or DEFAULT_SERVER_URL)
+    parser.add_argument("--session-id", default=bundled_config.get("session_id") or DEFAULT_SESSION_ID)
+    parser.add_argument("--iface", default=bundled_config.get("iface") or DEFAULT_IFACE)
+    parser.add_argument("--mode", default=bundled_config.get("mode") or DEFAULT_MODE, choices=["LEARNING", "MONITORING"])
     args = parser.parse_args()
 
     print("\n=== OT LAB AGENT ===")
