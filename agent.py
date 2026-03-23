@@ -663,6 +663,13 @@ class AgentMonitor:
             "read_patterns": read_patterns,
             "write_registers": write_registers,
             "event_counts": dict(self.state["event_counts"]),
+            "traffic_overview": {
+                "clients_identified": len(self.state["initiators_seen"]),
+                "servers_identified": len(self.state["responders_seen"]),
+                "function_codes_identified": sorted(self.state["function_codes_seen"]),
+                "read_pattern_count": len(read_patterns),
+                "write_register_count": len(write_registers),
+            },
             "timestamp": time.time(),
             "available_ifaces": self.get_available_interfaces(),
         }
@@ -735,7 +742,6 @@ class AgentMonitor:
         return []
 
     def send_heartbeat(self):
-        # sincroniza runtime real antes de enviar
         with self.runtime_lock:
             self.server_runtime["running"] = bool(self.modbus_server and self.modbus_server.running)
             self.client_runtime["running"] = bool(self.modbus_client and self.modbus_client.running)
@@ -790,6 +796,44 @@ class AgentMonitor:
     def _reverse_tx_key(self, tx_id, src_ip, src_port, dst_ip, dst_port):
         return (tx_id, dst_ip, dst_port, src_ip, src_port)
 
+    def _build_event_summary(self, event: dict) -> str:
+        event_type = event.get("type")
+        client = f"{event.get('src_ip')}:{event.get('src_port')}"
+        server = f"{event.get('dst_ip')}:{event.get('dst_port')}"
+
+        if event_type == "READ_REQUEST":
+            return (
+                f"FC{event.get('function_code')} read request from {client} "
+                f"to {server} | start={event.get('start_addr')} qty={event.get('quantity')}"
+            )
+
+        if event_type == "READ_RESPONSE":
+            server_side = f"{event.get('src_ip')}:{event.get('src_port')}"
+            client_side = f"{event.get('dst_ip')}:{event.get('dst_port')}"
+            return (
+                f"FC{event.get('function_code')} read response from {server_side} "
+                f"to {client_side} | values={event.get('register_values', [])} | rtt={event.get('rtt')}"
+            )
+
+        if event_type == "WRITE_REQUEST":
+            return (
+                f"FC{event.get('function_code')} write request from {client} "
+                f"to {server} | register={event.get('register')} value={event.get('value')}"
+            )
+
+        if event_type == "WRITE_RESPONSE":
+            server_side = f"{event.get('src_ip')}:{event.get('src_port')}"
+            client_side = f"{event.get('dst_ip')}:{event.get('dst_port')}"
+            return (
+                f"FC{event.get('function_code')} write response from {server_side} "
+                f"to {client_side} | register={event.get('register')} value={event.get('value')} | rtt={event.get('rtt')}"
+            )
+
+        return (
+            f"Modbus transaction detected | "
+            f"{event.get('src_ip')}:{event.get('src_port')} -> {event.get('dst_ip')}:{event.get('dst_port')}"
+        )
+
     def _decode_modbus(self, payload: bytes, src_ip: str, src_port: int, dst_ip: str, dst_port: int, timestamp: float):
         tx_id = int.from_bytes(payload[0:2], "big")
         protocol_id = int.from_bytes(payload[2:4], "big")
@@ -811,6 +855,9 @@ class AgentMonitor:
             "src_port": src_port,
             "dst_ip": dst_ip,
             "dst_port": dst_port,
+            "client": f"{src_ip}:{src_port}" if not is_response else f"{dst_ip}:{dst_port}",
+            "server": f"{dst_ip}:{dst_port}" if not is_response else f"{src_ip}:{src_port}",
+            "direction": "response" if is_response else "request",
             "transaction_id": tx_id,
             "function_code": function_code,
             "unit_id": unit_id,
@@ -872,8 +919,23 @@ class AgentMonitor:
             }
         return self.state["write_registers"][register]
 
+    def _should_emit_alert(self, event: dict, reasons: list, score: int) -> bool:
+        event_type = event.get("type")
+        function_code = event.get("function_code")
+
+        if event_type in ("WRITE_REQUEST", "WRITE_RESPONSE"):
+            return True
+
+        if function_code not in MODBUS_KNOWN_FUNCTION_CODES:
+            return True
+
+        if score >= 8:
+            return True
+
+        return False
+
     def _emit_alert(self, event: dict, reasons: list, score: int):
-        if not reasons or score <= 0:
+        if not self._should_emit_alert(event, reasons, score):
             return
 
         if score >= 8:
@@ -895,6 +957,7 @@ class AgentMonitor:
             "event_type": event["type"],
             "src": f"{event['src_ip']}:{event['src_port']}",
             "dst": f"{event['dst_ip']}:{event['dst_port']}",
+            "summary": self._build_event_summary(event),
         }
         self._post("/api/agent/alert", alert)
 
@@ -928,17 +991,9 @@ class AgentMonitor:
             initiator = f"{decoded['src_ip']}:{decoded['src_port']}"
             responder = f"{decoded['dst_ip']}:{decoded['dst_port']}"
 
-            if initiator not in self.state["initiators_seen"]:
-                score += 2
-                reasons.append(f"novo initiator: {initiator}")
-
-            if responder not in self.state["responders_seen"]:
-                score += 2
-                reasons.append(f"novo responder: {responder}")
-
-            if decoded["function_code"] not in self.state["function_codes_seen"]:
-                score += 3
-                reasons.append(f"novo function code: {decoded['function_code']}")
+            self.state["initiators_seen"].add(initiator)
+            self.state["responders_seen"].add(responder)
+            self.state["function_codes_seen"].add(decoded["function_code"])
 
             if decoded["type"] == "READ_REQUEST":
                 key = (
@@ -948,27 +1003,9 @@ class AgentMonitor:
                     decoded["quantity"],
                 )
                 profile = self._get_or_create_read_pattern(key)
-
-                if profile["count"] == 0:
-                    score += 2
-                    reasons.append(
-                        f"novo padrao de leitura: {decoded['dst_ip']}:{decoded['dst_port']} "
-                        f"start={decoded['start_addr']} qty={decoded['quantity']}"
-                    )
-
-                if profile["avg_period"] and len(profile["timestamps"]) > 0:
-                    last_ts = profile["timestamps"][-1]
-                    observed = decoded["timestamp"] - last_ts
-                    deviation = abs(observed - profile["avg_period"]) / profile["avg_period"]
-                    if deviation > self.period_deviation_threshold:
-                        score += 3
-                        reasons.append(
-                            f"desvio de periodicidade: esperado≈{profile['avg_period']:.3f}s "
-                            f"observado={observed:.3f}s"
-                        )
-
                 profile["count"] += 1
                 profile["timestamps"].append(decoded["timestamp"])
+
                 if len(profile["timestamps"]) >= self.min_samples:
                     deltas = [
                         profile["timestamps"][i] - profile["timestamps"][i - 1]
@@ -988,20 +1025,14 @@ class AgentMonitor:
 
             elif decoded["type"] == "WRITE_REQUEST":
                 reg_profile = self._get_or_create_write_register(decoded["register"])
-
-                if reg_profile["count"] == 0:
-                    score += 3
-                    reasons.append(f"novo registrador escrito: {decoded['register']}")
-
-                if decoded["value"] not in reg_profile["values_seen"]:
-                    score += 2
-                    reasons.append(
-                        f"novo valor no registrador {decoded['register']}: {decoded['value']}"
-                    )
-
                 reg_profile["count"] += 1
                 reg_profile["values_seen"].add(decoded["value"])
                 reg_profile["last_value"] = decoded["value"]
+
+                reasons.append(
+                    f"Write detected on register {decoded['register']} with value {decoded['value']}"
+                )
+                score = 5
 
                 self.state["pending_transactions"][
                     self._tx_key(
@@ -1013,10 +1044,6 @@ class AgentMonitor:
                     )
                 ] = {"timestamp": decoded["timestamp"]}
 
-            self.state["initiators_seen"].add(initiator)
-            self.state["responders_seen"].add(responder)
-            self.state["function_codes_seen"].add(decoded["function_code"])
-
         elif decoded["type"] in ("READ_RESPONSE", "WRITE_RESPONSE"):
             reverse_key = self._reverse_tx_key(
                 decoded["transaction_id"],
@@ -1027,6 +1054,14 @@ class AgentMonitor:
             )
             matched = self.state["pending_transactions"].pop(reverse_key, None)
             event["rtt"] = round(decoded["timestamp"] - matched["timestamp"], 6) if matched else None
+
+            if decoded["type"] == "WRITE_RESPONSE":
+                reasons.append(
+                    f"Write confirmation received for register {decoded.get('register')} value {decoded.get('value')}"
+                )
+                score = 4
+
+        event["summary"] = self._build_event_summary(event)
 
         self.state["event_counts"][decoded["type"]] += 1
         self._post("/api/agent/event", event)

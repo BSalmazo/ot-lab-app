@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -10,8 +10,8 @@
   <div class="page">
     <header class="topbar">
       <div>
-        <h1>Mini-SCADA + IDS OT</h1>
-        <div class="sub">Laboratório Modbus/TCP integrado</div>
+        <h1>Mini-SCADA + OT IDS</h1>
+        <div class="sub">Integrated Modbus/TCP Lab</div>
       </div>
       <div class="topbar-right">
         <div class="mini-badge" id="globalMonitorBadge">MONITOR: STOPPED</div>
@@ -23,8 +23,9 @@
     <main class="dashboard">
       <section class="card compact">
         <div class="card-head">
-          <h2>Agente Local</h2>
+          <h2>Local Agent</h2>
           <div class="card-tools">
+            <button class="secondary small" id="openMonitorConfigBtn" type="button">Configure</button>
             <button id="openAgentDownloadBtn" class="download-btn" type="button">Download Agent</button>
           </div>
         </div>
@@ -33,19 +34,9 @@
 
       <section class="card compact">
         <div class="card-head">
-          <h2>Monitor IDS</h2>
+          <h2>Modbus Server</h2>
           <div class="card-tools">
-            <button class="secondary small" id="openMonitorConfigBtn" type="button">Configurar</button>
-          </div>
-        </div>
-        <div id="monitorStatus" class="status slim">-</div>
-      </section>
-
-      <section class="card compact">
-        <div class="card-head">
-          <h2>Servidor Modbus</h2>
-          <div class="card-tools">
-            <button class="secondary small" id="openServerConfigBtn" type="button">Configurar</button>
+            <button class="secondary small" id="openServerConfigBtn" type="button">Configure</button>
             <button id="toggleServerBtn" class="small" type="button">Start</button>
           </div>
         </div>
@@ -54,56 +45,18 @@
 
       <section class="card compact">
         <div class="card-head">
-          <h2>Cliente Modbus</h2>
+          <h2>Modbus Client</h2>
           <div class="card-tools">
-            <button class="secondary small" id="openClientConfigBtn" type="button">Configurar</button>
+            <button class="secondary small" id="openClientConfigBtn" type="button">Configure</button>
             <button id="toggleClientBtn" class="small" type="button">Start</button>
           </div>
         </div>
         <div id="clientStatus" class="status slim">-</div>
       </section>
 
-      <section class="card process-card">
-        <div class="card-head">
-          <h2>Processo Simulado</h2>
-          <div class="card-tools">
-            <button id="resetProcessBtn" class="secondary small" type="button">Reset</button>
-          </div>
-        </div>
-
-        <div class="process-grid">
-          <div class="process-box">
-            <div class="metric-title">Nível</div>
-            <div id="levelValue" class="metric-value">0</div>
-          </div>
-          <div class="process-box">
-            <div class="metric-title">Bomba</div>
-            <div id="pumpValue" class="metric-value">OFF</div>
-          </div>
-          <div class="process-box">
-            <div class="metric-title">Válvula</div>
-            <div id="valveValue" class="metric-value">OFF</div>
-          </div>
-          <div class="process-box">
-            <div class="metric-title">Alarme</div>
-            <div id="alarmValue" class="metric-value">OFF</div>
-          </div>
-        </div>
-
-        <div class="actions tight">
-          <button id="togglePumpBtn" type="button">Toggle Bomba</button>
-          <button id="toggleValveBtn" type="button">Toggle Válvula</button>
-          <div class="inline-set">
-            <label for="forceLevel">Forçar nível</label>
-            <input id="forceLevel" type="number" value="20" />
-            <button id="setLevelBtn" type="button">Aplicar</button>
-          </div>
-        </div>
-      </section>
-
       <section class="card actions-card">
         <div class="card-head">
-          <h2>Ações Modbus</h2>
+          <h2>Modbus Actions</h2>
         </div>
 
         <div class="action-block">
@@ -111,51 +64,51 @@
           <div class="row compact-row">
             <input id="readStart" type="number" value="0" placeholder="Start" />
             <input id="readQty" type="number" value="4" placeholder="Qty" />
-            <button id="sendReadBtn" type="button">Enviar READ</button>
+            <button id="sendReadBtn" type="button">Send READ</button>
           </div>
         </div>
 
         <div class="action-block">
           <div class="block-title">WRITE</div>
           <div class="row compact-row">
-            <input id="writeRegister" type="number" value="1" placeholder="Reg" />
-            <input id="writeValue" type="number" value="1" placeholder="Valor" />
-            <button id="sendWriteBtn" type="button">Enviar WRITE</button>
+            <input id="writeRegister" type="number" value="1" placeholder="Register" />
+            <input id="writeValue" type="number" value="1" placeholder="Value" />
+            <button id="sendWriteBtn" type="button">Send WRITE</button>
           </div>
         </div>
 
-        <div id="actionResult" class="status slim">-</div>
+        <div id="actionResult" class="status slim">Local READ/WRITE actions disabled in this version.</div>
       </section>
 
       <section class="card ids-card">
         <div class="card-head">
-          <h2>Estado do IDS</h2>
+          <h2>IDS State</h2>
         </div>
         <pre id="monitorSnapshot" class="panel compact-panel"></pre>
       </section>
 
       <section class="card log-card">
         <div class="card-head">
-          <h2>Alertas</h2>
+          <h2>System Logs</h2>
+          <div class="card-tools">
+            <button id="resetSystemBtn" class="secondary small" type="button">Reset</button>
+          </div>
+        </div>
+        <div id="logsPanel" class="log-panel compact-log"></div>
+      </section>
+
+      <section class="card log-card">
+        <div class="card-head">
+          <h2>Alerts</h2>
         </div>
         <div id="alertsPanel" class="log-panel compact-log"></div>
       </section>
 
       <section class="card log-card">
         <div class="card-head">
-          <h2>Eventos</h2>
+          <h2>Events</h2>
         </div>
         <div id="eventsPanel" class="log-panel compact-log"></div>
-      </section>
-
-      <section class="card log-card">
-        <div class="card-head">
-          <h2>Logs do Sistema</h2>
-          <div class="card-tools">
-            <button id="resetSystemBtn" class="secondary small" type="button">Reset</button>
-          </div>
-        </div>
-        <div id="logsPanel" class="log-panel compact-log"></div>
       </section>
     </main>
   </div>
@@ -163,7 +116,7 @@
   <div class="modal hidden" id="monitorModal">
     <div class="modal-box">
       <div class="modal-head">
-        <h3>Configuração do Monitor</h3>
+        <h3>Monitor Configuration</h3>
         <button class="icon-btn" type="button" data-close="monitorModal">✕</button>
       </div>
       <div class="modal-body">
@@ -176,7 +129,7 @@
         </div>
 
         <div class="row">
-          <label>Modo</label>
+          <label>Mode</label>
           <select id="monitorMode">
             <option value="LEARNING">LEARNING</option>
             <option value="MONITORING">MONITORING</option>
@@ -186,7 +139,7 @@
         <div id="monitorConfigStatus" class="status slim">-</div>
 
         <div class="actions tight">
-          <button id="saveMonitorConfigBtn" type="button">Salvar</button>
+          <button id="saveMonitorConfigBtn" type="button">Save</button>
         </div>
       </div>
     </div>
@@ -195,7 +148,7 @@
   <div class="modal hidden" id="serverModal">
     <div class="modal-box">
       <div class="modal-head">
-        <h3>Configuração do Servidor Modbus</h3>
+        <h3>Modbus Server Configuration</h3>
         <button class="icon-btn" type="button" data-close="serverModal">✕</button>
       </div>
       <div class="modal-body">
@@ -204,7 +157,7 @@
           <input id="serverHost" value="127.0.0.1" />
         </div>
         <div class="row">
-          <label>Porta</label>
+          <label>Port</label>
           <input id="serverPort" type="number" value="15020" />
         </div>
       </div>
@@ -214,7 +167,7 @@
   <div class="modal hidden" id="clientModal">
     <div class="modal-box">
       <div class="modal-head">
-        <h3>Configuração do Cliente Modbus</h3>
+        <h3>Modbus Client Configuration</h3>
         <button class="icon-btn" type="button" data-close="clientModal">✕</button>
       </div>
       <div class="modal-body">
@@ -223,7 +176,7 @@
           <input id="clientHost" value="127.0.0.1" />
         </div>
         <div class="row">
-          <label>Porta</label>
+          <label>Port</label>
           <input id="clientPort" type="number" value="15020" />
         </div>
         <div class="row">
@@ -245,7 +198,7 @@
   <div class="modal hidden" id="agentDownloadModal">
     <div class="modal-box">
       <div class="modal-head">
-        <h3>Download do Agente Local</h3>
+        <h3>Download Local Agent</h3>
         <button class="icon-btn" type="button" data-close="agentDownloadModal">✕</button>
       </div>
       <div class="modal-body">

@@ -2,6 +2,7 @@
   --bg: #0f172a;
   --panel: #111827;
   --panel-2: #1f2937;
+  --panel-3: #020617;
   --text: #e5e7eb;
   --muted: #94a3b8;
   --ok: #22c55e;
@@ -16,10 +17,10 @@
   box-sizing: border-box;
 }
 
-html, body {
+html,
+body {
   margin: 0;
-  height: 100%;
-  overflow: hidden;
+  min-height: 100%;
 }
 
 body {
@@ -29,8 +30,8 @@ body {
 }
 
 .page {
-  width: 100vw;
-  height: 100vh;
+  width: 100%;
+  min-height: 100vh;
   padding: 12px;
   display: flex;
   flex-direction: column;
@@ -83,9 +84,43 @@ body {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 1.05fr 1.05fr 1.05fr 1.45fr;
-  grid-template-rows: auto auto 1fr;
+  grid-template-columns: 1.2fr 1fr 1fr 1.5fr;
+  grid-template-areas:
+    "agent server client actions"
+    "ids logs alerts events";
   gap: 12px;
+}
+
+.dashboard > .card:nth-of-type(1) {
+  grid-area: agent;
+}
+
+.dashboard > .card:nth-of-type(2) {
+  grid-area: server;
+}
+
+.dashboard > .card:nth-of-type(3) {
+  grid-area: client;
+}
+
+.dashboard > .card:nth-of-type(4) {
+  grid-area: actions;
+}
+
+.ids-card {
+  grid-area: ids;
+}
+
+.dashboard > .log-card:nth-of-type(6) {
+  grid-area: logs;
+}
+
+.dashboard > .log-card:nth-of-type(7) {
+  grid-area: alerts;
+}
+
+.dashboard > .log-card:nth-of-type(8) {
+  grid-area: events;
 }
 
 .card {
@@ -100,61 +135,34 @@ body {
 }
 
 .compact {
-  min-height: 110px;
+  min-height: 118px;
+}
+
+.actions-card,
+.ids-card,
+.log-card {
+  min-height: 360px;
 }
 
 .card-head {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   margin-bottom: 10px;
 }
 
 .card-head h2 {
   margin: 0;
-  font-size: 17px;
-  line-height: 1.1;
+  font-size: 18px;
+  line-height: 1.15;
 }
 
 .card-tools {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-}
-
-.process-card {
-  grid-column: 1 / 4;
-  grid-row: 2;
-}
-
-.actions-card {
-  grid-column: 4;
-  grid-row: 2;
-}
-
-.ids-card {
-  grid-column: 1;
-  grid-row: 3;
-}
-
-.log-card {
-  min-height: 0;
-}
-
-.dashboard > .log-card:nth-of-type(7) {
-  grid-column: 2;
-  grid-row: 3;
-}
-
-.dashboard > .log-card:nth-of-type(8) {
-  grid-column: 3;
-  grid-row: 3;
-}
-
-.dashboard > .log-card:nth-of-type(9) {
-  grid-column: 4;
-  grid-row: 3;
+  justify-content: flex-end;
 }
 
 .row {
@@ -176,7 +184,8 @@ body {
 
 input,
 select,
-button {
+button,
+a.download-btn {
   border-radius: 10px;
   font-size: 13px;
 }
@@ -190,6 +199,10 @@ select {
   color: var(--text);
 }
 
+input::placeholder {
+  color: #7c8aa0;
+}
+
 button {
   padding: 9px 12px;
   border: none;
@@ -197,6 +210,17 @@ button {
   color: white;
   cursor: pointer;
   white-space: nowrap;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+button:hover,
+a.download-btn:hover {
+  opacity: 0.92;
+}
+
+button:active,
+a.download-btn:active {
+  transform: translateY(1px);
 }
 
 button.secondary {
@@ -212,6 +236,11 @@ button.small {
   font-size: 12px;
 }
 
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .actions {
   display: flex;
   gap: 10px;
@@ -223,61 +252,21 @@ button.small {
   align-items: center;
 }
 
-.inline-set {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-}
-
-.inline-set label {
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.inline-set input {
-  width: 90px;
-}
-
 .status {
   margin-top: 10px;
-  padding: 10px 12px;
+  padding: 12px 14px;
   background: var(--panel-2);
-  border-radius: 10px;
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
+  border: 1px solid rgba(148, 163, 184, 0.08);
+  border-radius: 12px;
+  color: var(--text);
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.5;
 }
 
 .status.slim {
-  min-height: 42px;
+  min-height: 52px;
   font-size: 13px;
-}
-
-.process-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.process-box {
-  background: var(--panel-2);
-  border-radius: 14px;
-  padding: 12px;
-  text-align: center;
-  min-height: 92px;
-}
-
-.metric-title {
-  color: var(--muted);
-  margin-bottom: 6px;
-  font-size: 13px;
-}
-
-.metric-value {
-  font-size: 24px;
-  font-weight: 700;
 }
 
 .block-title {
@@ -289,12 +278,12 @@ button.small {
 }
 
 .action-block + .action-block {
-  margin-top: 12px;
+  margin-top: 14px;
 }
 
 .panel,
 .log-panel {
-  background: #020617;
+  background: var(--panel-3);
   border-radius: 12px;
   padding: 10px;
   border: 1px solid var(--line);
@@ -303,32 +292,69 @@ button.small {
 
 .compact-panel,
 .compact-log {
-  height: calc(100% - 34px);
+  height: calc(100% - 38px);
   min-height: 0;
   overflow: auto;
   font-size: 12px;
 }
 
 .log-item {
-  padding: 8px 10px;
+  padding: 10px 12px;
   border-bottom: 1px solid #1e293b;
-  font-family: ui-monospace, SFMono-Regular, monospace;
   font-size: 12px;
-  line-height: 1.35;
+  line-height: 1.45;
   word-break: break-word;
+  background: transparent;
 }
 
 .log-item:last-child {
   border-bottom: none;
 }
 
-.alert-INFO { border-left: 4px solid #60a5fa; padding-left: 8px; }
-.alert-NOTICE { border-left: 4px solid var(--warn); padding-left: 8px; }
-.alert-ALERT { border-left: 4px solid #fb7185; padding-left: 8px; }
-.alert-CRITICAL { border-left: 4px solid var(--danger); padding-left: 8px; }
+#logsPanel .log-item {
+  font-family: Inter, system-ui, sans-serif;
+}
 
-.on { color: var(--ok); }
-.off { color: var(--danger); }
+#alertsPanel .log-item,
+#eventsPanel .log-item {
+  font-family: Inter, system-ui, sans-serif;
+}
+
+#eventsPanel .log-item strong,
+#alertsPanel .log-item strong {
+  display: inline-block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.alert-INFO {
+  border-left: 4px solid #60a5fa;
+  padding-left: 10px;
+}
+
+.alert-NOTICE {
+  border-left: 4px solid var(--warn);
+  padding-left: 10px;
+}
+
+.alert-ALERT {
+  border-left: 4px solid #fb7185;
+  padding-left: 10px;
+}
+
+.alert-CRITICAL {
+  border-left: 4px solid var(--danger);
+  padding-left: 10px;
+}
+
+.on {
+  color: var(--ok);
+}
+
+.off {
+  color: var(--danger);
+}
 
 .modal {
   position: fixed;
@@ -378,59 +404,10 @@ button.small {
   padding: 6px 10px;
 }
 
-@media (max-width: 1400px) {
-  .dashboard {
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: auto auto auto auto auto;
-    overflow: auto;
-  }
-
-  .process-card,
-  .actions-card,
-  .ids-card,
-  .dashboard > .log-card:nth-of-type(7),
-  .dashboard > .log-card:nth-of-type(8),
-  .dashboard > .log-card:nth-of-type(9) {
-    grid-column: auto;
-    grid-row: auto;
-  }
-
-  html, body {
-    overflow: auto;
-  }
-
-  .page {
-    height: auto;
-    min-height: 100vh;
-  }
-
-  .compact-log,
-  .compact-panel {
-    height: 260px;
-  }
-}
-
-@media (max-width: 900px) {
-  .dashboard {
-    grid-template-columns: 1fr;
-  }
-
-  .process-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-
-  .inline-set {
-    width: 100%;
-    margin-left: 0;
-  }
-
-  .topbar {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-}
-
 .download-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 8px 10px;
   border-radius: 999px;
   background: var(--blue);
@@ -448,4 +425,73 @@ button.small {
 
 .download-btn.muted {
   background: #475569;
+}
+
+@media (max-width: 1450px) {
+  .dashboard {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "agent server"
+      "client actions"
+      "ids logs"
+      "alerts events";
+  }
+
+  .compact-panel,
+  .compact-log {
+    height: 300px;
+  }
+}
+
+@media (max-width: 900px) {
+  .dashboard {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "agent"
+      "server"
+      "client"
+      "actions"
+      "ids"
+      "logs"
+      "alerts"
+      "events";
+  }
+
+  .topbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .topbar-right {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .card-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .card-tools {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .row label {
+    min-width: 0;
+  }
+
+  .download-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .compact-panel,
+  .compact-log {
+    height: 260px;
+  }
 }

@@ -48,6 +48,13 @@ def default_agent_snapshot():
         "read_patterns": [],
         "write_registers": [],
         "event_counts": {},
+        "traffic_overview": {
+            "clients_identified": 0,
+            "servers_identified": 0,
+            "function_codes_identified": [],
+            "read_pattern_count": 0,
+            "write_register_count": 0,
+        },
         "timestamp": None,
     }
 
@@ -151,6 +158,23 @@ def push_log_for_session(session_id: str, message: str):
         state["logs"].append(message)
 
 
+def build_command_log_message(command_type: str, payload: dict):
+    if command_type == "START_SERVER":
+        return f"Modbus server start requested ({payload.get('host', '-') }:{payload.get('port', '-')})"
+    if command_type == "STOP_SERVER":
+        return "Modbus server stop requested"
+    if command_type == "START_CLIENT":
+        return (
+            f"Modbus client start requested "
+            f"({payload.get('host', '-') }:{payload.get('port', '-')}, "
+            f"poll={payload.get('poll_interval', '-') }s, "
+            f"start={payload.get('poll_start', '-') }, qty={payload.get('poll_quantity', '-')})"
+        )
+    if command_type == "STOP_CLIENT":
+        return "Modbus client stop requested"
+    return f"Command queued: {command_type}"
+
+
 def queue_command(session_id: str, command_type: str, payload: dict):
     state = ensure_session_state(session_id)
     cmd = {
@@ -161,7 +185,8 @@ def queue_command(session_id: str, command_type: str, payload: dict):
     }
     with lock:
         state["pending_commands"].append(cmd)
-    push_log_for_session(session_id, f"[agent-command] {command_type} {payload}")
+
+    push_log_for_session(session_id, build_command_log_message(command_type, payload))
     return cmd
 
 
@@ -369,7 +394,7 @@ async def set_agent_config(request: Request):
     state["agent_config"]["mode"] = mode
     state["agent_config"]["updated_at"] = time.time()
 
-    push_log_for_session(session_id, f"[agent-config] iface={iface} mode={mode}")
+    push_log_for_session(session_id, f"Monitor configuration updated (interface={iface}, mode={mode})")
 
     response = JSONResponse({
         "ok": True,
@@ -404,7 +429,9 @@ def agent_server_stop(request: Request):
     session_id, state = get_session_state_from_request(request)
     state["remote_server"]["running"] = False
     state["remote_server"]["updated_at"] = time.time()
+
     queue_command(session_id, "STOP_SERVER", {})
+
     response = JSONResponse({"ok": True, "server": state["remote_server"]})
     set_session_cookie_if_needed(request, response, session_id)
     return response
@@ -447,7 +474,9 @@ def agent_client_stop(request: Request):
     session_id, state = get_session_state_from_request(request)
     state["remote_client"]["running"] = False
     state["remote_client"]["updated_at"] = time.time()
+
     queue_command(session_id, "STOP_CLIENT", {})
+
     response = JSONResponse({"ok": True, "client": state["remote_client"]})
     set_session_cookie_if_needed(request, response, session_id)
     return response
@@ -473,6 +502,9 @@ def agent_runtime_update(payload: dict = Body(...)):
     server_data = payload.get("server") or {}
     client_data = payload.get("client") or {}
 
+    previous_server_running = state["remote_server"]["running"]
+    previous_client_running = state["remote_client"]["running"]
+
     if server_data:
         state["remote_server"].update({
             "running": bool(server_data.get("running", state["remote_server"]["running"])),
@@ -491,6 +523,26 @@ def agent_runtime_update(payload: dict = Body(...)):
             "poll_quantity": int(client_data.get("poll_quantity", state["remote_client"]["poll_quantity"])),
             "updated_at": time.time(),
         })
+
+    current_server_running = state["remote_server"]["running"]
+    current_client_running = state["remote_client"]["running"]
+
+    if not previous_server_running and current_server_running:
+        push_log_for_session(
+            session_id,
+            f"Modbus server running on {state['remote_server']['host']}:{state['remote_server']['port']}"
+        )
+    elif previous_server_running and not current_server_running:
+        push_log_for_session(session_id, "Modbus server stopped")
+
+    if not previous_client_running and current_client_running:
+        push_log_for_session(
+            session_id,
+            f"Modbus client running on {state['remote_client']['host']}:{state['remote_client']['port']} "
+            f"(poll={state['remote_client']['poll_interval']}s, start={state['remote_client']['poll_start']}, qty={state['remote_client']['poll_quantity']})"
+        )
+    elif previous_client_running and not current_client_running:
+        push_log_for_session(session_id, "Modbus client stopped")
 
     return {"ok": True}
 
@@ -535,8 +587,7 @@ def agent_register(payload: dict = Body(...)):
 
     push_log_for_session(
         session_id,
-        f"[agent-register] id={payload.get('agent_id')} "
-        f"host={payload.get('hostname')} iface={payload.get('iface')} mode={payload.get('mode')}"
+        f"Agent connected ({payload.get('hostname', '-')}, interface={payload.get('iface', '-')}, mode={payload.get('mode', '-')})"
     )
 
     return {
@@ -610,13 +661,16 @@ def agent_event_ingest(payload: dict = Body(...)):
     state = ensure_session_state(session_id)
     push_event(state, payload)
 
-    push_log_for_session(
-        session_id,
-        f"[agent-event] agent={payload.get('agent_id')} "
-        f"{payload.get('type', 'UNKNOWN')} "
-        f"{payload.get('src_ip')}:{payload.get('src_port')} -> "
-        f"{payload.get('dst_ip')}:{payload.get('dst_port')}"
-    )
+    summary = payload.get("summary")
+    if summary:
+        push_log_for_session(session_id, summary)
+    else:
+        push_log_for_session(
+            session_id,
+            f"Modbus event detected: {payload.get('type', 'UNKNOWN')} "
+            f"({payload.get('src_ip')}:{payload.get('src_port')} -> "
+            f"{payload.get('dst_ip')}:{payload.get('dst_port')})"
+        )
 
     return {"ok": True}
 
@@ -630,10 +684,14 @@ def agent_alert_ingest(payload: dict = Body(...)):
     state = ensure_session_state(session_id)
     push_alert(state, payload)
 
-    push_log_for_session(
-        session_id,
-        f"[agent-alert] agent={payload.get('agent_id')} "
-        f"{payload.get('severity')} {payload.get('event_type')} score={payload.get('score')}"
-    )
+    summary = payload.get("summary")
+    if summary:
+        push_log_for_session(session_id, f"Alert: {summary}")
+    else:
+        push_log_for_session(
+            session_id,
+            f"Alert generated: {payload.get('severity', 'INFO')} "
+            f"{payload.get('event_type', 'UNKNOWN')}"
+        )
 
     return {"ok": True}

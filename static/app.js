@@ -48,6 +48,15 @@ function setDisabled(id, disabled) {
   if (el) el.disabled = disabled;
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 function renderList(containerId, items, formatter) {
   const container = byId(containerId);
   if (!container) return;
@@ -55,7 +64,7 @@ function renderList(containerId, items, formatter) {
   container.innerHTML = "";
 
   if (!items || items.length === 0) {
-    container.innerHTML = `<div class="log-item">Sem dados.</div>`;
+    container.innerHTML = `<div class="log-item">No data available.</div>`;
     return;
   }
 
@@ -91,7 +100,7 @@ function populateIfaceSelect(interfaces, selectedValue) {
   }
   select.appendChild(allOption);
 
-  (interfaces || []).forEach(iface => {
+  (interfaces || []).forEach((iface) => {
     const option = document.createElement("option");
     option.value = iface;
     option.textContent = iface;
@@ -102,33 +111,80 @@ function populateIfaceSelect(interfaces, selectedValue) {
   });
 }
 
+function formatAgentStatus(data) {
+  const connected = !!data.agent?.connected;
+  const iface = data.agent_config?.iface || data.agent?.iface || "-";
+  const mode = data.agent_config?.mode || data.agent?.mode || "-";
+
+  return [
+    `STATUS: ${connected ? "CONNECTED" : "DISCONNECTED"}`,
+    `INTERFACE: ${iface}`,
+    `MODE: ${mode}`
+  ].join(" | ");
+}
+
+function formatServerStatus(server) {
+  return `${server?.running ? "RUNNING" : "STOPPED"} | ${server?.host || "-"}:${server?.port || "-"}`;
+}
+
+function formatClientStatus(client) {
+  return `${client?.running ? "RUNNING" : "STOPPED"} | ${client?.host || "-"}:${client?.port || "-"} | poll=${client?.poll_interval ?? "-"}s | start=${client?.poll_start ?? "-"} | qty=${client?.poll_quantity ?? "-"}`;
+}
+
+function buildReadableSnapshot(snapshot) {
+  if (!snapshot || Object.keys(snapshot).length === 0) {
+    return "No IDS data available yet.";
+  }
+
+  const overview = snapshot.traffic_overview || {};
+  const functionCodes = Array.isArray(snapshot.function_codes_seen) && snapshot.function_codes_seen.length
+    ? snapshot.function_codes_seen.join(", ")
+    : "-";
+
+  const readPatterns = Array.isArray(snapshot.read_patterns) && snapshot.read_patterns.length
+    ? snapshot.read_patterns
+        .map((p) => {
+          const avg = p.avg_period == null ? "-" : `${Number(p.avg_period).toFixed(3)}s`;
+          return `${p.server} | start=${p.start} qty=${p.quantity} | count=${p.count} | avg=${avg}`;
+        })
+        .join("\n")
+    : "-";
+
+  const writeRegisters = Array.isArray(snapshot.write_registers) && snapshot.write_registers.length
+    ? snapshot.write_registers
+        .map((w) => `reg=${w.register} | count=${w.count} | last=${w.last_value} | seen=[${(w.values_seen || []).join(", ")}]`)
+        .join("\n")
+    : "-";
+
+  return [
+    `Agent ID: ${snapshot.agent_id || "-"}`,
+    `Host: ${snapshot.hostname || "-"}`,
+    `Interface: ${snapshot.iface || "-"}`,
+    `Mode: ${snapshot.mode || "-"}`,
+    ``,
+    `Traffic Overview`,
+    `Clients Identified: ${overview.clients_identified ?? 0}`,
+    `Servers Identified: ${overview.servers_identified ?? 0}`,
+    `Function Codes Identified: ${Array.isArray(overview.function_codes_identified) && overview.function_codes_identified.length ? overview.function_codes_identified.join(", ") : functionCodes}`,
+    `Read Patterns Identified: ${overview.read_pattern_count ?? 0}`,
+    `Write Registers Identified: ${overview.write_register_count ?? 0}`,
+    ``,
+    `Read Patterns`,
+    `${readPatterns}`,
+    ``,
+    `Write Activity`,
+    `${writeRegisters}`
+  ].join("\n");
+}
+
 async function refreshStatus() {
   const data = await apiGet("/api/status");
 
   const agentConnected = !!data.agent?.connected;
-  const lastSeen = data.agent?.last_seen
-    ? new Date(data.agent.last_seen * 1000).toLocaleTimeString()
-    : "-";
 
-  setText(
-    "agentStatus",
-    `${agentConnected ? "CONNECTED" : "DISCONNECTED"} | id=${data.agent?.agent_id || "-"} | host=${data.agent?.hostname || "-"} | iface=${data.agent?.iface || "-"} | mode=${data.agent?.mode || "-"} | running=${data.agent?.running ? "YES" : "NO"} | last_seen=${lastSeen}`
-  );
-
-  setText(
-    "monitorStatus",
-    `${data.monitor?.running ? "RUNNING" : "STOPPED"} | current_iface=${data.monitor?.iface || "-"} | current_mode=${data.monitor?.mode || "-"} | target_iface=${data.agent_config?.iface || "-"} | target_mode=${data.agent_config?.mode || "-"}`
-  );
-
-  setText(
-    "serverStatus",
-    `${data.server?.running ? "RUNNING" : "STOPPED"} | ${data.server?.host || "-"}:${data.server?.port || "-"}`
-  );
-
-  setText(
-    "clientStatus",
-    `${data.client?.running ? "RUNNING" : "STOPPED"} | ${data.client?.host || "-"}:${data.client?.port || "-"} | poll=${data.client?.poll_interval ?? "-"}s`
-  );
+  setText("agentStatus", formatAgentStatus(data));
+  setText("serverStatus", formatServerStatus(data.server));
+  setText("clientStatus", formatClientStatus(data.client));
 
   setBadge("globalMonitorBadge", "MONITOR", !!data.monitor?.running);
   setBadge("globalServerBadge", "SERVER", !!data.server?.running);
@@ -152,41 +208,149 @@ async function refreshStatus() {
   if (byId("pollStart")) byId("pollStart").value = data.client?.poll_start ?? 0;
   if (byId("pollQuantity")) byId("pollQuantity").value = data.client?.poll_quantity ?? 4;
 
-  setText("monitorSnapshot", JSON.stringify(data.monitor?.snapshot || {}, null, 2));
+  setText("monitorSnapshot", buildReadableSnapshot(data.monitor?.snapshot || {}));
+}
 
-  // Como o backend novo não tem mais processo local, deixamos a área como placeholder.
-  setText("levelValue", "-");
-  setHtml("pumpValue", `<span class="off">-</span>`);
-  setHtml("valveValue", `<span class="off">-</span>`);
-  setHtml("alarmValue", `<span class="off">-</span>`);
+function formatSummaryBlock(summary) {
+  if (!summary) return "";
+  return `<div><strong>Summary:</strong> ${escapeHtml(summary)}</div>`;
+}
+
+function formatEventDetails(event) {
+  const type = event.type || "UNKNOWN";
+  const src = `${event.src_ip || "-"}:${event.src_port || "-"}`;
+  const dst = `${event.dst_ip || "-"}:${event.dst_port || "-"}`;
+  const functionCode = event.function_code ?? "-";
+  const txId = event.transaction_id ?? "-";
+  const summary = event.summary || "";
+
+  if (type === "READ_REQUEST") {
+    return `
+      ${formatSummaryBlock(summary)}
+      <div><strong>Action:</strong> Read Holding Registers</div>
+      <div><strong>Client:</strong> ${escapeHtml(event.client || src)}</div>
+      <div><strong>Server:</strong> ${escapeHtml(event.server || dst)}</div>
+      <div><strong>Function:</strong> FC${functionCode}</div>
+      <div><strong>Start:</strong> ${event.start_addr ?? "-"}</div>
+      <div><strong>Quantity:</strong> ${event.quantity ?? "-"}</div>
+      <div><strong>Transaction ID:</strong> ${txId}</div>
+    `;
+  }
+
+  if (type === "READ_RESPONSE") {
+    return `
+      ${formatSummaryBlock(summary)}
+      <div><strong>Action:</strong> Read Response</div>
+      <div><strong>Server:</strong> ${escapeHtml(event.server || src)}</div>
+      <div><strong>Client:</strong> ${escapeHtml(event.client || dst)}</div>
+      <div><strong>Function:</strong> FC${functionCode}</div>
+      <div><strong>Values:</strong> ${escapeHtml(JSON.stringify(event.register_values || []))}</div>
+      <div><strong>RTT:</strong> ${event.rtt ?? "-"} s</div>
+      <div><strong>Transaction ID:</strong> ${txId}</div>
+    `;
+  }
+
+  if (type === "WRITE_REQUEST") {
+    return `
+      ${formatSummaryBlock(summary)}
+      <div><strong>Action:</strong> Write Single Register</div>
+      <div><strong>Client:</strong> ${escapeHtml(event.client || src)}</div>
+      <div><strong>Server:</strong> ${escapeHtml(event.server || dst)}</div>
+      <div><strong>Function:</strong> FC${functionCode}</div>
+      <div><strong>Register:</strong> ${event.register ?? "-"}</div>
+      <div><strong>Value:</strong> ${event.value ?? "-"}</div>
+      <div><strong>Transaction ID:</strong> ${txId}</div>
+    `;
+  }
+
+  if (type === "WRITE_RESPONSE") {
+    return `
+      ${formatSummaryBlock(summary)}
+      <div><strong>Action:</strong> Write Response</div>
+      <div><strong>Server:</strong> ${escapeHtml(event.server || src)}</div>
+      <div><strong>Client:</strong> ${escapeHtml(event.client || dst)}</div>
+      <div><strong>Function:</strong> FC${functionCode}</div>
+      <div><strong>Register:</strong> ${event.register ?? "-"}</div>
+      <div><strong>Value:</strong> ${event.value ?? "-"}</div>
+      <div><strong>RTT:</strong> ${event.rtt ?? "-"} s</div>
+      <div><strong>Transaction ID:</strong> ${txId}</div>
+    `;
+  }
+
+  return `
+    ${formatSummaryBlock(summary)}
+    <div><strong>Source:</strong> ${escapeHtml(src)}</div>
+    <div><strong>Destination:</strong> ${escapeHtml(dst)}</div>
+    <div><strong>Function:</strong> FC${functionCode}</div>
+    <div><strong>Transaction ID:</strong> ${txId}</div>
+  `;
+}
+
+function formatEventCard(event) {
+  const type = event.type || "UNKNOWN";
+  return `
+    <div>
+      <strong>${escapeHtml(type)}</strong><br>
+      ${formatEventDetails(event)}
+    </div>
+  `;
+}
+
+function formatAlertCard(alert) {
+  const severity = alert.severity || "INFO";
+  const summary = alert.summary || `${alert.event_type || "UNKNOWN"} from ${alert.src || "-"} to ${alert.dst || "-"}`;
+  const reasons = Array.isArray(alert.reasons) ? alert.reasons : [];
+
+  return `
+    <div class="alert-${escapeHtml(severity)}">
+      <strong>${escapeHtml(severity)}</strong><br>
+      ${escapeHtml(summary)}
+      ${reasons.length ? `<br><span>${escapeHtml(reasons.join(" | "))}</span>` : ""}
+    </div>
+  `;
+}
+
+function simplifyLogLine(log) {
+  const line = String(log || "").trim();
+  if (!line) return "-";
+
+  if (line.startsWith("Alert: ")) {
+    return line;
+  }
+
+  if (line.startsWith("Agent connected")) {
+    return line;
+  }
+
+  if (line.startsWith("Monitor configuration updated")) {
+    return line;
+  }
+
+  if (line.startsWith("Modbus server")) {
+    return line;
+  }
+
+  if (line.startsWith("Modbus client")) {
+    return line;
+  }
+
+  if (line.startsWith("FC")) {
+    return line;
+  }
+
+  if (line.startsWith("Modbus event detected")) {
+    return line;
+  }
+
+  return line;
 }
 
 async function refreshEvents() {
   const data = await apiGet("/api/events");
 
-  renderList("eventsPanel", data.events, (e) => {
-    const base = `[${e.type || "UNKNOWN"}] ${e.src_ip || "-"}:${e.src_port || "-"} -> ${e.dst_ip || "-"}:${e.dst_port || "-"}`;
-    if (e.type === "READ_REQUEST") {
-      return `${base} | start=${e.start_addr} qty=${e.quantity}`;
-    }
-    if (e.type === "READ_RESPONSE") {
-      return `${base} | values=${JSON.stringify(e.register_values || [])} | rtt=${e.rtt ?? "-"}`;
-    }
-    if (e.type === "WRITE_REQUEST" || e.type === "WRITE_RESPONSE") {
-      return `${base} | reg=${e.register} value=${e.value} | rtt=${e.rtt ?? "-"}`;
-    }
-    return base;
-  });
-
-  renderList("alertsPanel", data.alerts, (a) => {
-    return `<div class="alert-${a.severity || "INFO"}">
-      <strong>${a.severity || "INFO"}</strong> score=${a.score ?? "-"}<br>
-      ${a.event_type || "-"} | ${a.src || "-"} -> ${a.dst || "-"}<br>
-      ${(a.reasons || []).join(" | ")}
-    </div>`;
-  });
-
-  renderList("logsPanel", data.logs, (log) => `${log}`);
+  renderList("eventsPanel", data.events, (e) => formatEventCard(e));
+  renderList("alertsPanel", data.alerts, (a) => formatAlertCard(a));
+  renderList("logsPanel", data.logs, (log) => escapeHtml(simplifyLogLine(log)));
 }
 
 async function refreshAll() {
@@ -204,21 +368,21 @@ async function startServer() {
 
   const result = await apiPost("/api/agent/server/start", { host, port });
   if (!result.ok) {
-    setText("serverStatus", `Erro ao iniciar servidor.`);
+    setText("serverStatus", "Failed to start server.");
   }
 }
 
 async function stopServer() {
   const result = await apiPost("/api/agent/server/stop");
   if (!result.ok) {
-    setText("serverStatus", `Erro ao parar servidor.`);
+    setText("serverStatus", "Failed to stop server.");
   }
 }
 
 async function toggleServer() {
   const status = await apiGet("/api/status");
   if (!status.agent?.connected) {
-    setText("serverStatus", "Agente desconectado.");
+    setText("serverStatus", "Agent disconnected.");
     return;
   }
 
@@ -247,21 +411,21 @@ async function startClient() {
   });
 
   if (!result.ok) {
-    setText("clientStatus", `Erro ao iniciar cliente.`);
+    setText("clientStatus", "Failed to start client.");
   }
 }
 
 async function stopClient() {
   const result = await apiPost("/api/agent/client/stop");
   if (!result.ok) {
-    setText("clientStatus", `Erro ao parar cliente.`);
+    setText("clientStatus", "Failed to stop client.");
   }
 }
 
 async function toggleClient() {
   const status = await apiGet("/api/status");
   if (!status.agent?.connected) {
-    setText("clientStatus", "Agente desconectado.");
+    setText("clientStatus", "Agent disconnected.");
     return;
   }
 
@@ -286,11 +450,11 @@ async function saveMonitorConfig() {
   const result = await apiPost("/api/agent/config", { iface, mode });
 
   if (result.ok) {
-    setText("monitorConfigStatus", "Configuração salva com sucesso.");
+    setText("monitorConfigStatus", "Configuration saved successfully.");
     closeModal("monitorModal");
     await refreshAll();
   } else {
-    setText("monitorConfigStatus", `Erro ao salvar: ${result.error || "desconhecido"}`);
+    setText("monitorConfigStatus", `Failed to save: ${result.error || "unknown error"}`);
   }
 }
 
@@ -314,24 +478,19 @@ async function scanInterfaces() {
   const data = await apiGet("/api/agent/interfaces");
 
   if (!data.connected) {
-    setText("monitorConfigStatus", "Agente desconectado.");
+    setText("monitorConfigStatus", "Agent disconnected.");
     populateIfaceSelect([], "");
     return;
   }
 
   populateIfaceSelect(data.interfaces || [], data.current || "ALL");
-  setText("monitorConfigStatus", `Interfaces encontradas: ${(data.interfaces || []).join(", ") || "-"}`);
+  setText("monitorConfigStatus", `Interfaces found: ${(data.interfaces || []).join(", ") || "-"}`);
 }
 
 function disableLegacySections() {
   setDisabled("sendReadBtn", true);
   setDisabled("sendWriteBtn", true);
-  setDisabled("togglePumpBtn", true);
-  setDisabled("toggleValveBtn", true);
-  setDisabled("resetProcessBtn", true);
-  setDisabled("setLevelBtn", true);
-
-  setText("actionResult", "Ações READ/WRITE locais desativadas nesta versão.");
+  setText("actionResult", "Local READ/WRITE actions are disabled in this version.");
 }
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -347,11 +506,11 @@ window.addEventListener("DOMContentLoaded", () => {
   byId("openClientConfigBtn")?.addEventListener("click", () => openModal("clientModal"));
   byId("openAgentDownloadBtn")?.addEventListener("click", () => openModal("agentDownloadModal"));
 
-  document.querySelectorAll("[data-close]").forEach(btn => {
+  document.querySelectorAll("[data-close]").forEach((btn) => {
     btn.addEventListener("click", () => closeModal(btn.dataset.close));
   });
 
-  document.querySelectorAll(".modal").forEach(modal => {
+  document.querySelectorAll(".modal").forEach((modal) => {
     modal.addEventListener("click", (e) => {
       if (e.target === modal) {
         modal.classList.add("hidden");
