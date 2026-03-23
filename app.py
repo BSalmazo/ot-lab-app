@@ -177,7 +177,11 @@ def shutdown():
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     session_id, _state = get_session_state_from_request(request)
-    response = templates.TemplateResponse("index.html", {"request": request})
+    response = templates.TemplateResponse(
+        request=request,
+        name="index.html",
+        context={}
+    )
     set_session_cookie_if_needed(request, response, session_id)
     return response
 
