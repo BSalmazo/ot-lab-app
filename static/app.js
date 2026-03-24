@@ -68,7 +68,7 @@ function renderList(containerId, items, formatter) {
     return;
   }
 
-  [...items].reverse().forEach(item => {
+  [...items].reverse().forEach((item) => {
     const div = document.createElement("div");
     div.className = "log-item";
     div.innerHTML = formatter(item);
@@ -84,6 +84,102 @@ function openModal(id) {
 function closeModal(id) {
   const el = byId(id);
   if (el) el.classList.add("hidden");
+}
+
+function openWindow(id) {
+  const el = byId(id);
+  if (!el) return;
+  el.classList.remove("hidden");
+  bringWindowToFront(el);
+}
+
+function closeWindow(id) {
+  const el = byId(id);
+  if (!el) return;
+  el.classList.add("hidden");
+}
+
+let floatingZ = 1300;
+
+function bringWindowToFront(el) {
+  floatingZ += 1;
+  el.style.zIndex = String(floatingZ);
+}
+
+function makeWindowDraggable(windowEl) {
+  if (!windowEl) return;
+
+  const head = windowEl.querySelector(".window-head");
+  if (!head) return;
+
+  let dragging = false;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  const startDrag = (clientX, clientY) => {
+    const rect = windowEl.getBoundingClientRect();
+    dragging = true;
+    offsetX = clientX - rect.left;
+    offsetY = clientY - rect.top;
+    bringWindowToFront(windowEl);
+  };
+
+  const onMove = (clientX, clientY) => {
+    if (!dragging) return;
+
+    const maxLeft = Math.max(0, window.innerWidth - windowEl.offsetWidth);
+    const maxTop = Math.max(0, window.innerHeight - windowEl.offsetHeight);
+
+    let left = clientX - offsetX;
+    let top = clientY - offsetY;
+
+    left = Math.max(0, Math.min(left, maxLeft));
+    top = Math.max(0, Math.min(top, maxTop));
+
+    windowEl.style.left = `${left}px`;
+    windowEl.style.top = `${top}px`;
+  };
+
+  const stopDrag = () => {
+    dragging = false;
+  };
+
+  head.addEventListener("mousedown", (e) => {
+    if (e.target.closest("button")) return;
+    startDrag(e.clientX, e.clientY);
+    e.preventDefault();
+  });
+
+  document.addEventListener("mousemove", (e) => {
+    onMove(e.clientX, e.clientY);
+  });
+
+  document.addEventListener("mouseup", stopDrag);
+
+  head.addEventListener(
+    "touchstart",
+    (e) => {
+      if (e.target.closest("button")) return;
+      const touch = e.touches[0];
+      if (!touch) return;
+      startDrag(touch.clientX, touch.clientY);
+    },
+    { passive: true }
+  );
+
+  document.addEventListener(
+    "touchmove",
+    (e) => {
+      const touch = e.touches[0];
+      if (!touch) return;
+      onMove(touch.clientX, touch.clientY);
+    },
+    { passive: true }
+  );
+
+  document.addEventListener("touchend", stopDrag);
+
+  windowEl.addEventListener("mousedown", () => bringWindowToFront(windowEl));
 }
 
 function populateIfaceSelect(interfaces, selectedValue) {
@@ -119,7 +215,7 @@ function formatAgentStatus(data) {
   return [
     `STATUS: ${connected ? "CONNECTED" : "DISCONNECTED"}`,
     `INTERFACE: ${iface}`,
-    `MODE: ${mode}`
+    `MODE: ${mode}`,
   ].join(" | ");
 }
 
@@ -137,24 +233,30 @@ function buildReadableSnapshot(snapshot) {
   }
 
   const overview = snapshot.traffic_overview || {};
-  const functionCodes = Array.isArray(snapshot.function_codes_seen) && snapshot.function_codes_seen.length
-    ? snapshot.function_codes_seen.join(", ")
-    : "-";
+  const functionCodes =
+    Array.isArray(snapshot.function_codes_seen) && snapshot.function_codes_seen.length
+      ? snapshot.function_codes_seen.join(", ")
+      : "-";
 
-  const readPatterns = Array.isArray(snapshot.read_patterns) && snapshot.read_patterns.length
-    ? snapshot.read_patterns
-        .map((p) => {
-          const avg = p.avg_period == null ? "-" : `${Number(p.avg_period).toFixed(3)}s`;
-          return `${p.server} | start=${p.start} qty=${p.quantity} | count=${p.count} | avg=${avg}`;
-        })
-        .join("\n")
-    : "-";
+  const readPatterns =
+    Array.isArray(snapshot.read_patterns) && snapshot.read_patterns.length
+      ? snapshot.read_patterns
+          .map((p) => {
+            const avg = p.avg_period == null ? "-" : `${Number(p.avg_period).toFixed(3)}s`;
+            return `${p.server} | start=${p.start} qty=${p.quantity} | count=${p.count} | avg=${avg}`;
+          })
+          .join("\n")
+      : "-";
 
-  const writeRegisters = Array.isArray(snapshot.write_registers) && snapshot.write_registers.length
-    ? snapshot.write_registers
-        .map((w) => `reg=${w.register} | count=${w.count} | last=${w.last_value} | seen=[${(w.values_seen || []).join(", ")}]`)
-        .join("\n")
-    : "-";
+  const writeRegisters =
+    Array.isArray(snapshot.write_registers) && snapshot.write_registers.length
+      ? snapshot.write_registers
+          .map(
+            (w) =>
+              `reg=${w.register} | count=${w.count} | last=${w.last_value} | seen=[${(w.values_seen || []).join(", ")}]`
+          )
+          .join("\n")
+      : "-";
 
   return [
     `Agent ID: ${snapshot.agent_id || "-"}`,
@@ -165,7 +267,11 @@ function buildReadableSnapshot(snapshot) {
     `Traffic Overview`,
     `Clients Identified: ${overview.clients_identified ?? 0}`,
     `Servers Identified: ${overview.servers_identified ?? 0}`,
-    `Function Codes Identified: ${Array.isArray(overview.function_codes_identified) && overview.function_codes_identified.length ? overview.function_codes_identified.join(", ") : functionCodes}`,
+    `Function Codes Identified: ${
+      Array.isArray(overview.function_codes_identified) && overview.function_codes_identified.length
+        ? overview.function_codes_identified.join(", ")
+        : functionCodes
+    }`,
     `Read Patterns Identified: ${overview.read_pattern_count ?? 0}`,
     `Write Registers Identified: ${overview.write_register_count ?? 0}`,
     ``,
@@ -173,7 +279,7 @@ function buildReadableSnapshot(snapshot) {
     `${readPatterns}`,
     ``,
     `Write Activity`,
-    `${writeRegisters}`
+    `${writeRegisters}`,
   ].join("\n");
 }
 
@@ -314,33 +420,13 @@ function simplifyLogLine(log) {
   const line = String(log || "").trim();
   if (!line) return "-";
 
-  if (line.startsWith("Alert: ")) {
-    return line;
-  }
-
-  if (line.startsWith("Agent connected")) {
-    return line;
-  }
-
-  if (line.startsWith("Monitor configuration updated")) {
-    return line;
-  }
-
-  if (line.startsWith("Modbus server")) {
-    return line;
-  }
-
-  if (line.startsWith("Modbus client")) {
-    return line;
-  }
-
-  if (line.startsWith("FC")) {
-    return line;
-  }
-
-  if (line.startsWith("Modbus event detected")) {
-    return line;
-  }
+  if (line.startsWith("Alert: ")) return line;
+  if (line.startsWith("Agent connected")) return line;
+  if (line.startsWith("Monitor configuration updated")) return line;
+  if (line.startsWith("Modbus server")) return line;
+  if (line.startsWith("Modbus client")) return line;
+  if (line.startsWith("FC")) return line;
+  if (line.startsWith("Modbus event detected")) return line;
 
   return line;
 }
@@ -407,7 +493,7 @@ async function startClient() {
     port,
     poll_interval,
     poll_start,
-    poll_quantity
+    poll_quantity,
   });
 
   if (!result.ok) {
@@ -493,6 +579,26 @@ function disableLegacySections() {
   setText("actionResult", "Local READ/WRITE actions are disabled in this version.");
 }
 
+function initFloatingWindows() {
+  byId("openIdsWindowBtn")?.addEventListener("click", () => openWindow("idsWindow"));
+  byId("openLogsWindowBtn")?.addEventListener("click", () => openWindow("logsWindow"));
+  byId("openActionsWindowBtn")?.addEventListener("click", () => openWindow("actionsWindow"));
+
+  document.querySelectorAll("[data-close-window]").forEach((btn) => {
+    btn.addEventListener("click", () => closeWindow(btn.dataset.closeWindow));
+  });
+
+  ["idsWindow", "logsWindow", "actionsWindow"].forEach((id, index) => {
+    const el = byId(id);
+    if (!el) return;
+
+    el.style.left = `${120 + index * 30}px`;
+    el.style.top = `${120 + index * 30}px`;
+
+    makeWindowDraggable(el);
+  });
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   byId("toggleServerBtn")?.addEventListener("click", toggleServer);
   byId("toggleClientBtn")?.addEventListener("click", toggleClient);
@@ -518,6 +624,7 @@ window.addEventListener("DOMContentLoaded", () => {
     });
   });
 
+  initFloatingWindows();
   disableLegacySections();
   refreshAll();
   setInterval(refreshAll, 1000);

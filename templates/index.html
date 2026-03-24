@@ -21,95 +21,115 @@
     </header>
 
     <main class="dashboard">
-      <section class="card compact">
-        <div class="card-head">
-          <h2>Local Agent</h2>
-          <div class="card-tools">
-            <button class="secondary small" id="openMonitorConfigBtn" type="button">Configure</button>
-            <button id="openAgentDownloadBtn" class="download-btn" type="button">Download Agent</button>
-          </div>
-        </div>
-        <div id="agentStatus" class="status slim">-</div>
-      </section>
+      <div class="main-layout">
+        <div class="left-col">
+          <section class="card compact">
+            <div class="card-head">
+              <h2>Local Agent</h2>
+              <div class="card-tools">
+                <button class="secondary small" id="openMonitorConfigBtn" type="button">Configure</button>
+                <button id="openAgentDownloadBtn" class="download-btn" type="button">Download Agent</button>
+              </div>
+            </div>
+            <div id="agentStatus" class="status slim">-</div>
+          </section>
 
-      <section class="card compact">
-        <div class="card-head">
-          <h2>Modbus Server</h2>
-          <div class="card-tools">
-            <button class="secondary small" id="openServerConfigBtn" type="button">Configure</button>
-            <button id="toggleServerBtn" class="small" type="button">Start</button>
-          </div>
-        </div>
-        <div id="serverStatus" class="status slim">-</div>
-      </section>
+          <section class="card compact">
+            <div class="card-head">
+              <h2>Modbus Server</h2>
+              <div class="card-tools">
+                <button class="secondary small" id="openServerConfigBtn" type="button">Configure</button>
+                <button id="toggleServerBtn" class="small" type="button">Start</button>
+              </div>
+            </div>
+            <div id="serverStatus" class="status slim">-</div>
+          </section>
 
-      <section class="card compact">
-        <div class="card-head">
-          <h2>Modbus Client</h2>
-          <div class="card-tools">
-            <button class="secondary small" id="openClientConfigBtn" type="button">Configure</button>
-            <button id="toggleClientBtn" class="small" type="button">Start</button>
-          </div>
-        </div>
-        <div id="clientStatus" class="status slim">-</div>
-      </section>
-
-      <section class="card actions-card">
-        <div class="card-head">
-          <h2>Modbus Actions</h2>
+          <section class="card compact">
+            <div class="card-head">
+              <h2>Modbus Client</h2>
+              <div class="card-tools">
+                <button class="secondary small" id="openClientConfigBtn" type="button">Configure</button>
+                <button id="toggleClientBtn" class="small" type="button">Start</button>
+              </div>
+            </div>
+            <div id="clientStatus" class="status slim">-</div>
+          </section>
         </div>
 
-        <div class="action-block">
-          <div class="block-title">READ</div>
-          <div class="row compact-row">
-            <input id="readStart" type="number" value="0" placeholder="Start" />
-            <input id="readQty" type="number" value="4" placeholder="Qty" />
-            <button id="sendReadBtn" type="button">Send READ</button>
-          </div>
+        <div class="right-col">
+          <section class="card events-card">
+            <div class="card-head">
+              <h2>Events</h2>
+            </div>
+            <div id="eventsPanel" class="log-panel compact-log"></div>
+          </section>
+
+          <section class="card alerts-card">
+            <div class="card-head">
+              <h2>Alerts</h2>
+            </div>
+            <div id="alertsPanel" class="log-panel compact-log"></div>
+          </section>
         </div>
+      </div>
 
-        <div class="action-block">
-          <div class="block-title">WRITE</div>
-          <div class="row compact-row">
-            <input id="writeRegister" type="number" value="1" placeholder="Register" />
-            <input id="writeValue" type="number" value="1" placeholder="Value" />
-            <button id="sendWriteBtn" type="button">Send WRITE</button>
-          </div>
+      <div class="bottom-dock">
+        <button class="dock-btn" id="openIdsWindowBtn" type="button">IDS State</button>
+        <button class="dock-btn" id="openLogsWindowBtn" type="button">System Logs</button>
+        <button class="dock-btn" id="openActionsWindowBtn" type="button">Modbus Actions</button>
+      </div>
+
+      <div class="floating-window hidden" id="idsWindow">
+        <div class="window-head">
+          <span>IDS State</span>
+          <button class="window-close" type="button" data-close-window="idsWindow">✕</button>
         </div>
-
-        <div id="actionResult" class="status slim">Local READ/WRITE actions disabled in this version.</div>
-      </section>
-
-      <section class="card ids-card">
-        <div class="card-head">
-          <h2>IDS State</h2>
+        <div class="window-body">
+          <pre id="monitorSnapshot" class="panel floating-panel"></pre>
         </div>
-        <pre id="monitorSnapshot" class="panel compact-panel"></pre>
-      </section>
+      </div>
 
-      <section class="card log-card">
-        <div class="card-head">
-          <h2>System Logs</h2>
-          <div class="card-tools">
+      <div class="floating-window hidden" id="logsWindow">
+        <div class="window-head">
+          <span>System Logs</span>
+          <div class="window-tools">
             <button id="resetSystemBtn" class="secondary small" type="button">Reset</button>
+            <button class="window-close" type="button" data-close-window="logsWindow">✕</button>
           </div>
         </div>
-        <div id="logsPanel" class="log-panel compact-log"></div>
-      </section>
-
-      <section class="card log-card">
-        <div class="card-head">
-          <h2>Alerts</h2>
+        <div class="window-body">
+          <div id="logsPanel" class="log-panel floating-log"></div>
         </div>
-        <div id="alertsPanel" class="log-panel compact-log"></div>
-      </section>
+      </div>
 
-      <section class="card log-card">
-        <div class="card-head">
-          <h2>Events</h2>
+      <div class="floating-window hidden" id="actionsWindow">
+        <div class="window-head">
+          <span>Modbus Actions</span>
+          <button class="window-close" type="button" data-close-window="actionsWindow">✕</button>
         </div>
-        <div id="eventsPanel" class="log-panel compact-log"></div>
-      </section>
+        <div class="window-body">
+          <div class="action-block">
+            <div class="block-title">READ</div>
+            <div class="row compact-row">
+              <input id="readStart" type="number" value="0" placeholder="Start" />
+              <input id="readQty" type="number" value="4" placeholder="Qty" />
+              <button id="sendReadBtn" type="button">Send READ</button>
+            </div>
+          </div>
+
+          <div class="action-block">
+            <div class="block-title">WRITE</div>
+            <div class="row compact-row">
+              <input id="writeRegister" type="number" value="1" placeholder="Register" />
+              <input id="writeValue" type="number" value="1" placeholder="Value" />
+              <button id="sendWriteBtn" type="button">Send WRITE</button>
+            </div>
+          </div>
+
+          <div id="actionResult" class="status slim">Local READ/WRITE actions disabled in this version.</div>
+        </div>
+      </div>
     </main>
   </div>
 
