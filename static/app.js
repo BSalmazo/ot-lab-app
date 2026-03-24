@@ -215,16 +215,27 @@ function formatAgentStatus(data) {
   return [
     `STATUS: ${connected ? "CONNECTED" : "DISCONNECTED"}`,
     `INTERFACE: ${iface}`,
-    `MODE: ${mode}`,
-  ].join(" | ");
+    `MODE: ${mode}`
+  ].join("\n");
 }
 
 function formatServerStatus(server) {
-  return `${server?.running ? "RUNNING" : "STOPPED"} | ${server?.host || "-"}:${server?.port || "-"}`;
+  return [
+    `STATUS: ${server?.running ? "RUNNING" : "STOPPED"}`,
+    `HOST: ${server?.host || "-"}`,
+    `PORT: ${server?.port || "-"}`
+  ].join("\n");
 }
 
 function formatClientStatus(client) {
-  return `${client?.running ? "RUNNING" : "STOPPED"} | ${client?.host || "-"}:${client?.port || "-"} | poll=${client?.poll_interval ?? "-"}s | start=${client?.poll_start ?? "-"} | qty=${client?.poll_quantity ?? "-"}`;
+  return [
+    `STATUS: ${client?.running ? "RUNNING" : "STOPPED"}`,
+    `HOST: ${client?.host || "-"}`,
+    `PORT: ${client?.port || "-"}`,
+    `POLL: ${client?.poll_interval ?? "-"}s`,
+    `START: ${client?.poll_start ?? "-"}`,
+    `QTY: ${client?.poll_quantity ?? "-"}`
+  ].join("\n");
 }
 
 function buildReadableSnapshot(snapshot) {
