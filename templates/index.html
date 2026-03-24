@@ -62,14 +62,14 @@
             <div class="card-head">
               <h2>Events</h2>
             </div>
-            <div id="eventsPanel" class="log-panel compact-log"></div>
+            <div id="eventsPanel" class="log-panel"></div>
           </section>
 
           <section class="card alerts-card">
             <div class="card-head">
               <h2>Alerts</h2>
             </div>
-            <div id="alertsPanel" class="log-panel compact-log"></div>
+            <div id="alertsPanel" class="log-panel"></div>
           </section>
         </div>
       </div>
@@ -86,7 +86,7 @@
           <button class="window-close" type="button" data-close-window="idsWindow">✕</button>
         </div>
         <div class="window-body">
-          <pre id="monitorSnapshot" class="panel floating-panel"></pre>
+          <pre id="monitorSnapshot" class="log-panel floating-panel"></pre>
         </div>
       </div>
 
@@ -111,7 +111,7 @@
         <div class="window-body">
           <div class="action-block">
             <div class="block-title">READ</div>
-            <div class="row compact-row">
+            <div class="row">
               <input id="readStart" type="number" value="0" placeholder="Start" />
               <input id="readQty" type="number" value="4" placeholder="Qty" />
               <button id="sendReadBtn" type="button">Send READ</button>
@@ -120,7 +120,7 @@
 
           <div class="action-block">
             <div class="block-title">WRITE</div>
-            <div class="row compact-row">
+            <div class="row">
               <input id="writeRegister" type="number" value="1" placeholder="Register" />
               <input id="writeValue" type="number" value="1" placeholder="Value" />
               <button id="sendWriteBtn" type="button">Send WRITE</button>
@@ -142,7 +142,7 @@
       <div class="modal-body">
         <div class="row">
           <label>Interface</label>
-          <div class="row compact-row">
+          <div class="row">
             <select id="ifaceSelect"></select>
             <button type="button" class="secondary small" id="scanIfacesBtn">Scan</button>
           </div>
