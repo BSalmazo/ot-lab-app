@@ -100,6 +100,21 @@ def default_remote_client():
         "updated_at": None,
     }
 
+def default_modbus_summary():
+    return {
+        "detected": False,
+        "protocol": "Modbus/TCP",
+        "interface": None,
+        "port": None,
+        "client_ip": None,
+        "server_ip": None,
+        "functions_seen": [],
+        "avg_polling_s": None,
+        "writes_detected": False,
+        "state": "Inactive",
+        "last_seen": None,
+    }
+
 
 def ensure_session_state(session_id: str):
     with lock:
@@ -113,6 +128,7 @@ def ensure_session_state(session_id: str):
                 "agent_config": default_agent_config(),
                 "remote_server": default_remote_server(),
                 "remote_client": default_remote_client(),
+                "modbus_summary": default_modbus_summary(),
                 "pending_commands": [],
             }
         return agents_by_session[session_id]
@@ -156,6 +172,146 @@ def push_log_for_session(session_id: str, message: str):
     state = ensure_session_state(session_id)
     with lock:
         state["logs"].append(message)
+
+MODBUS_WRITE_FUNCTIONS = {5, 6, 15, 16}
+
+
+def normalize_event_type(event_type: str):
+    return str(event_type or "").upper().strip()
+
+
+def extract_event_client_server(payload: dict):
+    event_type = normalize_event_type(payload.get("type"))
+
+    src_ip = payload.get("src_ip")
+    dst_ip = payload.get("dst_ip")
+    src_port = payload.get("src_port")
+    dst_port = payload.get("dst_port")
+
+    client = payload.get("client")
+    server = payload.get("server")
+
+    if event_type in {"READ_REQUEST", "WRITE_REQUEST"}:
+        client_ip = client or src_ip
+        server_ip = server or dst_ip
+        port = dst_port
+    elif event_type in {"READ_RESPONSE", "WRITE_RESPONSE"}:
+        client_ip = client or dst_ip
+        server_ip = server or src_ip
+        port = src_port
+    else:
+        client_ip = client or src_ip
+        server_ip = server or dst_ip
+        port = dst_port
+
+    return client_ip, server_ip, port
+
+
+def extract_avg_polling_from_snapshot(snapshot: dict, server_ip: str):
+    if not snapshot:
+        return None
+
+    read_patterns = snapshot.get("read_patterns") or []
+    if not isinstance(read_patterns, list):
+        return None
+
+    for pattern in read_patterns:
+        if not isinstance(pattern, dict):
+            continue
+
+        pattern_server = pattern.get("server")
+        avg_period = pattern.get("avg_period")
+
+        if server_ip and pattern_server and pattern_server != server_ip:
+            continue
+
+        if avg_period is None:
+            continue
+
+        try:
+            return round(float(avg_period), 2)
+        except (TypeError, ValueError):
+            continue
+
+    return None
+
+
+def update_modbus_summary_from_event(state: dict, payload: dict):
+    summary = state["modbus_summary"]
+
+    event_type = normalize_event_type(payload.get("type"))
+    function_code = payload.get("function_code")
+
+    client_ip, server_ip, port = extract_event_client_server(payload)
+    iface = (
+        payload.get("iface")
+        or state["agent_info"].get("iface")
+        or state["agent_config"].get("iface")
+    )
+
+    if function_code is None:
+        return
+
+    try:
+        function_code = int(function_code)
+    except (TypeError, ValueError):
+        return
+
+    summary["detected"] = True
+    summary["protocol"] = "Modbus/TCP"
+    summary["interface"] = iface
+    summary["port"] = port
+    summary["client_ip"] = client_ip
+    summary["server_ip"] = server_ip
+    summary["last_seen"] = time.time()
+    summary["state"] = "Active"
+
+    existing_fc = set(summary.get("functions_seen") or [])
+    existing_fc.add(function_code)
+    summary["functions_seen"] = sorted(existing_fc)
+
+    if function_code in MODBUS_WRITE_FUNCTIONS or event_type in {"WRITE_REQUEST", "WRITE_RESPONSE"}:
+        summary["writes_detected"] = True
+
+    avg_polling = payload.get("avg_polling_s")
+
+    if avg_polling is None:
+        avg_polling = extract_avg_polling_from_snapshot(
+            state.get("agent_snapshot") or {},
+            server_ip
+        )
+
+    if avg_polling is not None:
+        try:
+            summary["avg_polling_s"] = round(float(avg_polling), 2)
+        except (TypeError, ValueError):
+            pass
+
+
+def build_modbus_summary(state: dict):
+    summary = dict(state.get("modbus_summary") or default_modbus_summary())
+
+    if not summary.get("detected"):
+        return {"detected": False}
+
+    last_seen = summary.get("last_seen")
+    if last_seen is not None and (time.time() - last_seen > 5):
+        summary["state"] = "Inactive"
+    else:
+        summary["state"] = "Active"
+
+    return {
+        "detected": bool(summary.get("detected")),
+        "protocol": summary.get("protocol") or "Modbus/TCP",
+        "interface": summary.get("interface"),
+        "port": summary.get("port"),
+        "client_ip": summary.get("client_ip"),
+        "server_ip": summary.get("server_ip"),
+        "functions_seen": summary.get("functions_seen") or [],
+        "avg_polling_s": summary.get("avg_polling_s"),
+        "writes_detected": bool(summary.get("writes_detected")),
+        "state": summary.get("state") or "Inactive",
+    }
 
 
 def build_command_log_message(command_type: str, payload: dict):
@@ -255,11 +411,11 @@ def api_events(request: Request):
         "events": list(state["events"]),
         "alerts": list(state["alerts"]),
         "logs": list(state["logs"]),
+        "modbus_summary": build_modbus_summary(state),
         "session_id": session_id,
     })
     set_session_cookie_if_needed(request, response, session_id)
     return response
-
 
 @app.get("/api/agent/interfaces")
 def get_agent_interfaces(request: Request):
@@ -560,6 +716,7 @@ def reset_system(request: Request):
         state["agent_config"] = default_agent_config()
         state["remote_server"] = default_remote_server()
         state["remote_client"] = default_remote_client()
+        state["modbus_summary"] = default_modbus_summary()
         state["pending_commands"].clear()
 
     response = JSONResponse({"ok": True, "session_id": session_id})
@@ -649,6 +806,12 @@ def agent_snapshot_ingest(payload: dict = Body(...)):
         agent_info.get("available_ifaces", [])
     )
 
+    modbus_summary = state.get("modbus_summary") or default_modbus_summary()
+    if modbus_summary.get("detected") and modbus_summary.get("server_ip"):
+        avg_polling = extract_avg_polling_from_snapshot(payload, modbus_summary.get("server_ip"))
+        if avg_polling is not None:
+            modbus_summary["avg_polling_s"] = avg_polling
+
     return {"ok": True}
 
 
@@ -660,6 +823,7 @@ def agent_event_ingest(payload: dict = Body(...)):
 
     state = ensure_session_state(session_id)
     push_event(state, payload)
+    update_modbus_summary_from_event(state, payload)
 
     summary = payload.get("summary")
     if summary:
