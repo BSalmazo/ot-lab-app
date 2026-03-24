@@ -798,8 +798,8 @@ class AgentMonitor:
 
     def _build_event_summary(self, event: dict) -> str:
         event_type = event.get("type")
-        client = f"{event.get('src_ip')}:{event.get('src_port')}"
-        server = f"{event.get('dst_ip')}:{event.get('dst_port')}"
+        client = event.get("client") or f"{event.get('src_ip')}:{event.get('src_port')}"
+        server = event.get("server") or f"{event.get('dst_ip')}:{event.get('dst_port')}"
 
         if event_type == "READ_REQUEST":
             return (
@@ -808,11 +808,9 @@ class AgentMonitor:
             )
 
         if event_type == "READ_RESPONSE":
-            server_side = f"{event.get('src_ip')}:{event.get('src_port')}"
-            client_side = f"{event.get('dst_ip')}:{event.get('dst_port')}"
             return (
-                f"FC{event.get('function_code')} read response from {server_side} "
-                f"to {client_side} | values={event.get('register_values', [])} | rtt={event.get('rtt')}"
+                f"FC{event.get('function_code')} read response from {server} "
+                f"to {client} | values={event.get('register_values', [])} | rtt={event.get('rtt')}"
             )
 
         if event_type == "WRITE_REQUEST":
@@ -822,11 +820,9 @@ class AgentMonitor:
             )
 
         if event_type == "WRITE_RESPONSE":
-            server_side = f"{event.get('src_ip')}:{event.get('src_port')}"
-            client_side = f"{event.get('dst_ip')}:{event.get('dst_port')}"
             return (
-                f"FC{event.get('function_code')} write response from {server_side} "
-                f"to {client_side} | register={event.get('register')} value={event.get('value')} | rtt={event.get('rtt')}"
+                f"FC{event.get('function_code')} write response from {server} "
+                f"to {client} | register={event.get('register')} value={event.get('value')} | rtt={event.get('rtt')}"
             )
 
         return (
@@ -862,7 +858,7 @@ class AgentMonitor:
             "function_code": function_code,
             "unit_id": unit_id,
             "length": length,
-            "protocol": "MODBUS_TCP",
+            "protocol": "MODBUS/TCP",
         }
 
         if function_code == 3:
@@ -918,6 +914,30 @@ class AgentMonitor:
                 "last_value": None,
             }
         return self.state["write_registers"][register]
+    
+    def _get_avg_polling_for_event(self, decoded: dict):
+        if decoded.get("type") != "READ_REQUEST":
+            return None
+
+        key = (
+            decoded["dst_ip"],
+            decoded["dst_port"],
+            decoded["start_addr"],
+            decoded["quantity"],
+        )
+
+        profile = self.state["read_patterns"].get(key)
+        if not profile:
+            return None
+
+        avg_period = profile.get("avg_period")
+        if avg_period is None:
+            return None
+
+        try:
+            return round(float(avg_period), 2)
+        except (TypeError, ValueError):
+            return None
 
     def _should_emit_alert(self, event: dict, reasons: list, score: int) -> bool:
         event_type = event.get("type")
@@ -1061,6 +1081,8 @@ class AgentMonitor:
                 )
                 score = 4
 
+        event["iface"] = self.iface
+        event["avg_polling_s"] = self._get_avg_polling_for_event(decoded)
         event["summary"] = self._build_event_summary(event)
 
         self.state["event_counts"][decoded["type"]] += 1

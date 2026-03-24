@@ -238,6 +238,102 @@ function formatClientStatus(client) {
   ].join("\n");
 }
 
+function formatPolling(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+  return `${Number(value).toFixed(1)} s`;
+}
+
+function formatFunctions(functionsSeen) {
+  if (!Array.isArray(functionsSeen) || functionsSeen.length === 0) {
+    return `<div class="event-value">-</div>`;
+  }
+
+  return `
+    <div class="fc-list">
+      ${functionsSeen
+        .slice()
+        .sort((a, b) => a - b)
+        .map((fc) => `<span class="fc-badge">FC${escapeHtml(fc)}</span>`)
+        .join("")}
+    </div>
+  `;
+}
+
+function renderEventsPanel(summary) {
+  const el = byId("eventsPanel");
+  if (!el) return;
+
+  if (!summary || !summary.detected) {
+    el.className = "event-summary empty";
+    el.innerHTML = `
+      <div class="event-empty-title">No communication identified</div>
+      <div class="event-empty-subtitle">Waiting for Modbus/TCP traffic...</div>
+    `;
+    return;
+  }
+
+  const writesDetected = !!summary.writes_detected;
+  const stateLabel = summary.state || "Active";
+  const stateClass = stateLabel.toLowerCase() === "inactive" ? "inactive" : "";
+
+  el.className = "event-summary";
+  el.innerHTML = `
+    <div class="event-title-row">
+      <div class="event-title">Communication detected</div>
+      <div class="event-state ${stateClass}">${escapeHtml(stateLabel)}</div>
+    </div>
+
+    <div class="event-grid">
+      <div class="event-item">
+        <div class="event-label">Protocol</div>
+        <div class="event-value">${escapeHtml(summary.protocol || "Modbus/TCP")}</div>
+      </div>
+
+      <div class="event-item">
+        <div class="event-label">Interface</div>
+        <div class="event-value">${escapeHtml(summary.interface || "-")}</div>
+      </div>
+
+      <div class="event-item">
+        <div class="event-label">Port</div>
+        <div class="event-value">${escapeHtml(summary.port ?? "-")}</div>
+      </div>
+
+      <div class="event-item">
+        <div class="event-label">Client</div>
+        <div class="event-value">${escapeHtml(summary.client_ip || "-")}</div>
+      </div>
+
+      <div class="event-item">
+        <div class="event-label">Server</div>
+        <div class="event-value">${escapeHtml(summary.server_ip || "-")}</div>
+      </div>
+
+      <div class="event-item">
+        <div class="event-label">Average polling</div>
+        <div class="event-value">${escapeHtml(formatPolling(summary.avg_polling_s))}</div>
+      </div>
+
+      <div class="event-item">
+        <div class="event-label">Writes detected</div>
+        <div class="event-value ${writesDetected ? "write-yes" : "write-no"}">
+          ${writesDetected ? "Yes" : "No"}
+        </div>
+      </div>
+
+      <div class="event-item">
+        <div class="event-label">State</div>
+        <div class="event-value">${escapeHtml(stateLabel)}</div>
+      </div>
+
+      <div class="event-item" style="grid-column: 1 / -1;">
+        <div class="event-label">Observed functions</div>
+        ${formatFunctions(summary.functions_seen)}
+      </div>
+    </div>
+  `;
+}
+
 function buildReadableSnapshot(snapshot) {
   if (!snapshot || Object.keys(snapshot).length === 0) {
     return "No IDS data available yet.";
@@ -445,7 +541,7 @@ function simplifyLogLine(log) {
 async function refreshEvents() {
   const data = await apiGet("/api/events");
 
-  renderList("eventsPanel", data.events, (e) => formatEventCard(e));
+  renderEventsPanel(data.modbus_summary);
   renderList("alertsPanel", data.alerts, (a) => formatAlertCard(a));
   renderList("logsPanel", data.logs, (log) => escapeHtml(simplifyLogLine(log)));
 }
