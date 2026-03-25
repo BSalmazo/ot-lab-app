@@ -27,7 +27,7 @@ import requests
 from scapy.all import AsyncSniffer, IP, TCP, get_if_list
 
 
-MODBUS_KNOWN_FUNCTION_CODES = {1, 2, 3, 4, 5, 6, 15, 16}
+MODBUS_KNOWN_FUNCTION_CODES = {1, 2, 3, 4, 5, 6, 15, 16, 22, 23, 24, 43}
 DEFAULT_SERVER_URL = "https://web-production-56599.up.railway.app/"
 DEFAULT_SESSION_ID = "dev-local-session"
 DEFAULT_MODE = "MONITORING"
@@ -127,15 +127,41 @@ class SimpleModbusServer:
     def running(self):
         return self._thread is not None and self._thread.is_alive()
 
-    def start(self):
-        if self.running:
-            return True
+def start(self):
+    sniff_ifaces = self.get_sniff_interfaces()
 
-        self._stop_event.clear()
-        self._thread = threading.Thread(target=self._serve_loop, daemon=True)
-        self._thread.start()
-        time.sleep(0.2)
-        return self.running
+    if not sniff_ifaces:
+        print(f"[agent] invalid iface '{self.iface}'")
+        self.sniffer = None
+        return False
+
+    blocked_prefixes = ("anpi", "ap", "awdl", "llw", "utun", "bridge", "gif", "stf")
+    sniff_ifaces = [
+        iface for iface in sniff_ifaces
+        if not iface.startswith(blocked_prefixes)
+    ]
+
+    if not sniff_ifaces:
+        print("[agent] no usable interfaces after filtering")
+        self.sniffer = None
+        return False
+
+    sniff_target = sniff_ifaces if len(sniff_ifaces) > 1 else sniff_ifaces[0]
+
+    try:
+        self.sniffer = AsyncSniffer(
+            iface=sniff_target,
+            filter="tcp",
+            prn=self._handle_packet,
+            store=False,
+        )
+        self.sniffer.start()
+        print(f"[agent] sniffing on interfaces: {sniff_ifaces}")
+        return True
+    except Exception as e:
+        print(f"[agent] failed to start sniffer on iface={self.iface}: {e}")
+        self.sniffer = None
+        return False
 
     def stop(self):
         self._stop_event.set()
@@ -295,7 +321,7 @@ class SimpleModbusClient:
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._thread.start()
-        time.sleep(0.2)
+        time.sleep(2.0)
         return self.running
 
     def stop(self):
@@ -730,6 +756,13 @@ class AgentMonitor:
                 print(f"[agent] warning while stopping sniffer: {e}")
             self.sniffer = None
 
+    def get_available_interfaces(self):
+        try:
+            ifaces = sorted(set(get_if_list()))
+            return [iface for iface in ifaces if iface]
+        except Exception:
+            return []
+
     def get_sniff_interfaces(self):
         available = self.get_available_interfaces()
 
@@ -774,21 +807,61 @@ class AgentMonitor:
 
         protocol_id = int.from_bytes(payload[2:4], "big")
         length_field = int.from_bytes(payload[4:6], "big")
-        function_code = payload[7]
 
         if protocol_id != 0:
             return False
+
         if length_field < 2:
             return False
 
         expected_total_length = 6 + length_field
-        if expected_total_length != len(payload):
+
+        # Em tráfego real, pode haver payload maior que um único frame Modbus/TCP.
+        # Basta garantir que existe pelo menos um frame completo no início.
+        if len(payload) < expected_total_length:
             return False
 
+        function_code = payload[7]
+
+        # Aceita códigos conhecidos e também exception responses (fc | 0x80).
         if function_code not in MODBUS_KNOWN_FUNCTION_CODES and (function_code & 0x80) == 0:
             return False
 
         return True
+    
+    def _extract_modbus_frames(self, payload: bytes):
+        frames = []
+        offset = 0
+        total_len = len(payload)
+
+        while offset + 8 <= total_len:
+            chunk = payload[offset:]
+
+            protocol_id = int.from_bytes(chunk[2:4], "big")
+            length_field = int.from_bytes(chunk[4:6], "big")
+
+            if protocol_id != 0:
+                break
+
+            if length_field < 2:
+                break
+
+            frame_len = 6 + length_field
+
+            if len(chunk) < frame_len:
+                # frame incompleto; não tenta forçar
+                break
+
+            frame = chunk[:frame_len]
+
+            function_code = frame[7]
+            if function_code not in MODBUS_KNOWN_FUNCTION_CODES and (function_code & 0x80) == 0:
+                break
+
+            frames.append(frame)
+            offset += frame_len
+
+        return frames
 
     def _tx_key(self, tx_id, src_ip, src_port, dst_ip, dst_port):
         return (tx_id, src_ip, src_port, dst_ip, dst_port)
@@ -814,6 +887,12 @@ class AgentMonitor:
             )
 
         if event_type == "WRITE_REQUEST":
+            if event.get("values") is not None:
+                return (
+                    f"FC{event.get('function_code')} write request from {client} "
+                    f"to {server} | start={event.get('start_addr')} qty={event.get('quantity')} "
+                    f"values={event.get('values')}"
+                )
             return (
                 f"FC{event.get('function_code')} write request from {client} "
                 f"to {server} | register={event.get('register')} value={event.get('value')}"
@@ -825,15 +904,31 @@ class AgentMonitor:
                 f"to {client} | register={event.get('register')} value={event.get('value')} | rtt={event.get('rtt')}"
             )
 
+        if event_type == "EXCEPTION_RESPONSE":
+            return (
+                f"FC{event.get('function_code')} exception response from {server} "
+                f"to {client} | exception_code={event.get('exception_code')} | rtt={event.get('rtt')}"
+            )
+
         return (
             f"Modbus transaction detected | "
             f"{event.get('src_ip')}:{event.get('src_port')} -> {event.get('dst_ip')}:{event.get('dst_port')}"
         )
 
     def _decode_modbus(self, payload: bytes, src_ip: str, src_port: int, dst_ip: str, dst_port: int, timestamp: float):
+        if len(payload) < 8:
+            return None
+
         tx_id = int.from_bytes(payload[0:2], "big")
         protocol_id = int.from_bytes(payload[2:4], "big")
         length = int.from_bytes(payload[4:6], "big")
+
+        total_len = 6 + length
+        if len(payload) < total_len:
+            return None
+
+        payload = payload[:total_len]
+
         unit_id = payload[6]
         function_code = payload[7]
 
@@ -861,8 +956,17 @@ class AgentMonitor:
             "protocol": "MODBUS/TCP",
         }
 
-        if function_code == 3:
-            if len(payload) == 12 and not is_response:
+        # Exception response
+        if function_code & 0x80:
+            decoded.update({
+                "type": "EXCEPTION_RESPONSE" if is_response else "UNKNOWN_REQUEST",
+                "exception_code": payload[8] if len(payload) > 8 else None,
+            })
+            return decoded
+
+        # FC 3 / 4 - leitura
+        if function_code in (3, 4):
+            if not is_response and len(payload) >= 12:
                 start_addr = int.from_bytes(payload[8:10], "big")
                 quantity = int.from_bytes(payload[10:12], "big")
                 decoded.update({
@@ -872,7 +976,7 @@ class AgentMonitor:
                 })
                 return decoded
 
-            if len(payload) >= 9:
+            if is_response and len(payload) >= 9:
                 byte_count = payload[8]
                 data_bytes = payload[9:9 + byte_count]
                 regs = []
@@ -885,7 +989,8 @@ class AgentMonitor:
                 })
                 return decoded
 
-        if function_code == 6 and len(payload) == 12:
+        # FC 6 - write single register
+        if function_code == 6 and len(payload) >= 12:
             register = int.from_bytes(payload[8:10], "big")
             value = int.from_bytes(payload[10:12], "big")
             decoded.update({
@@ -895,7 +1000,53 @@ class AgentMonitor:
             })
             return decoded
 
-        return None
+        # FC 16 - write multiple registers
+        if function_code == 16:
+            if not is_response and len(payload) >= 13:
+                start_addr = int.from_bytes(payload[8:10], "big")
+                quantity = int.from_bytes(payload[10:12], "big")
+                byte_count = payload[12]
+                values = []
+                values_data = payload[13:13 + byte_count]
+
+                for i in range(0, len(values_data), 2):
+                    if i + 1 < len(values_data):
+                        values.append(int.from_bytes(values_data[i:i + 2], "big"))
+
+                decoded.update({
+                    "type": "WRITE_REQUEST",
+                    "register": start_addr,
+                    "start_addr": start_addr,
+                    "quantity": quantity,
+                    "values": values,
+                    "value": values[0] if values else None,
+                })
+                return decoded
+
+            if is_response and len(payload) >= 12:
+                start_addr = int.from_bytes(payload[8:10], "big")
+                quantity = int.from_bytes(payload[10:12], "big")
+                decoded.update({
+                    "type": "WRITE_RESPONSE",
+                    "register": start_addr,
+                    "start_addr": start_addr,
+                    "quantity": quantity,
+                    "value": None,
+                })
+                return decoded
+
+        # FC 5 / 15 - coils
+        if function_code in (5, 15):
+            decoded.update({
+                "type": "WRITE_RESPONSE" if is_response else "WRITE_REQUEST",
+            })
+            return decoded
+
+        # Outros FCs conhecidos
+        decoded.update({
+            "type": "GENERIC_RESPONSE" if is_response else "GENERIC_REQUEST",
+        })
+        return decoded
 
     def _get_or_create_read_pattern(self, key):
         if key not in self.state["read_patterns"]:
@@ -982,123 +1133,136 @@ class AgentMonitor:
         self._post("/api/agent/alert", alert)
 
     def _handle_packet(self, pkt):
-        if IP not in pkt or TCP not in pkt:
-            return
-
-        ip = pkt[IP]
-        tcp = pkt[TCP]
-        payload = bytes(tcp.payload)
-
-        if not payload or not self._looks_like_modbus_tcp(payload):
-            return
-
-        decoded = self._decode_modbus(
-            payload=payload,
-            src_ip=ip.src,
-            src_port=tcp.sport,
-            dst_ip=ip.dst,
-            dst_port=tcp.dport,
-            timestamp=float(pkt.time),
-        )
-        if not decoded:
-            return
-
-        event = decoded.copy()
-        score = 0
-        reasons = []
-
-        if decoded["type"] in ("READ_REQUEST", "WRITE_REQUEST"):
-            initiator = f"{decoded['src_ip']}:{decoded['src_port']}"
-            responder = f"{decoded['dst_ip']}:{decoded['dst_port']}"
-
-            self.state["initiators_seen"].add(initiator)
-            self.state["responders_seen"].add(responder)
-            self.state["function_codes_seen"].add(decoded["function_code"])
-
-            if decoded["type"] == "READ_REQUEST":
-                key = (
-                    decoded["dst_ip"],
-                    decoded["dst_port"],
-                    decoded["start_addr"],
-                    decoded["quantity"],
-                )
-                profile = self._get_or_create_read_pattern(key)
-                profile["count"] += 1
-                profile["timestamps"].append(decoded["timestamp"])
-
-                if len(profile["timestamps"]) >= self.min_samples:
-                    deltas = [
-                        profile["timestamps"][i] - profile["timestamps"][i - 1]
-                        for i in range(1, len(profile["timestamps"]))
-                    ]
-                    profile["avg_period"] = mean(deltas)
-
-                self.state["pending_transactions"][
-                    self._tx_key(
-                        decoded["transaction_id"],
-                        decoded["src_ip"],
-                        decoded["src_port"],
-                        decoded["dst_ip"],
-                        decoded["dst_port"],
-                    )
-                ] = {"timestamp": decoded["timestamp"]}
-
-            elif decoded["type"] == "WRITE_REQUEST":
-                reg_profile = self._get_or_create_write_register(decoded["register"])
-                reg_profile["count"] += 1
-                reg_profile["values_seen"].add(decoded["value"])
-                reg_profile["last_value"] = decoded["value"]
-
-                reasons.append(
-                    f"Write detected on register {decoded['register']} with value {decoded['value']}"
-                )
-                score = 5
-
-                self.state["pending_transactions"][
-                    self._tx_key(
-                        decoded["transaction_id"],
-                        decoded["src_ip"],
-                        decoded["src_port"],
-                        decoded["dst_ip"],
-                        decoded["dst_port"],
-                    )
-                ] = {"timestamp": decoded["timestamp"]}
-
-        elif decoded["type"] in ("READ_RESPONSE", "WRITE_RESPONSE"):
-            reverse_key = self._reverse_tx_key(
-                decoded["transaction_id"],
-                decoded["src_ip"],
-                decoded["src_port"],
-                decoded["dst_ip"],
-                decoded["dst_port"],
-            )
-            matched = self.state["pending_transactions"].pop(reverse_key, None)
-            event["rtt"] = round(decoded["timestamp"] - matched["timestamp"], 6) if matched else None
-
-            if decoded["type"] == "WRITE_RESPONSE":
-                reasons.append(
-                    f"Write confirmation received for register {decoded.get('register')} value {decoded.get('value')}"
-                )
-                score = 4
-
-        event["iface"] = self.iface
-        event["avg_polling_s"] = self._get_avg_polling_for_event(decoded)
-        event["summary"] = self._build_event_summary(event)
-
-        self.state["event_counts"][decoded["type"]] += 1
-        self._post("/api/agent/event", event)
-
-        if self.mode == "MONITORING":
-            self._emit_alert(event, reasons, score)
-
-        self.send_snapshot()
-
-    def get_available_interfaces(self):
         try:
-            ifaces = sorted(set(get_if_list()))
-            return [iface for iface in ifaces if iface]
-        except Exception:
-            return []
+            if IP not in pkt or TCP not in pkt:
+                return
+
+            ip = pkt[IP]
+            tcp = pkt[TCP]
+            payload = bytes(tcp.payload)
+
+            if not payload:
+                return
+
+            if not self._looks_like_modbus_tcp(payload):
+                return
+
+            frames = self._extract_modbus_frames(payload)
+            if not frames:
+                return
+
+            for frame in frames:
+                decoded = self._decode_modbus(
+                    payload=frame,
+                    src_ip=ip.src,
+                    src_port=tcp.sport,
+                    dst_ip=ip.dst,
+                    dst_port=tcp.dport,
+                    timestamp=float(pkt.time),
+                )
+                if not decoded:
+                    continue
+
+                event = decoded.copy()
+                score = 0
+                reasons = []
+
+                if decoded["type"] in ("READ_REQUEST", "WRITE_REQUEST", "GENERIC_REQUEST", "UNKNOWN_REQUEST"):
+                    initiator = f"{decoded['src_ip']}:{decoded['src_port']}"
+                    responder = f"{decoded['dst_ip']}:{decoded['dst_port']}"
+
+                    self.state["initiators_seen"].add(initiator)
+                    self.state["responders_seen"].add(responder)
+                    self.state["function_codes_seen"].add(decoded["function_code"])
+
+                    if decoded["type"] == "READ_REQUEST":
+                        key = (
+                            decoded["dst_ip"],
+                            decoded["dst_port"],
+                            decoded["start_addr"],
+                            decoded["quantity"],
+                        )
+                        profile = self._get_or_create_read_pattern(key)
+                        profile["count"] += 1
+                        profile["timestamps"].append(decoded["timestamp"])
+
+                        if len(profile["timestamps"]) >= self.min_samples:
+                            deltas = [
+                                profile["timestamps"][i] - profile["timestamps"][i - 1]
+                                for i in range(1, len(profile["timestamps"]))
+                            ]
+                            profile["avg_period"] = mean(deltas)
+
+                    if decoded["type"] == "WRITE_REQUEST":
+                        register_ref = decoded.get("register", decoded.get("start_addr"))
+                        if register_ref is not None:
+                            reg_profile = self._get_or_create_write_register(register_ref)
+                            reg_profile["count"] += 1
+
+                            if decoded.get("values") is not None:
+                                for v in decoded["values"]:
+                                    reg_profile["values_seen"].add(v)
+                                reg_profile["last_value"] = decoded["values"][-1] if decoded["values"] else None
+                                reasons.append(
+                                    f"Write detected starting at register {register_ref} with values {decoded.get('values')}"
+                                )
+                            else:
+                                if decoded.get("value") is not None:
+                                    reg_profile["values_seen"].add(decoded["value"])
+                                    reg_profile["last_value"] = decoded["value"]
+                                reasons.append(
+                                    f"Write detected on register {register_ref} with value {decoded.get('value')}"
+                                )
+
+                            score = 5
+
+                    self.state["pending_transactions"][
+                        self._tx_key(
+                            decoded["transaction_id"],
+                            decoded["src_ip"],
+                            decoded["src_port"],
+                            decoded["dst_ip"],
+                            decoded["dst_port"],
+                        )
+                    ] = {"timestamp": decoded["timestamp"]}
+
+                elif decoded["type"] in ("READ_RESPONSE", "WRITE_RESPONSE", "GENERIC_RESPONSE", "EXCEPTION_RESPONSE"):
+                    reverse_key = self._reverse_tx_key(
+                        decoded["transaction_id"],
+                        decoded["src_ip"],
+                        decoded["src_port"],
+                        decoded["dst_ip"],
+                        decoded["dst_port"],
+                    )
+                    matched = self.state["pending_transactions"].pop(reverse_key, None)
+                    event["rtt"] = round(decoded["timestamp"] - matched["timestamp"], 6) if matched else None
+
+                    if decoded["type"] == "WRITE_RESPONSE":
+                        reasons.append(
+                            f"Write confirmation received for register {decoded.get('register')} value {decoded.get('value')}"
+                        )
+                        score = 4
+
+                    if decoded["type"] == "EXCEPTION_RESPONSE":
+                        reasons.append(
+                            f"Exception response detected with code {decoded.get('exception_code')}"
+                        )
+                        score = max(score, 6)
+
+                event["iface"] = self.iface
+                event["avg_polling_s"] = self._get_avg_polling_for_event(decoded)
+                event["summary"] = self._build_event_summary(event)
+
+                self.state["event_counts"][decoded["type"]] += 1
+                self._post("/api/agent/event", event)
+
+                if self.mode == "MONITORING":
+                    self._emit_alert(event, reasons, score)
+
+            self.send_snapshot()
+
+        except Exception as e:
+            print(f"[agent] packet handling error: {e}")
 
 
 def main():
@@ -1125,11 +1289,7 @@ def main():
         session_id=args.session_id,
     )
 
-    if agent.iface != "ALL" and agent.iface not in agent.get_available_interfaces():
-        available = agent.get_available_interfaces()
-        if available:
-            agent.iface = available[0]
-            print(f"[agent] iface inválida no arranque. fallback automático para: {agent.iface}")
+    print(f"[agent] using iface: {agent.iface}")
 
     agent.register()
     started = agent.start()

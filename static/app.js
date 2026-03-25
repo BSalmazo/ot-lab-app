@@ -286,12 +286,12 @@ function renderEventsPanel(summary) {
     <div class="event-grid">
       <div class="event-item">
         <div class="event-label">Protocol</div>
-        <div class="event-value">${escapeHtml(summary.protocol || "Modbus/TCP")}</div>
+        <div class="event-value">Modbus/TCP</div>
       </div>
 
       <div class="event-item">
         <div class="event-label">Interface</div>
-        <div class="event-value">${escapeHtml(summary.interface || "-")}</div>
+        <div class="event-value soft">${escapeHtml(summary.interface || "-")}</div>
       </div>
 
       <div class="event-item">
@@ -301,12 +301,12 @@ function renderEventsPanel(summary) {
 
       <div class="event-item">
         <div class="event-label">Client</div>
-        <div class="event-value">${escapeHtml(summary.client_ip || "-")}</div>
+        <div class="event-value soft">${escapeHtml(stripPort(summary.client_ip || "-"))}</div>
       </div>
 
       <div class="event-item">
         <div class="event-label">Server</div>
-        <div class="event-value">${escapeHtml(summary.server_ip || "-")}</div>
+        <div class="event-value soft">${escapeHtml(stripPort(summary.server_ip || "-"))}</div>
       </div>
 
       <div class="event-item">
@@ -321,17 +321,20 @@ function renderEventsPanel(summary) {
         </div>
       </div>
 
-      <div class="event-item">
-        <div class="event-label">State</div>
-        <div class="event-value">${escapeHtml(stateLabel)}</div>
-      </div>
-
-      <div class="event-item" style="grid-column: 1 / -1;">
+      <div class="event-item wide">
         <div class="event-label">Observed functions</div>
         ${formatFunctions(summary.functions_seen)}
       </div>
     </div>
   `;
+}
+
+function stripPort(value) {
+  if (!value) return "-";
+  const str = String(value);
+  const idx = str.lastIndexOf(":");
+  if (idx > 0) return str.slice(0, idx);
+  return str;
 }
 
 function buildReadableSnapshot(snapshot) {
