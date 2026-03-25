@@ -1,3 +1,4 @@
+import platform
 from statistics import mean
 
 from scapy.all import AsyncSniffer, IP, TCP, get_if_list
@@ -46,6 +47,12 @@ class SnifferMixin:
             return True
         except Exception as e:
             print(f"[agent] failed to start sniffer on iface={self.iface}: {e}")
+            print("[agent] sniffer startup diagnostics: AsyncSniffer requires a working libpcap/Npcap runtime.")
+            if platform.system() == "Windows":
+                print(
+                    "[agent] windows hint: verify Npcap is installed, the Npcap driver service is running, "
+                    "and the process has packet capture permissions."
+                )
             self.sniffer = None
             return False
 
