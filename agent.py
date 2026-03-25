@@ -5,6 +5,9 @@ REQUIRED_PACKAGES = ["requests", "scapy"]
 
 
 def ensure_dependencies():
+    if getattr(sys, "frozen", False):
+        return
+
     for pkg in REQUIRED_PACKAGES:
         try:
             __import__(pkg)
@@ -13,10 +16,11 @@ def ensure_dependencies():
             subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
 
 
-ensure_dependencies()
-
-from agent.main import main
+def run():
+    from agent.main import main
+    main()
 
 
 if __name__ == "__main__":
-    main()
+    ensure_dependencies()
+    run()

@@ -22,6 +22,9 @@ LOCAL_BUNDLED_CONFIG = get_executable_dir() / "agent-config.json"
 
 
 def load_agent_config():
+    # Packaged build priority:
+    # 1) agent-config.json next to the executable (intended primary source)
+    # 2) installed/user config under ~/.ot_lab_agent/agent_config.json
     candidates = [
         LOCAL_BUNDLED_CONFIG,
         INSTALLED_CONFIG_FILE,
