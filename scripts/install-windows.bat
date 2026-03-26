@@ -1,0 +1,82 @@
+@echo off
+REM Windows Installation Script for OT Lab Agent
+REM This script removes Windows Defender SmartScreen warning and sets permissions
+
+setlocal enabledelayedexpansion
+
+set AGENT_NAME=otlab-agent-windows-amd64.exe
+set DOWNLOADS_DIR=%USERPROFILE%\Downloads
+set AGENT_PATH=%DOWNLOADS_DIR%\%AGENT_NAME%
+
+cls
+echo ==================================================
+echo   OT Lab Agent - Windows Installation
+echo ==================================================
+echo.
+
+REM Check if agent exists
+if not exist "%AGENT_PATH%" (
+    echo Error: Agent not found at %AGENT_PATH%
+    echo.
+    echo Please download the agent first from the OT Lab dashboard:
+    echo   https://your-ot-lab-site.com/downloads
+    pause
+    exit /b 1
+)
+
+echo + Found agent at: %AGENT_PATH%
+echo.
+
+REM Step 1: Remove Zone.Identifier (SmartScreen warning)
+echo 1/4 Step 1: Removing Windows SmartScreen flag...
+powershell.exe -NoProfile -Command "Remove-Item -Path '%AGENT_PATH%:Zone.Identifier' -Force -ErrorAction SilentlyContinue"
+if %ERRORLEVEL% equ 0 (
+    echo    + SmartScreen flag removed
+) else (
+    echo    ! Could not remove flag (may not exist or require admin)
+)
+echo.
+
+REM Step 2: Set file attributes
+echo 1/4 Step 2: Setting file attributes...
+attrib -H "%AGENT_PATH%"
+echo    + Attributes set
+echo.
+
+REM Step 3: Verify execution
+echo 1/4 Step 3: Verifying installation...
+if exist "%AGENT_PATH%" (
+    echo    + Agent is ready to use
+) else (
+    echo    Error: Agent file not found
+    pause
+    exit /b 1
+)
+echo.
+
+REM Step 4: Check Npcap
+echo 1/4 Step 4: Checking Npcap (packet capture driver)...
+reg query "HKLM\SYSTEM\CurrentControlSet\Services\npcap" >nul 2>&1
+if %ERRORLEVEL% equ 0 (
+    echo    + Npcap is installed
+) else (
+    echo    ! Npcap not found
+    echo    ! The agent requires Npcap for packet capture
+    echo    ! Download from: https://nmap.org/npcap/
+)
+echo.
+
+echo ==================================================
+echo   Installation Complete! 
+echo ==================================================
+echo.
+echo To run the agent, double-click:
+echo   %AGENT_PATH%
+echo.
+echo Or open Command Prompt and type:
+echo   "%AGENT_PATH%"
+echo.
+echo For more information, visit:
+echo   https://your-ot-lab-site.com
+echo.
+pause
