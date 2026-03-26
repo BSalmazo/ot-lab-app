@@ -48,19 +48,11 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           pyinstaller agent-bundle.spec --distpath ./dist --workpath ./build
-          # Copy agent_config.json to dist folder
-          if exist agent-config.json (
-            copy agent-config.json dist\
-          )
 
       - name: Build with PyInstaller (macOS/Linux)
         if: runner.os != 'Windows'
         run: |
           pyinstaller agent-bundle.spec --distpath ./dist --workpath ./build
-          # Copy agent_config.json to dist folder
-          if [ -f agent-config.json ]; then
-            cp agent-config.json dist/
-          fi
 
       - name: Make binary executable (macOS/Linux)
         if: runner.os != 'Windows'
