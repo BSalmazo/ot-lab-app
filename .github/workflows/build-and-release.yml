@@ -47,7 +47,7 @@ jobs:
       - name: Build with PyInstaller (Windows)
         if: runner.os == 'Windows'
         run: |
-          pyinstaller agent-bundle.spec --distpath ./dist --buildpath ./build --specpath .
+          pyinstaller agent-bundle.spec --distpath ./dist --workpath ./build
           # Copy agent_config.json to dist folder
           if exist agent-config.json (
             copy agent-config.json dist\
@@ -56,7 +56,7 @@ jobs:
       - name: Build with PyInstaller (macOS/Linux)
         if: runner.os != 'Windows'
         run: |
-          pyinstaller agent-bundle.spec --distpath ./dist --buildpath ./build --specpath .
+          pyinstaller agent-bundle.spec --distpath ./dist --workpath ./build
           # Copy agent_config.json to dist folder
           if [ -f agent-config.json ]; then
             cp agent-config.json dist/
