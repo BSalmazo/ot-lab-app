@@ -5,8 +5,8 @@ REM This script removes Windows Defender SmartScreen warning and sets permission
 setlocal enabledelayedexpansion
 
 set AGENT_NAME=otlab-agent-windows-amd64.exe
-set DOWNLOADS_DIR=%USERPROFILE%\Downloads
-set AGENT_PATH=%DOWNLOADS_DIR%\%AGENT_NAME%
+set SCRIPT_DIR=%~dp0
+set AGENT_PATH=%SCRIPT_DIR%%AGENT_NAME%
 
 cls
 echo ==================================================

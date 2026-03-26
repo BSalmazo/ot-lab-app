@@ -5,8 +5,8 @@
 set -e
 
 AGENT_NAME="otlab-agent-linux-amd64"
-DOWNLOADS_DIR="$HOME/Downloads"
-AGENT_PATH="$DOWNLOADS_DIR/$AGENT_NAME"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AGENT_PATH="$SCRIPT_DIR/$AGENT_NAME"
 
 echo "=================================================="
 echo "  OT Lab Agent - Linux Installation"
