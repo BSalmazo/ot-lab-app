@@ -422,14 +422,22 @@ async function refreshStatus() {
   setDisabled("openServerConfigBtn", !agentConnected);
   setDisabled("openClientConfigBtn", !agentConnected);
 
-  if (byId("serverHost")) byId("serverHost").value = data.server?.host || "127.0.0.1";
-  if (byId("serverPort")) byId("serverPort").value = data.server?.port || 5020;
+  // Só atualizar inputs se NÃO estão em um modal aberto
+  const serverModal = byId("serverModal");
+  const clientModal = byId("clientModal");
+  
+  if (!serverModal || serverModal.classList.contains("hidden")) {
+    if (byId("serverHost")) byId("serverHost").value = data.server?.host || "127.0.0.1";
+    if (byId("serverPort")) byId("serverPort").value = data.server?.port || 5020;
+  }
 
-  if (byId("clientHost")) byId("clientHost").value = data.client?.host || "127.0.0.1";
-  if (byId("clientPort")) byId("clientPort").value = data.client?.port || 5020;
-  if (byId("pollInterval")) byId("pollInterval").value = data.client?.poll_interval ?? 1.0;
-  if (byId("pollStart")) byId("pollStart").value = data.client?.poll_start ?? 0;
-  if (byId("pollQuantity")) byId("pollQuantity").value = data.client?.poll_quantity ?? 4;
+  if (!clientModal || clientModal.classList.contains("hidden")) {
+    if (byId("clientHost")) byId("clientHost").value = data.client?.host || "127.0.0.1";
+    if (byId("clientPort")) byId("clientPort").value = data.client?.port || 5020;
+    if (byId("pollInterval")) byId("pollInterval").value = data.client?.poll_interval ?? 1.0;
+    if (byId("pollStart")) byId("pollStart").value = data.client?.poll_start ?? 0;
+    if (byId("pollQuantity")) byId("pollQuantity").value = data.client?.poll_quantity ?? 4;
+  }
 
   setText("monitorSnapshot", buildReadableSnapshot(data.monitor?.snapshot || {}));
 }

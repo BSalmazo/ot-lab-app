@@ -546,11 +546,20 @@ async def set_agent_config(request: Request):
     if mode not in ["LEARNING", "MONITORING"]:
         return JSONResponse({"ok": False, "error": "Invalid mode"}, status_code=400)
 
+    # Detectar mudança de interface
+    old_iface = state["agent_config"]["iface"]
+    iface_changed = (old_iface != iface)
+
     state["agent_config"]["iface"] = iface
     state["agent_config"]["mode"] = mode
     state["agent_config"]["updated_at"] = time.time()
 
-    push_log_for_session(session_id, f"Monitor configuration updated (interface={iface}, mode={mode})")
+    # Se interface mudou, resetar o sumário de detecção
+    if iface_changed:
+        state["modbus_summary"] = default_modbus_summary()
+        push_log_for_session(session_id, f"Detection interface changed from {old_iface} to {iface} - resetting detection")
+    else:
+        push_log_for_session(session_id, f"Monitor configuration updated (interface={iface}, mode={mode})")
 
     response = JSONResponse({
         "ok": True,
