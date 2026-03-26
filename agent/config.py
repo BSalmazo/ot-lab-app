@@ -1,6 +1,8 @@
 import argparse
 import json
 import sys
+import subprocess
+import platform
 from pathlib import Path
 
 DEFAULT_SERVER_URL = "https://web-production-56599.up.railway.app/"
@@ -56,3 +58,145 @@ def build_arg_parser(bundled_config):
         choices=["LEARNING", "MONITORING"],
     )
     return parser
+
+
+def is_npcap_installed():
+    """
+    Verifica se NPCAP (Windows) ou libpcap (macOS/Linux) está instalado.
+    Retorna True se instalado, False caso contrário.
+    """
+    os_name = platform.system()
+    
+    try:
+        # Tenta importar scapy e verificar se consegue listar interfaces
+        from scapy.all import get_if_list
+        interfaces = get_if_list()
+        
+        # Se conseguir listar interfaces, o driver está funcionando
+        if interfaces:
+            print(f"[agent] ✓ NPCAP/libpcap detectado com sucesso")
+            print(f"[agent] Interfaces encontradas: {len(interfaces)}")
+            return True
+        else:
+            print(f"[agent] ⚠ Nenhuma interface detectada - possível problema com NPCAP/libpcap")
+            return False
+            
+    except ImportError as e:
+        print(f"[agent] ✗ Scapy não está instalado: {e}")
+        return False
+    except Exception as e:
+        print(f"[agent] ✗ Erro ao verificar NPCAP/libpcap: {e}")
+        return False
+
+
+def ensure_npcap_installed():
+    """
+    Garante que NPCAP (Windows) ou libpcap (macOS/Linux) está instalado.
+    Se não estiver, tenta instalar automaticamente e sai se falhar.
+    """
+    os_name = platform.system()
+    
+    print(f"[agent] Verificando NPCAP/libpcap para {os_name}...")
+    
+    if is_npcap_installed():
+        return True
+    
+    print(f"[agent] ✗ NPCAP/libpcap NÃO está instalado!")
+    
+    if os_name == "Windows":
+        print(f"""
+[agent] === AÇÃO REQUERIDA NO WINDOWS ===
+[agent] 
+[agent] O Npcap é OBRIGATÓRIO para capturar pacotes de rede.
+[agent] 
+[agent] Por favor, instale o Npcap:
+[agent] 1. Baixe em: https://nmap.org/npcap/
+[agent] 2. Execute o instalador (execute como administrador)
+[agent] 3. Reinicie o bash/terminal
+[agent] 4. Execute o agente novamente
+[agent] 
+[agent] OU use Chocolatey (se instalado):
+[agent]    choco install npcap
+[agent] 
+[agent] ===================================
+""")
+        sys.exit(1)
+        
+    elif os_name == "Darwin":  # macOS
+        print(f"""
+[agent] === AÇÃO REQUERIDA NO MACOS ===
+[agent] 
+[agent] O libpcap é OBRIGATÓRIO para capturar pacotes de rede.
+[agent] 
+[agent] Tentando instalar via Homebrew...
+""")
+        try:
+            result = subprocess.run(["brew", "install", "libpcap"], capture_output=True, text=True, timeout=60)
+            if result.returncode == 0 or "already installed" in result.stdout:
+                print(f"[agent] ✓ libpcap instalado/atualizado com sucesso")
+                if is_npcap_installed():
+                    return True
+            print(f"[agent] ✗ Falha ao instalar libpcap via Homebrew")
+        except Exception as e:
+            print(f"[agent] ✗ Erro ao chamar Homebrew: {e}")
+            
+        print(f"""
+[agent] 
+[agent] Por favor, instale libpcap manualmente:
+[agent]   brew install libpcap
+[agent] 
+[agent] ===================================
+""")
+        sys.exit(1)
+        
+    elif os_name == "Linux":
+        print(f"""
+[agent] === AÇÃO REQUERIDA NO LINUX ===
+[agent] 
+[agent] O libpcap é OBRIGATÓRIO para capturar pacotes de rede.
+[agent] 
+[agent] Detectando gerenciador de pacotes...
+""")
+        
+        # Tenta instalar com apt
+        if subprocess.run(["which", "apt"], capture_output=True).returncode == 0:
+            try:
+                print(f"[agent] Tentando instalar via apt...")
+                result = subprocess.run(["sudo", "apt", "install", "-y", "libpcap-dev"], 
+                                      capture_output=True, text=True, timeout=120)
+                if result.returncode == 0:
+                    print(f"[agent] ✓ libpcap-dev instalado com sucesso")
+                    if is_npcap_installed():
+                        return True
+            except Exception as e:
+                print(f"[agent] ✗ Erro ao instalar via apt: {e}")
+        
+        # Tenta instalar com yum
+        elif subprocess.run(["which", "yum"], capture_output=True).returncode == 0:
+            try:
+                print(f"[agent] Tentando instalar via yum...")
+                result = subprocess.run(["sudo", "yum", "install", "-y", "libpcap-devel"], 
+                                      capture_output=True, text=True, timeout=120)
+                if result.returncode == 0:
+                    print(f"[agent] ✓ libpcap-devel instalado com sucesso")
+                    if is_npcap_installed():
+                        return True
+            except Exception as e:
+                print(f"[agent] ✗ Erro ao instalar via yum: {e}")
+        
+        print(f"""
+[agent] 
+[agent] Por favor, instale libpcap manualmente:
+[agent]   # Debian/Ubuntu:
+[agent]   sudo apt install libpcap-dev
+[agent]   
+[agent]   # RHEL/CentOS/Fedora:
+[agent]   sudo yum install libpcap-devel
+[agent] 
+[agent] ===================================
+""")
+        sys.exit(1)
+    
+    else:
+        print(f"[agent] ✗ SO não suportado: {os_name}")
+        sys.exit(1)
