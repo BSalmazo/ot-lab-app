@@ -108,6 +108,16 @@ jobs:
         with:
           path: artifacts
 
+      - name: Organize artifacts for release
+        run: |
+          mkdir -p release-assets
+          # Copy and rename artifacts to a flat directory
+          cp artifacts/otlab-agent-windows.exe/otlab_agent.exe release-assets/otlab-agent-windows-amd64.exe
+          cp artifacts/otlab-agent-macos/otlab_agent release-assets/otlab-agent-macos-amd64
+          cp artifacts/otlab-agent-linux/otlab_agent release-assets/otlab-agent-linux-amd64
+          chmod +x release-assets/otlab-agent-*
+          ls -la release-assets/
+
       - name: Get current date
         id: date
         run: echo "date=$(date +'%Y-%m-%d-%H%M%S')" >> $GITHUB_OUTPUT
@@ -117,7 +127,7 @@ jobs:
         with:
           tag_name: dev-latest
           name: Dev Latest Build (${{ steps.date.outputs.date }})
-          files: artifacts/**/*
+          files: release-assets/*
           draft: false
           prerelease: true
           fail_on_unmatched_files: false
