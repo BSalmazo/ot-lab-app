@@ -515,6 +515,26 @@ button:disabled {
   gap: 10px;
 }
 
+.download-session-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.download-session-row code {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: var(--panel-3);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
 .download-btn.muted {
   background: #475569;
 }
@@ -582,7 +602,7 @@ button:disabled {
   border: 1px solid rgba(59, 130, 246, 0.18);
   min-height: 0;
   height: auto;
-  overflow: visible;
+  overflow: auto;
 }
 
 .event-summary.empty {
