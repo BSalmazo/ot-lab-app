@@ -453,6 +453,120 @@ def index(request: Request):
     return response
 
 
+@app.get("/downloads", response_class=HTMLResponse)
+def downloads_page(request: Request):
+    """Serve the downloads page with installation instructions"""
+    session_id, _state = get_session_state_from_request(request)
+    response = templates.TemplateResponse(
+        request=request,
+        name="downloads.html",
+        context={}
+    )
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.get("/downloads/agent/{platform}")
+def download_agent_file(platform: str, request: Request):
+    """
+    Downloads the agent binary directly (without zip/config).
+    Platform: "windows", "macos", "linux"
+    """
+    session_id, state = get_session_state_from_request(request)
+    
+    platform_map = {
+        "windows": ("downloads/agent/windows", "otlab-agent-windows-amd64.exe"),
+        "macos": ("downloads/agent/mac", "otlab-agent-macos-amd64"),
+        "linux": ("downloads/agent/linux", "otlab-agent-linux-amd64"),
+    }
+    
+    if platform not in platform_map:
+        return JSONResponse({"error": "Invalid platform"}, status_code=400)
+    
+    folder, filename = platform_map[platform]
+    agent_path = BASE_DIR / folder.split("/")[0] / folder.split("/")[1] / folder.split("/")[2]
+    
+    # Handle older directory structure
+    if platform == "windows":
+        agent_path = BASE_DIR / "downloads" / "agent" / "windows" / "otlab-agent.exe"
+    elif platform == "macos":
+        agent_path = BASE_DIR / "downloads" / "agent" / "mac" / "otlab-agent-mac"
+    elif platform == "linux":
+        agent_path = BASE_DIR / "downloads" / "agent" / "linux" / "otlab-agent-linux"
+    
+    if not agent_path.exists():
+        return JSONResponse({"error": "Agent file not found"}, status_code=404)
+    
+    with open(agent_path, "rb") as f:
+        content = f.read()
+    
+    response = Response(
+        content=content,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.get("/downloads/script/{platform}")
+def download_install_script(platform: str, request: Request):
+    """
+    Downloads the installation script for the platform.
+    Platform: "windows", "macos", "linux"
+    """
+    session_id, state = get_session_state_from_request(request)
+    
+    script_map = {
+        "windows": ("scripts/install-windows.bat", "install-windows.bat"),
+        "macos": ("scripts/install-macos.sh", "install-macos.sh"),
+        "linux": ("scripts/install-linux.sh", "install-linux.sh"),
+    }
+    
+    if platform not in script_map:
+        return JSONResponse({"error": "Invalid platform"}, status_code=400)
+    
+    script_path_rel, filename = script_map[platform]
+    script_path = BASE_DIR / script_path_rel
+    
+    if not script_path.exists():
+        return JSONResponse({"error": "Script file not found"}, status_code=404)
+    
+    with open(script_path, "r") as f:
+        content = f.read()
+    
+    media_type = "text/x-shellscript" if platform != "windows" else "text/plain"
+    response = Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.get("/downloads/docs")
+def download_installation_guide(request: Request):
+    """Download the complete installation guide (INSTALLATION.md)"""
+    session_id, state = get_session_state_from_request(request)
+    
+    guide_path = BASE_DIR / "scripts" / "INSTALLATION.md"
+    
+    if not guide_path.exists():
+        return JSONResponse({"error": "Documentation file not found"}, status_code=404)
+    
+    with open(guide_path, "r") as f:
+        content = f.read()
+    
+    response = Response(
+        content=content,
+        media_type="text/markdown",
+        headers={"Content-Disposition": "attachment; filename=INSTALLATION.md"}
+    )
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
 @app.get("/api/status")
 def api_status(request: Request):
     session_id, state = get_session_state_from_request(request)
