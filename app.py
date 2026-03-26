@@ -63,6 +63,38 @@ def get_github_releases():
         
         releases = response.json()
         
+        def classify_platform(asset_name: str):
+            lowered = asset_name.lower()
+            if "windows" in lowered or lowered.endswith(".exe"):
+                return "windows"
+            if "macos" in lowered or "mac" in lowered:
+                return "macos"
+            if "linux" in lowered:
+                return "linux"
+            return None
+
+        def asset_score(asset_name: str):
+            """Prefer full package downloads over raw scripts."""
+            lowered = asset_name.lower()
+
+            # Best option: packaged zip with agent bundle.
+            if lowered.endswith(".zip") and "agent" in lowered:
+                return 300
+            if lowered.endswith(".zip"):
+                return 250
+
+            # Native executable can still work as fallback.
+            if lowered.endswith(".exe"):
+                return 180
+            if lowered.endswith(".app") or lowered.endswith(".dmg"):
+                return 170
+
+            # Scripts are last-resort and should not be primary links.
+            if lowered.endswith(".sh") or lowered.endswith(".bat") or "install" in lowered:
+                return 10
+
+            return 100
+
         # Process releases to extract download links
         processed_releases = []
         for release in releases:
@@ -70,27 +102,24 @@ def get_github_releases():
                 continue  # Skip most prerelease builds, but keep dev-latest
             
             assets = {}
+            best_score_by_platform = {}
             for asset in release.get("assets", []):
                 asset_name = asset["name"]
-                
-                if "windows" in asset_name.lower() or asset_name.endswith(".exe"):
-                    assets["windows"] = {
-                        "name": asset_name,
-                        "url": asset["browser_download_url"],
-                        "size": asset["size"],
-                    }
-                elif "macos" in asset_name.lower() or "mac" in asset_name.lower():
-                    assets["macos"] = {
-                        "name": asset_name,
-                        "url": asset["browser_download_url"],
-                        "size": asset["size"],
-                    }
-                elif "linux" in asset_name.lower():
-                    assets["linux"] = {
-                        "name": asset_name,
-                        "url": asset["browser_download_url"],
-                        "size": asset["size"],
-                    }
+
+                platform = classify_platform(asset_name)
+                if not platform:
+                    continue
+
+                score = asset_score(asset_name)
+                if score < best_score_by_platform.get(platform, -1):
+                    continue
+
+                best_score_by_platform[platform] = score
+                assets[platform] = {
+                    "name": asset_name,
+                    "url": asset["browser_download_url"],
+                    "size": asset["size"],
+                }
             
             if assets:  # Only include releases that have assets
                 processed_releases.append({
