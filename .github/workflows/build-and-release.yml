@@ -82,10 +82,32 @@ jobs:
         with:
           path: artifacts
 
+      - name: Organize artifacts for release
+        run: |
+          mkdir -p release-assets
+          
+          # Copy and rename agent binaries to a flat directory
+          cp artifacts/otlab-agent-windows.exe/otlab_agent.exe release-assets/otlab-agent-windows-amd64.exe
+          cp artifacts/otlab-agent-macos/otlab_agent release-assets/otlab-agent-macos-amd64
+          cp artifacts/otlab-agent-linux/otlab_agent release-assets/otlab-agent-linux-amd64
+          chmod +x release-assets/otlab-agent-*
+          
+          # Copy installation scripts
+          cp scripts/install-macos.sh release-assets/
+          cp scripts/install-linux.sh release-assets/
+          cp scripts/install-windows.bat release-assets/
+          chmod +x release-assets/install-*.sh
+          
+          # Copy documentation
+          cp scripts/INSTALLATION.md release-assets/
+          
+          echo "📦 Release assets organized:"
+          ls -lah release-assets/
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: artifacts/**/*
+          files: release-assets/*
           draft: false
           prerelease: false
         env:
@@ -111,12 +133,24 @@ jobs:
       - name: Organize artifacts for release
         run: |
           mkdir -p release-assets
-          # Copy and rename artifacts to a flat directory
+          
+          # Copy and rename agent binaries to a flat directory
           cp artifacts/otlab-agent-windows.exe/otlab_agent.exe release-assets/otlab-agent-windows-amd64.exe
           cp artifacts/otlab-agent-macos/otlab_agent release-assets/otlab-agent-macos-amd64
           cp artifacts/otlab-agent-linux/otlab_agent release-assets/otlab-agent-linux-amd64
           chmod +x release-assets/otlab-agent-*
-          ls -la release-assets/
+          
+          # Copy installation scripts
+          cp scripts/install-macos.sh release-assets/
+          cp scripts/install-linux.sh release-assets/
+          cp scripts/install-windows.bat release-assets/
+          chmod +x release-assets/install-*.sh
+          
+          # Copy documentation
+          cp scripts/INSTALLATION.md release-assets/
+          
+          echo "📦 Release assets organized:"
+          ls -lah release-assets/
 
       - name: Get current date
         id: date
