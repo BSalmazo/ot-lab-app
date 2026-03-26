@@ -745,6 +745,91 @@ async function openAgentDownloadModal() {
   } catch (_err) {
     setText("agentSessionIdValue", "unavailable");
   }
+
+  // Load and render releases
+  await loadAndRenderReleases();
+}
+
+async function loadAndRenderReleases() {
+  const container = document.getElementById("releasesContainer");
+  if (!container) return;
+
+  container.innerHTML = '<div class="loading-spinner">Loading releases from GitHub...</div>';
+
+  try {
+    const response = await apiGet("/api/releases/agent");
+
+    if (!response.ok && response.releases && response.releases.length === 0) {
+      // No GitHub releases, show local fallback
+      container.innerHTML = '<div class="info-message">GitHub releases not available. Using local copies.</div>';
+      document.querySelector(".download-fallback")?.classList.remove("hidden");
+      return;
+    }
+
+    // Render releases
+    const releases = response.releases || [];
+    if (releases.length === 0) {
+      container.innerHTML = '<div class="error-message">No releases available.</div>';
+      document.querySelector(".download-fallback")?.classList.remove("hidden");
+      return;
+    }
+
+    let html = "";
+    for (const release of releases) {
+      const releaseType = release.type === "development" 
+        ? '<span class="badge-dev">DEV</span>' 
+        : '<span class="badge-stable">STABLE</span>';
+      
+      const publishDate = new Date(release.published_at).toLocaleDateString();
+      
+      html += `
+        <div class="release-card">
+          <div class="release-header">
+            <h4>${release.tag} ${releaseType}</h4>
+            <div class="release-date">${publishDate}</div>
+          </div>
+          <div class="release-downloads">
+      `;
+
+      const assets = release.assets || {};
+      
+      if (assets.windows) {
+        html += `<a class="download-link" href="${assets.windows.url}" download>
+          <span class="os-icon">🪟</span> Windows (${formatFileSize(assets.windows.size)})
+        </a>`;
+      }
+      if (assets.macos) {
+        html += `<a class="download-link" href="${assets.macos.url}" download>
+          <span class="os-icon">🍎</span> macOS (${formatFileSize(assets.macos.size)})
+        </a>`;
+      }
+      if (assets.linux) {
+        html += `<a class="download-link" href="${assets.linux.url}" download>
+          <span class="os-icon">🐧</span> Linux (${formatFileSize(assets.linux.size)})
+        </a>`;
+      }
+      
+      html += `
+          </div>
+        </div>
+      `;
+    }
+
+    container.innerHTML = html;
+    document.querySelector(".download-fallback")?.classList.add("hidden");
+
+  } catch (err) {
+    console.error("Error loading releases:", err);
+    container.innerHTML = '<div class="error-message">Failed to load releases from GitHub.</div>';
+    document.querySelector(".download-fallback")?.classList.remove("hidden");
+  }
+}
+
+function formatFileSize(bytes) {
+  if (!bytes) return "unknown";
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
 }
 
 function disableLegacySections() {

@@ -3,6 +3,7 @@ import json
 import time
 import uuid
 import zipfile
+import requests
 
 from collections import deque
 from pathlib import Path
@@ -32,8 +33,86 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 app.mount("/downloads", StaticFiles(directory=str(BASE_DIR / "downloads")), name="downloads")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
+# GitHub releases cache
+GITHUB_REPO = "BSalmazo/ot-lab-app"
+GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
+releases_cache = {"data": None, "timestamp": 0}
+RELEASES_CACHE_TTL = 3600  # 1 hour
+
 lock = Lock()
 agents_by_session = {}
+
+
+def get_github_releases():
+    """
+    Fetch agent releases from GitHub, with caching.
+    Returns a list of releases with download information.
+    """
+    global releases_cache
+    
+    current_time = time.time()
+    
+    # Return cached data if still valid
+    if releases_cache["data"] is not None and (current_time - releases_cache["timestamp"]) < RELEASES_CACHE_TTL:
+        return releases_cache["data"]
+    
+    try:
+        # Try to fetch from GitHub API
+        response = requests.get(GITHUB_API_URL, timeout=5)
+        response.raise_for_status()
+        
+        releases = response.json()
+        
+        # Process releases to extract download links
+        processed_releases = []
+        for release in releases:
+            if release.get("prerelease") and release["tag_name"] != "dev-latest":
+                continue  # Skip most prerelease builds, but keep dev-latest
+            
+            assets = {}
+            for asset in release.get("assets", []):
+                asset_name = asset["name"]
+                
+                if "windows" in asset_name.lower() or asset_name.endswith(".exe"):
+                    assets["windows"] = {
+                        "name": asset_name,
+                        "url": asset["browser_download_url"],
+                        "size": asset["size"],
+                    }
+                elif "macos" in asset_name.lower() or "mac" in asset_name.lower():
+                    assets["macos"] = {
+                        "name": asset_name,
+                        "url": asset["browser_download_url"],
+                        "size": asset["size"],
+                    }
+                elif "linux" in asset_name.lower():
+                    assets["linux"] = {
+                        "name": asset_name,
+                        "url": asset["browser_download_url"],
+                        "size": asset["size"],
+                    }
+            
+            if assets:  # Only include releases that have assets
+                processed_releases.append({
+                    "tag": release["tag_name"],
+                    "name": release["name"],
+                    "published_at": release["published_at"],
+                    "prerelease": release["prerelease"],
+                    "assets": assets,
+                })
+        
+        # Cache the results
+        releases_cache["data"] = processed_releases
+        releases_cache["timestamp"] = current_time
+        
+        return processed_releases
+        
+    except Exception as e:
+        print(f"[app] Error fetching releases from GitHub: {e}")
+        # Return last cached data even if expired
+        if releases_cache["data"] is not None:
+            return releases_cache["data"]
+        return []
 
 
 def default_agent_snapshot():
@@ -515,6 +594,48 @@ def download_agent_config(request: Request):
         media_type="application/json",
         headers={"Content-Disposition": "attachment; filename=agent-config.json"}
     )
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.get("/api/releases/agent")
+def get_agent_releases(request: Request):
+    """
+    Get available agent releases from GitHub.
+    Returns the latest release and development builds.
+    """
+    session_id, state = get_session_state_from_request(request)
+    
+    releases = get_github_releases()
+    
+    if not releases:
+        return JSONResponse({
+            "ok": False,
+            "error": "No releases available",
+            "releases": []
+        }, status_code=503)
+    
+    # Find the latest stable release and dev-latest
+    latest_stable = None
+    dev_latest = None
+    
+    for release in releases:
+        if release["tag"] == "dev-latest":
+            dev_latest = release
+        elif not release["prerelease"] and latest_stable is None:
+            latest_stable = release
+    
+    # Prepare response
+    available_releases = []
+    if latest_stable:
+        available_releases.append({"type": "stable", **latest_stable})
+    if dev_latest:
+        available_releases.append({"type": "development", **dev_latest})
+    
+    response = JSONResponse({
+        "ok": True,
+        "releases": available_releases
+    })
     set_session_cookie_if_needed(request, response, session_id)
     return response
 

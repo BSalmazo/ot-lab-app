@@ -729,6 +729,133 @@ button:disabled {
   color: var(--ok);
 }
 
+/* RELEASES AND DOWNLOADS */
+
+.releases-container {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 12px 0;
+}
+
+.release-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--panel-2);
+}
+
+.release-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  gap: 10px;
+}
+
+.release-header h4 {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.release-date {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.badge-stable,
+.badge-dev {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.badge-stable {
+  background: rgba(34, 197, 94, 0.2);
+  color: var(--ok);
+}
+
+.badge-dev {
+  background: rgba(59, 130, 246, 0.2);
+  color: var(--blue);
+}
+
+.release-downloads {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.download-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  color: var(--blue);
+  text-decoration: none;
+  font-size: 13px;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.download-link:hover {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: var(--blue);
+  transform: translateX(2px);
+}
+
+.os-icon {
+  font-size: 16px;
+}
+
+.loading-spinner,
+.info-message,
+.error-message {
+  padding: 16px;
+  border-radius: 6px;
+  text-align: center;
+  font-size: 13px;
+}
+
+.loading-spinner {
+  color: var(--muted);
+  background: rgba(148, 163, 184, 0.05);
+}
+
+.info-message {
+  color: var(--blue);
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+.error-message {
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.download-fallback {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.download-fallback.hidden {
+  display: none;
+}
+
 @media (max-width: 900px) {
   .event-title-row {
     flex-direction: column;
