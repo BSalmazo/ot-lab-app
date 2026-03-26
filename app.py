@@ -569,6 +569,50 @@ async def set_agent_config(request: Request):
     return response
 
 
+@app.post("/api/agent/server/configure")
+async def configure_server(request: Request):
+    session_id, state = get_session_state_from_request(request)
+    data = await request.json()
+
+    host = data.get("host", state["remote_server"]["host"])
+    port = int(data.get("port", state["remote_server"]["port"]))
+
+    state["remote_server"]["host"] = host
+    state["remote_server"]["port"] = port
+    state["remote_server"]["updated_at"] = time.time()
+
+    push_log_for_session(session_id, f"Server configuration updated (host={host}, port={port})")
+
+    response = JSONResponse({"ok": True, "server": state["remote_server"]})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.post("/api/agent/client/configure")
+async def configure_client(request: Request):
+    session_id, state = get_session_state_from_request(request)
+    data = await request.json()
+
+    host = data.get("host", state["remote_client"]["host"])
+    port = int(data.get("port", state["remote_client"]["port"]))
+    poll_interval = float(data.get("poll_interval", state["remote_client"]["poll_interval"]))
+    poll_start = int(data.get("poll_start", state["remote_client"]["poll_start"]))
+    poll_quantity = int(data.get("poll_quantity", state["remote_client"]["poll_quantity"]))
+
+    state["remote_client"]["host"] = host
+    state["remote_client"]["port"] = port
+    state["remote_client"]["poll_interval"] = poll_interval
+    state["remote_client"]["poll_start"] = poll_start
+    state["remote_client"]["poll_quantity"] = poll_quantity
+    state["remote_client"]["updated_at"] = time.time()
+
+    push_log_for_session(session_id, f"Client configuration updated (host={host}, port={port}, poll={poll_interval}s)")
+
+    response = JSONResponse({"ok": True, "client": state["remote_client"]})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
 @app.post("/api/agent/server/start")
 async def agent_server_start(request: Request):
     session_id, state = get_session_state_from_request(request)
