@@ -6,21 +6,27 @@ Bundles the agent with all dependencies into a standalone executable
 """
 
 import sys
+import os
 from pathlib import Path
 
 block_cipher = None
 
-# Determine the root directory (parent of ot_lab_app)
-root_dir = Path(__file__).parent
+# Determine the root directory - use current working directory
+# PyInstaller runs from the project root directory
+root_dir = Path(os.getcwd())
 agent_dir = root_dir / "agent"
+
+# Data files to include
+datas = []
+config_file = root_dir / "agent-config.json"
+if config_file.exists():
+    datas.append((str(config_file), "."))
 
 a = Analysis(
     [str(agent_dir / "main.py")],
     pathex=[str(root_dir)],
     binaries=[],
-    datas=[
-        (str(root_dir / "agent-config.json"), ".") if (root_dir / "agent-config.json").exists() else None,
-    ],
+    datas=datas,
     hiddenimports=[
         'scapy',
         'scapy.all',
@@ -40,9 +46,6 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
-
-# Remove None entries from datas
-a.datas = [x for x in a.datas if x is not None]
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
@@ -67,15 +70,3 @@ exe = EXE(
     entitlements_file=None,
 )
 
-# For macOS, create a bundle
-if sys.platform == "darwin":
-    app = BUNDLE(
-        exe,
-        name="OT Lab Agent.app",
-        icon=None,
-        bundle_identifier="com.otlab.agent",
-        info_plist={
-            "NSPrincipalClass": "NSApplication",
-            "NSHighResolutionCapable": "True",
-        },
-    )
