@@ -141,7 +141,7 @@ body {
 }
 
 .events-card {
-  min-height: 430px;
+  min-height: 0;
 }
 
 .alerts-card {
@@ -579,9 +579,9 @@ button:disabled {
   border-radius: 18px;
   background: linear-gradient(180deg, rgba(2, 6, 23, 0.92) 0%, rgba(1, 10, 32, 0.96) 100%);
   border: 1px solid rgba(59, 130, 246, 0.18);
-  min-height: 270px;
-  height: 270px;
-  overflow: hidden;
+  min-height: 0;
+  height: auto;
+  overflow: visible;
 }
 
 .event-summary.empty {
@@ -641,7 +641,7 @@ button:disabled {
 
 .event-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 16px 36px;
   align-content: start;
 }
