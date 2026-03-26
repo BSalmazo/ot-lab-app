@@ -669,6 +669,43 @@ async function saveMonitorConfig() {
   }
 }
 
+async function saveServerConfig() {
+  const host = byId("serverHost")?.value || "127.0.0.1";
+  const port = byId("serverPort")?.value || "5020";
+
+  const result = await apiPost("/api/agent/server/configure", { host, port });
+
+  if (result.ok) {
+    closeModal("serverModal");
+    await refreshAll();
+  } else {
+    alert(`Failed to save server config: ${result.error || "unknown error"}`);
+  }
+}
+
+async function saveClientConfig() {
+  const host = byId("clientHost")?.value || "127.0.0.1";
+  const port = byId("clientPort")?.value || "5020";
+  const poll_interval = byId("pollInterval")?.value || "1.0";
+  const poll_start = byId("pollStart")?.value || "0";
+  const poll_quantity = byId("pollQuantity")?.value || "4";
+
+  const result = await apiPost("/api/agent/client/configure", {
+    host,
+    port,
+    poll_interval,
+    poll_start,
+    poll_quantity,
+  });
+
+  if (result.ok) {
+    closeModal("clientModal");
+    await refreshAll();
+  } else {
+    alert(`Failed to save client config: ${result.error || "unknown error"}`);
+  }
+}
+
 async function openMonitorConfig() {
   const status = await apiGet("/api/status");
 
@@ -744,6 +781,12 @@ window.addEventListener("DOMContentLoaded", () => {
   byId("openMonitorConfigBtn")?.addEventListener("click", openMonitorConfig);
   byId("saveMonitorConfigBtn")?.addEventListener("click", saveMonitorConfig);
   byId("scanIfacesBtn")?.addEventListener("click", scanInterfaces);
+
+  byId("saveServerBtn")?.addEventListener("click", saveServerConfig);
+  byId("closeServerBtn")?.addEventListener("click", () => closeModal("serverModal"));
+
+  byId("saveClientBtn")?.addEventListener("click", saveClientConfig);
+  byId("closeClientBtn")?.addEventListener("click", () => closeModal("clientModal"));
 
   byId("openServerConfigBtn")?.addEventListener("click", () => openModal("serverModal"));
   byId("openClientConfigBtn")?.addEventListener("click", () => openModal("clientModal"));
