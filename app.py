@@ -714,22 +714,16 @@ def agent_runtime_update(payload: dict = Body(...)):
     previous_server_running = state["remote_server"]["running"]
     previous_client_running = state["remote_client"]["running"]
 
+    # Only update running status from agent; configuration is managed via /api/agent/server/configure and /api/agent/client/configure
     if server_data:
         state["remote_server"].update({
             "running": bool(server_data.get("running", state["remote_server"]["running"])),
-            "host": server_data.get("host", state["remote_server"]["host"]),
-            "port": int(server_data.get("port", state["remote_server"]["port"])),
             "updated_at": time.time(),
         })
 
     if client_data:
         state["remote_client"].update({
             "running": bool(client_data.get("running", state["remote_client"]["running"])),
-            "host": client_data.get("host", state["remote_client"]["host"]),
-            "port": int(client_data.get("port", state["remote_client"]["port"])),
-            "poll_interval": float(client_data.get("poll_interval", state["remote_client"]["poll_interval"])),
-            "poll_start": int(client_data.get("poll_start", state["remote_client"]["poll_start"])),
-            "poll_quantity": int(client_data.get("poll_quantity", state["remote_client"]["poll_quantity"])),
             "updated_at": time.time(),
         })
 
