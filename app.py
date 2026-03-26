@@ -498,13 +498,8 @@ def downloads_page(request: Request):
 @app.get("/downloads/agent/{platform}")
 def download_agent_file(platform: str, request: Request):
     """
-    Downloads agent + installation script as a ZIP.
+    Downloads a simplified bundle ZIP (agent + install script + agent-config.json).
     Platform: "windows", "macos", "linux"
-    
-    Returns:
-    - Agent binary
-    - Installation script
-    - Documentation (INSTALLATION.md)
     """
     session_id, state = get_session_state_from_request(request)
     
@@ -538,7 +533,7 @@ def download_agent_file(platform: str, request: Request):
     config = platform_config[platform]
     agent_path = config["agent_path"]
     script_path = config["script_path"]
-    docs_path = BASE_DIR / "scripts" / "INSTALLATION.md"
+    runtime_config = build_agent_config(request, session_id, state)
     
     # Verify all files exist
     if not agent_path.exists():
@@ -546,70 +541,12 @@ def download_agent_file(platform: str, request: Request):
     if not script_path.exists():
         return JSONResponse({"error": "Installation script not found"}, status_code=404)
     
-    # Create ZIP with agent + script + docs
+    # Create ZIP with only the files needed for one-click install/run.
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        # Add agent binary
         zf.write(agent_path, arcname=config["agent_name"])
-        
-        # Add installation script
         zf.write(script_path, arcname=config["script_name"])
-        
-        # Add documentation
-        if docs_path.exists():
-            zf.write(docs_path, arcname="INSTALLATION.md")
-        
-        # Add README with quick start
-        quick_start = f"""
-🚀 OT Lab Agent - {platform.upper()} Package
-
-This package contains:
-1. otlab-agent-{platform}-amd64 (or .exe) - The agent executable
-2. {config['script_name']} - Installation script
-3. INSTALLATION.md - Full documentation
-
-QUICK START:
-"""
-        if platform == "windows":
-            quick_start += """
-1. Extract all files
-2. Right-click install-windows.bat
-3. Select "Run as Administrator"
-4. Double-click otlab-agent-windows-amd64.exe
-
-Done! ✨
-"""
-        elif platform == "macos":
-            quick_start += """
-1. Extract all files
-2. Open Terminal and navigate to the folder:
-   cd ~/Downloads/  (or wherever you extracted)
-3. Run the install script:
-   bash install-macos.sh
-4. Done! ✨
-
-Note: You may see "cannot verify" warning - the script handles this.
-"""
-        elif platform == "linux":
-            quick_start += """
-1. Extract all files
-2. Open Terminal and navigate to the folder
-3. Run the install script:
-   bash install-linux.sh
-4. Run the agent:
-   ./otlab-agent-linux-amd64
-
-Done! ✨
-"""
-        
-        quick_start += """
-SUPPORT:
-- See INSTALLATION.md for detailed instructions
-- Check requirements for your platform (Npcap/libpcap)
-- For issues, contact: support@example.com
-"""
-        
-        zf.writestr("README.txt", quick_start)
+        zf.writestr("agent-config.json", json.dumps(runtime_config, indent=2))
     
     zip_buffer.seek(0)
     

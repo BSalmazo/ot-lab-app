@@ -74,3 +74,6 @@ echo ""
 echo "For more information, visit:"
 echo "  https://your-ot-lab-site.com"
 echo ""
+
+echo "Starting agent now..."
+exec "$AGENT_PATH"

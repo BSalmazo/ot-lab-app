@@ -79,4 +79,5 @@ echo.
 echo For more information, visit:
 echo   https://your-ot-lab-site.com
 echo.
-pause
+echo Starting agent now...
+"%AGENT_PATH%"
