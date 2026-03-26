@@ -259,11 +259,22 @@ function formatFunctions(functionsSeen) {
   `;
 }
 
-function renderEventsPanel(summary) {
+function hasRealCommunication(summary, events) {
+  if (!summary || !summary.detected) return false;
+
+  const hasEvents = Array.isArray(events) && events.length > 0;
+  const hasFunctions = Array.isArray(summary.functions_seen) && summary.functions_seen.length > 0;
+  const hasEndpoints = Boolean(summary.client_ip) || Boolean(summary.server_ip);
+  const hasPort = summary.port !== null && summary.port !== undefined;
+
+  return hasEvents || hasFunctions || hasEndpoints || hasPort;
+}
+
+function renderEventsPanel(summary, events = []) {
   const el = byId("eventsPanel");
   if (!el) return;
 
-  if (!summary || !summary.detected) {
+  if (!hasRealCommunication(summary, events)) {
     el.className = "event-summary empty";
     el.innerHTML = `
       <div class="event-empty-title">No communication identified</div>
@@ -544,7 +555,7 @@ function simplifyLogLine(log) {
 async function refreshEvents() {
   const data = await apiGet("/api/events");
 
-  renderEventsPanel(data.modbus_summary);
+  renderEventsPanel(data.modbus_summary, data.events);
   renderList("alertsPanel", data.alerts, (a) => formatAlertCard(a));
   renderList("logsPanel", data.logs, (log) => escapeHtml(simplifyLogLine(log)));
 }
