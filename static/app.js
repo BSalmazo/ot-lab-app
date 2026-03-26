@@ -261,6 +261,8 @@ function formatFunctions(functionsSeen) {
 
 function hasRealCommunication(summary, events) {
   if (!summary || !summary.detected) return false;
+  const stateLabel = String(summary.state || "").toLowerCase();
+  if (stateLabel === "inactive") return false;
   return Array.isArray(events) && events.length > 0;
 }
 
@@ -688,6 +690,18 @@ async function scanInterfaces() {
   setText("monitorConfigStatus", `Interfaces found: ${(data.interfaces || []).join(", ") || "-"}`);
 }
 
+async function openAgentDownloadModal() {
+  openModal("agentDownloadModal");
+  setText("agentSessionIdValue", "loading...");
+
+  try {
+    const status = await apiGet("/api/status");
+    setText("agentSessionIdValue", status.session_id || "-");
+  } catch (_err) {
+    setText("agentSessionIdValue", "unavailable");
+  }
+}
+
 function disableLegacySections() {
   setDisabled("sendReadBtn", true);
   setDisabled("sendWriteBtn", true);
@@ -725,7 +739,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   byId("openServerConfigBtn")?.addEventListener("click", () => openModal("serverModal"));
   byId("openClientConfigBtn")?.addEventListener("click", () => openModal("clientModal"));
-  byId("openAgentDownloadBtn")?.addEventListener("click", () => openModal("agentDownloadModal"));
+  byId("openAgentDownloadBtn")?.addEventListener("click", openAgentDownloadModal);
 
   document.querySelectorAll("[data-close]").forEach((btn) => {
     btn.addEventListener("click", () => closeModal(btn.dataset.close));
