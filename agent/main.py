@@ -341,10 +341,16 @@ def main():
 
     try:
         while True:
-            remote_config = agent.fetch_remote_config()
-            agent.apply_config_if_needed(remote_config)
-            agent.process_pending_commands()
-            agent.send_heartbeat()
+            try:
+                remote_config = agent.fetch_remote_config()
+                agent.apply_config_if_needed(remote_config)
+                agent.process_pending_commands()
+                agent.send_heartbeat()
+            except Exception as e:
+                print(f"[agent] error in main loop: {e}")
+                time.sleep(0.5)
+                continue
+            
             time.sleep(1.0)
     except KeyboardInterrupt:
         print("\n[agent] stopping...")

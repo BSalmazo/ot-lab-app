@@ -1,4 +1,5 @@
 import platform
+import platform
 from statistics import mean
 
 from scapy.all import AsyncSniffer, IP, TCP, get_if_list
@@ -23,11 +24,15 @@ class SnifferMixin:
             self.sniffer = None
             return False
 
+        # Filter out loopback and virtual interfaces (macOS/Linux)
         blocked_prefixes = ("anpi", "ap", "awdl", "llw", "utun", "bridge", "gif", "stf")
-        sniff_ifaces = [
+        filtered_ifaces = [
             iface for iface in sniff_ifaces
-            if not iface.startswith(blocked_prefixes)
+            if not iface.startswith(blocked_prefixes) and iface.lower() != "lo"
         ]
+        
+        # On Windows, loopback is usually "lo" or similar, but use what's available
+        sniff_ifaces = filtered_ifaces if filtered_ifaces else sniff_ifaces
 
         if not sniff_ifaces:
             print("[agent] no usable interfaces after filtering")
@@ -35,23 +40,46 @@ class SnifferMixin:
             return False
 
         try:
+            iface_arg = sniff_ifaces if len(sniff_ifaces) > 1 else sniff_ifaces[0]
+            print(f"[agent] attempting to start sniffer on: {iface_arg}")
+            
             self.sniffer = AsyncSniffer(
-                iface=sniff_ifaces if len(sniff_ifaces) > 1 else sniff_ifaces[0],
+                iface=iface_arg,
                 filter="tcp",
                 prn=self._handle_packet,
                 store=False,
                 promisc=False,
             )
             self.sniffer.start()
-            print(f"[agent] sniffing on interfaces: {sniff_ifaces}")
+            print(f"[agent] sniffing successfully started on interfaces: {sniff_ifaces}")
             return True
         except Exception as e:
-            print(f"[agent] failed to start sniffer on iface={self.iface}: {e}")
-            print("[agent] sniffer startup diagnostics: AsyncSniffer requires a working libpcap/Npcap runtime.")
+            print(f"[agent] ERROR - failed to start sniffer on iface={self.iface}")
+            print(f"[agent] Exception details: {type(e).__name__}: {e}")
+            print(f"[agent] Available interfaces: {self.get_available_interfaces()}")
+            print(f"[agent] sniffer startup diagnostics: AsyncSniffer requires a working libpcap/Npcap runtime.")
             if platform.system() == "Windows":
                 print(
-                    "[agent] windows hint: verify Npcap is installed, the Npcap driver service is running, "
-                    "and the process has packet capture permissions."
+                    "[agent] WINDOWS DIAGNOSIS:\n"
+                    "  1. Verify Npcap is installed: https://nmap.org/npcap/\n"
+                    "  2. Check Npcap driver service is running: services.msc -> look for 'Npcap'\n"
+                    "  3. Ensure admin privileges if using promiscuous mode\n"
+                    "  4. Restart your machine after Npcap installation\n"
+                    "  5. Try running with a specific interface name instead of 'ALL'"
+                )
+            elif platform.system() == "Darwin":
+                print(
+                    "[agent] MACOS DIAGNOSIS:\n"
+                    "  1. Ensure ChmodBPF is installed for non-root capture\n"
+                    "  2. Try: sudo python agent_script.py (if needed)\n"
+                    "  3. Check system integrity: gatekeeper might block unsigned drivers"
+                )
+            else:
+                print(
+                    "[agent] LINUX DIAGNOSIS:\n"
+                    "  1. Install libpcap: sudo apt-get install libpcap-dev\n"
+                    "  2. Grant permissions: sudo setcap cap_net_raw,cap_net_admin=eip /usr/bin/python3\n"
+                    "  3. Or run with sudo: sudo python agent_script.py"
                 )
             self.sniffer = None
             return False
@@ -297,4 +325,4 @@ class SnifferMixin:
             self.send_snapshot()
 
         except Exception as e:
-            print(f"[agent] packet handling error: {e}")
+            print(f"[agent] packet handling error: {type(e).__name__}: {e}")
