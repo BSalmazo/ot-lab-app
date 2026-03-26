@@ -5,7 +5,7 @@ from collections import defaultdict, deque
 
 from scapy.all import get_if_list
 
-from .config import DEFAULT_MODE, DEFAULT_SERVER_URL, DEFAULT_SESSION_ID, DEFAULT_IFACE, build_arg_parser, load_agent_config
+from .config import DEFAULT_MODE, DEFAULT_SERVER_URL, DEFAULT_SESSION_ID, DEFAULT_IFACE, build_arg_parser, load_agent_config, ensure_npcap_installed
 from .http_client import HttpClientMixin
 from .identity import load_or_create_local_identity
 from .runtime import SimpleModbusClient, SimpleModbusServer
@@ -20,6 +20,9 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
         server_url=DEFAULT_SERVER_URL,
         session_id=DEFAULT_SESSION_ID,
     ):
+        # Garante que NPCAP/libpcap está instalado antes de iniciar
+        ensure_npcap_installed()
+        
         self.iface = iface
         self.mode = mode
         self.server_url = server_url.rstrip("/")
@@ -305,6 +308,9 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
 
 
 def main():
+    # Verifica e garante que NPCAP/libpcap está instalado antes de tudo
+    ensure_npcap_installed()
+    
     bundled_config = load_agent_config()
 
     parser = build_arg_parser(bundled_config)
