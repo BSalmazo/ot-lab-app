@@ -794,18 +794,18 @@ async function loadAndRenderReleases() {
       const assets = release.assets || {};
       
       if (assets.windows) {
-        html += `<a class="download-link" href="${assets.windows.url}" download>
-          <span class="os-icon">🪟</span> Windows (${formatFileSize(assets.windows.size)})
+        html += `<a class="download-link" href="${getBundleDownloadUrl("windows")}" download>
+          <span class="os-icon">🪟</span> Windows Bundle ZIP (agent + install)
         </a>`;
       }
       if (assets.macos) {
-        html += `<a class="download-link" href="${assets.macos.url}" download>
-          <span class="os-icon">🍎</span> macOS (${formatFileSize(assets.macos.size)})
+        html += `<a class="download-link" href="${getBundleDownloadUrl("macos")}" download>
+          <span class="os-icon">🍎</span> macOS Bundle ZIP (agent + install)
         </a>`;
       }
       if (assets.linux) {
-        html += `<a class="download-link" href="${assets.linux.url}" download>
-          <span class="os-icon">🐧</span> Linux (${formatFileSize(assets.linux.size)})
+        html += `<a class="download-link" href="${getBundleDownloadUrl("linux")}" download>
+          <span class="os-icon">🐧</span> Linux Bundle ZIP (agent + install)
         </a>`;
       }
       
@@ -830,6 +830,13 @@ function formatFileSize(bytes) {
   if (bytes < 1024) return bytes + " B";
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
   return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+function getBundleDownloadUrl(platform) {
+  if (platform === "windows") return "/downloads/agent/windows";
+  if (platform === "macos") return "/downloads/agent/macos";
+  if (platform === "linux") return "/downloads/agent/linux";
+  return "#";
 }
 
 function disableLegacySections() {
