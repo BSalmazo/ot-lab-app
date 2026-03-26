@@ -833,9 +833,9 @@ function formatFileSize(bytes) {
 }
 
 function getBundleDownloadUrl(platform) {
-  if (platform === "windows") return "/downloads/agent/windows";
-  if (platform === "macos") return "/downloads/agent/macos";
-  if (platform === "linux") return "/downloads/agent/linux";
+  if (platform === "windows") return "/api/downloads/agent/windows";
+  if (platform === "macos") return "/api/downloads/agent/mac";
+  if (platform === "linux") return "/api/downloads/agent/linux";
   return "#";
 }
 
