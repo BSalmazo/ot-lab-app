@@ -1,0 +1,126 @@
+name: Build and Release Agent Binaries
+
+on:
+  push:
+    branches:
+      - main
+      - refactor/codex-setup
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact-name: otlab-agent-windows.exe
+            output-path: dist/otlab_agent.exe
+          - os: macos-latest
+            artifact-name: otlab-agent-macos
+            output-path: dist/otlab_agent
+          - os: ubuntu-latest
+            artifact-name: otlab-agent-linux
+            output-path: dist/otlab_agent
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build with PyInstaller (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          pyinstaller agent-bundle.spec --distpath ./dist --buildpath ./build --specpath .
+          # Copy agent_config.json to dist folder
+          if exist agent-config.json (
+            copy agent-config.json dist\
+          )
+
+      - name: Build with PyInstaller (macOS/Linux)
+        if: runner.os != 'Windows'
+        run: |
+          pyinstaller agent-bundle.spec --distpath ./dist --buildpath ./build --specpath .
+          # Copy agent_config.json to dist folder
+          if [ -f agent-config.json ]; then
+            cp agent-config.json dist/
+          fi
+
+      - name: Make binary executable (macOS/Linux)
+        if: runner.os != 'Windows'
+        run: chmod +x ${{ matrix.output-path }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: ${{ matrix.output-path }}
+          retention-days: 7
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/**/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-latest:
+    name: Publish Latest Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/refactor/codex-setup' && github.event_name == 'push'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+
+      - name: Get current date
+        id: date
+        run: echo "date=$(date +'%Y-%m-%d-%H%M%S')" >> $GITHUB_OUTPUT
+
+      - name: Create/Update Dev Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: dev-latest
+          name: Dev Latest Build (${{ steps.date.outputs.date }})
+          files: artifacts/**/*
+          draft: false
+          prerelease: true
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

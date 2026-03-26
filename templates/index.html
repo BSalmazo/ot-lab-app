@@ -241,10 +241,18 @@
           <span>Session ID:</span>
           <code id="agentSessionIdValue">-</code>
         </div>
-        <div class="download-grid">
-          <a class="download-btn" href="/api/downloads/agent/windows">Windows</a>
-          <a class="download-btn" href="/api/downloads/agent/mac">macOS</a>
-          <a class="download-btn" href="/api/downloads/agent/linux">Linux</a>
+        
+        <div id="releasesContainer" class="releases-container">
+          <div class="loading-spinner">Loading available releases...</div>
+        </div>
+
+        <div class="download-fallback hidden">
+          <h4>Or download from local copies:</h4>
+          <div class="download-grid">
+            <a class="download-btn" href="/api/downloads/agent/windows">Windows (local)</a>
+            <a class="download-btn" href="/api/downloads/agent/mac">macOS (local)</a>
+            <a class="download-btn" href="/api/downloads/agent/linux">Linux (local)</a>
+          </div>
         </div>
       </div>
     </div>
