@@ -261,13 +261,7 @@ function formatFunctions(functionsSeen) {
 
 function hasRealCommunication(summary, events) {
   if (!summary || !summary.detected) return false;
-
-  const hasEvents = Array.isArray(events) && events.length > 0;
-  const hasFunctions = Array.isArray(summary.functions_seen) && summary.functions_seen.length > 0;
-  const hasEndpoints = Boolean(summary.client_ip) || Boolean(summary.server_ip);
-  const hasPort = summary.port !== null && summary.port !== undefined;
-
-  return hasEvents || hasFunctions || hasEndpoints || hasPort;
+  return Array.isArray(events) && events.length > 0;
 }
 
 function renderEventsPanel(summary, events = []) {
