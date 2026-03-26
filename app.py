@@ -469,41 +469,125 @@ def downloads_page(request: Request):
 @app.get("/downloads/agent/{platform}")
 def download_agent_file(platform: str, request: Request):
     """
-    Downloads the agent binary directly (without zip/config).
+    Downloads agent + installation script as a ZIP.
     Platform: "windows", "macos", "linux"
+    
+    Returns:
+    - Agent binary
+    - Installation script
+    - Documentation (INSTALLATION.md)
     """
     session_id, state = get_session_state_from_request(request)
     
-    platform_map = {
-        "windows": ("downloads/agent/windows", "otlab-agent-windows-amd64.exe"),
-        "macos": ("downloads/agent/mac", "otlab-agent-macos-amd64"),
-        "linux": ("downloads/agent/linux", "otlab-agent-linux-amd64"),
+    platform_config = {
+        "windows": {
+            "agent_path": BASE_DIR / "downloads" / "agent" / "windows" / "otlab-agent.exe",
+            "agent_name": "otlab-agent-windows-amd64.exe",
+            "script_path": BASE_DIR / "scripts" / "install-windows.bat",
+            "script_name": "install-windows.bat",
+            "zip_name": "otlab-agent-windows.zip"
+        },
+        "macos": {
+            "agent_path": BASE_DIR / "downloads" / "agent" / "mac" / "otlab-agent-mac",
+            "agent_name": "otlab-agent-macos-amd64",
+            "script_path": BASE_DIR / "scripts" / "install-macos.sh",
+            "script_name": "install-macos.sh",
+            "zip_name": "otlab-agent-macos.zip"
+        },
+        "linux": {
+            "agent_path": BASE_DIR / "downloads" / "agent" / "linux" / "otlab-agent-linux",
+            "agent_name": "otlab-agent-linux-amd64",
+            "script_path": BASE_DIR / "scripts" / "install-linux.sh",
+            "script_name": "install-linux.sh",
+            "zip_name": "otlab-agent-linux.zip"
+        },
     }
     
-    if platform not in platform_map:
+    if platform not in platform_config:
         return JSONResponse({"error": "Invalid platform"}, status_code=400)
     
-    folder, filename = platform_map[platform]
-    agent_path = BASE_DIR / folder.split("/")[0] / folder.split("/")[1] / folder.split("/")[2]
+    config = platform_config[platform]
+    agent_path = config["agent_path"]
+    script_path = config["script_path"]
+    docs_path = BASE_DIR / "scripts" / "INSTALLATION.md"
     
-    # Handle older directory structure
-    if platform == "windows":
-        agent_path = BASE_DIR / "downloads" / "agent" / "windows" / "otlab-agent.exe"
-    elif platform == "macos":
-        agent_path = BASE_DIR / "downloads" / "agent" / "mac" / "otlab-agent-mac"
-    elif platform == "linux":
-        agent_path = BASE_DIR / "downloads" / "agent" / "linux" / "otlab-agent-linux"
-    
+    # Verify all files exist
     if not agent_path.exists():
         return JSONResponse({"error": "Agent file not found"}, status_code=404)
+    if not script_path.exists():
+        return JSONResponse({"error": "Installation script not found"}, status_code=404)
     
-    with open(agent_path, "rb") as f:
-        content = f.read()
+    # Create ZIP with agent + script + docs
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        # Add agent binary
+        zf.write(agent_path, arcname=config["agent_name"])
+        
+        # Add installation script
+        zf.write(script_path, arcname=config["script_name"])
+        
+        # Add documentation
+        if docs_path.exists():
+            zf.write(docs_path, arcname="INSTALLATION.md")
+        
+        # Add README with quick start
+        quick_start = f"""
+🚀 OT Lab Agent - {platform.upper()} Package
+
+This package contains:
+1. otlab-agent-{platform}-amd64 (or .exe) - The agent executable
+2. {config['script_name']} - Installation script
+3. INSTALLATION.md - Full documentation
+
+QUICK START:
+"""
+        if platform == "windows":
+            quick_start += """
+1. Extract all files
+2. Right-click install-windows.bat
+3. Select "Run as Administrator"
+4. Double-click otlab-agent-windows-amd64.exe
+
+Done! ✨
+"""
+        elif platform == "macos":
+            quick_start += """
+1. Extract all files
+2. Open Terminal and navigate to the folder:
+   cd ~/Downloads/  (or wherever you extracted)
+3. Run the install script:
+   bash install-macos.sh
+4. Done! ✨
+
+Note: You may see "cannot verify" warning - the script handles this.
+"""
+        elif platform == "linux":
+            quick_start += """
+1. Extract all files
+2. Open Terminal and navigate to the folder
+3. Run the install script:
+   bash install-linux.sh
+4. Run the agent:
+   ./otlab-agent-linux-amd64
+
+Done! ✨
+"""
+        
+        quick_start += """
+SUPPORT:
+- See INSTALLATION.md for detailed instructions
+- Check requirements for your platform (Npcap/libpcap)
+- For issues, contact: support@example.com
+"""
+        
+        zf.writestr("README.txt", quick_start)
+    
+    zip_buffer.seek(0)
     
     response = Response(
-        content=content,
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        content=zip_buffer.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={config['zip_name']}"}
     )
     set_session_cookie_if_needed(request, response, session_id)
     return response
