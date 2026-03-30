@@ -23,7 +23,8 @@ if config_file.exists():
     datas.append((str(config_file), "."))
 
 a = Analysis(
-    [str(agent_dir / "main.py")],
+    # Use top-level agent.py as entrypoint so package imports resolve correctly
+    [str(root_dir / "agent.py")],
     pathex=[str(root_dir)],
     binaries=[],
     datas=datas,
@@ -69,4 +70,3 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
-
