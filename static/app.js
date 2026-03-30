@@ -584,6 +584,28 @@ const MODBUS_EXCEPTION_MAP = {
   11: "Gateway Target Failed to Respond",
 };
 
+const MODBUS_FUNCTION_NAME_MAP = {
+  1: "Read Coils",
+  2: "Read Discrete Inputs",
+  3: "Read Holding Registers",
+  4: "Read Input Registers",
+  5: "Write Single Coil",
+  6: "Write Single Register",
+  7: "Read Exception Status",
+  8: "Diagnostics",
+  11: "Get Comm Event Counter",
+  12: "Get Comm Event Log",
+  15: "Write Multiple Coils",
+  16: "Write Multiple Registers",
+  17: "Report Server ID",
+  20: "Read File Record",
+  21: "Write File Record",
+  22: "Mask Write Register",
+  23: "Read/Write Multiple Registers",
+  24: "Read FIFO Queue",
+  43: "Read Device Identification",
+};
+
 const WINDOW_STATE_KEY_PREFIX = "otlab_window_state_v1_";
 const openAlertDetails = new Set();
 let lastAlertsFingerprint = "";
@@ -624,6 +646,14 @@ function getExceptionActionHint(exceptionCode) {
   return "Review request payload and PLC-specific Modbus support.";
 }
 
+function getFunctionName(functionCode, fallback = "") {
+  const fc = Number(functionCode);
+  if (Number.isFinite(fc) && MODBUS_FUNCTION_NAME_MAP[fc]) {
+    return MODBUS_FUNCTION_NAME_MAP[fc];
+  }
+  return fallback || "Modbus Function";
+}
+
 function inferModbusContext(alert) {
   const summary = String(alert.summary || "");
   const functionMatch = summary.match(/\bFC(\d+)\b/i);
@@ -652,21 +682,42 @@ function formatAlertCard(alert) {
   const alertKey = getAlertKey(alert);
   const detailsOpen = openAlertDetails.has(alertKey) ? "open" : "";
 
+  const fc = Number(alert.function_code ?? context.fc);
+  const functionName = getFunctionName(fc, alert.function_label || "");
+  const clientEndpoint = alert.client || alert.src || "-";
+  const serverEndpoint = alert.server || alert.dst || "-";
+  const register = alert.register ?? alert.address ?? alert.start_addr ?? "-";
+  const quantity = alert.quantity ?? alert.read_quantity ?? null;
+  const scalarValue = alert.value;
+  const listValues = Array.isArray(alert.values) ? alert.values : [];
+  const valueText = scalarValue != null ? String(scalarValue) : (listValues.length ? listValues.slice(0, 8).join(", ") : null);
+
   let readableTitle = summary;
   if (context.isException) {
-    readableTitle = context.fc
-      ? `Server rejected FC${context.fc} (Exception response)`
+    readableTitle = context.fc || Number.isFinite(fc)
+      ? `FC${context.fc || fc} exception response`
       : "Server returned an exception response";
+  } else if (Number.isFinite(fc)) {
+    readableTitle = `FC${fc} detected (${functionName})`;
   }
   const readableReason = context.isException
     ? `Reason: ${context.exceptionLabel || "not identified"}`
     : reasons.join(" | ");
-  const whatHappened = context.isException
+  let whatHappened = context.isException
     ? `Server rejected ${context.fc ? `FC${context.fc}` : "the request"}`
     : (eventType || "Modbus event");
+  if (!context.isException && Number.isFinite(fc) && String(alert.event_type || "").toUpperCase() === "WRITE_REQUEST") {
+    if (valueText !== null && register !== "-") {
+      whatHappened = `SCADA/HMI sent value ${valueText} to PLC register ${register}`;
+    } else if (register !== "-") {
+      whatHappened = `SCADA/HMI issued FC${fc} write to PLC register ${register}`;
+    } else {
+      whatHappened = `SCADA/HMI issued FC${fc} write to PLC`;
+    }
+  }
   const likelyCause = context.isException
     ? (context.exceptionLabel || "Request not accepted by device")
-    : (reasons[0] || "Traffic matched a configured detection rule");
+    : (reasons[0] || `${functionName} observed in live traffic`);
   const operatorAction = context.isException
     ? getExceptionActionHint(context.exceptionCode)
     : "Validate whether this behavior is expected for the process state.";
@@ -680,6 +731,12 @@ function formatAlertCard(alert) {
       <div class="alert-summary">${escapeHtml(readableTitle)}</div>
       <div class="alert-srcdst">${escapeHtml(alert.src || "-")} → ${escapeHtml(alert.dst || "-")}</div>
       <div class="alert-brief-grid">
+        <div class="alert-brief-row"><span class="alert-brief-k">Function</span><span class="alert-brief-v">${Number.isFinite(fc) ? `FC${escapeHtml(fc)} - ${escapeHtml(functionName)}` : "-"}</span></div>
+        <div class="alert-brief-row"><span class="alert-brief-k">Client</span><span class="alert-brief-v">${escapeHtml(clientEndpoint)}</span></div>
+        <div class="alert-brief-row"><span class="alert-brief-k">Server</span><span class="alert-brief-v">${escapeHtml(serverEndpoint)}</span></div>
+        ${register !== "-" ? `<div class="alert-brief-row"><span class="alert-brief-k">Register</span><span class="alert-brief-v">${escapeHtml(register)}</span></div>` : ""}
+        ${quantity != null ? `<div class="alert-brief-row"><span class="alert-brief-k">Quantity</span><span class="alert-brief-v">${escapeHtml(quantity)}</span></div>` : ""}
+        ${valueText != null ? `<div class="alert-brief-row"><span class="alert-brief-k">Value</span><span class="alert-brief-v">${escapeHtml(valueText)}</span></div>` : ""}
         <div class="alert-brief-row"><span class="alert-brief-k">What happened</span><span class="alert-brief-v">${escapeHtml(whatHappened)}</span></div>
         <div class="alert-brief-row"><span class="alert-brief-k">Likely cause</span><span class="alert-brief-v">${escapeHtml(likelyCause)}</span></div>
         <div class="alert-brief-row"><span class="alert-brief-k">Operator action</span><span class="alert-brief-v">${escapeHtml(operatorAction)}</span></div>

@@ -13,6 +13,7 @@ from .modbus_parser import (
     reverse_tx_key,
     tx_key,
 )
+from .protocols.modbus.modbus_definitions import get_modbus_function_label
 
 
 class SnifferMixin:
@@ -200,6 +201,23 @@ class SnifferMixin:
             "src": f"{event['src_ip']}:{event['src_port']}",
             "dst": f"{event['dst_ip']}:{event['dst_port']}",
             "summary": self._build_event_summary(event),
+            "function_code": event.get("function_code"),
+            "raw_function_code": event.get("raw_function_code"),
+            "function_label": get_modbus_function_label(event.get("function_code"), event),
+            "exception_code": event.get("exception_code"),
+            "register": event.get("register"),
+            "address": event.get("address"),
+            "start_addr": event.get("start_addr"),
+            "quantity": event.get("quantity"),
+            "read_start": event.get("read_start"),
+            "read_quantity": event.get("read_quantity"),
+            "value": event.get("value"),
+            "values": event.get("values"),
+            "unit_id": event.get("unit_id"),
+            "transaction_id": event.get("transaction_id"),
+            "rtt": event.get("rtt"),
+            "client": event.get("client"),
+            "server": event.get("server"),
         }
         self.send_alert(alert)
 
