@@ -67,6 +67,10 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
             "iface": iface,
             "mode": mode,
         }
+        self.capabilities = [
+            "modbus_actions_v1",
+            "run_modbus_action_command",
+        ]
 
     def make_timestamps_deque(self):
         return deque(maxlen=self.max_timestamps)

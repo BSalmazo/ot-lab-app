@@ -1,5 +1,7 @@
 """Build Modbus/TCP requests from normalized action payloads."""
 
+from typing import Optional
+
 
 def _u16(value: int) -> bytes:
     return int(value).to_bytes(2, "big", signed=False)
@@ -105,7 +107,7 @@ def _build_pdu(function_def: dict, values: dict) -> bytes:
     raise ValueError(f"Unsupported function code: {code}")
 
 
-def build_modbus_tcp_request(function_def: dict, values: dict, transaction_id: int | None = None):
+def build_modbus_tcp_request(function_def: dict, values: dict, transaction_id: Optional[int] = None):
     tx_id = int(transaction_id or 1) & 0xFFFF
     unit_id = int(values.get("unit_id", 1)) & 0xFF
 
