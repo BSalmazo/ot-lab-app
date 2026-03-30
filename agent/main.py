@@ -412,19 +412,30 @@ def main():
         f"iface={agent.iface} mode={agent.mode} -> {args.server}"
     )
 
+    last_config_poll = 0.0
+    last_heartbeat = 0.0
+
     try:
         while True:
             try:
-                remote_config = agent.fetch_remote_config()
-                agent.apply_config_if_needed(remote_config)
+                # Prioritize command processing to reduce UI-to-execution latency.
                 agent.process_pending_commands()
-                agent.send_heartbeat()
+
+                now = time.time()
+                if now - last_config_poll >= 2.0:
+                    remote_config = agent.fetch_remote_config()
+                    agent.apply_config_if_needed(remote_config)
+                    last_config_poll = now
+
+                if now - last_heartbeat >= 1.0:
+                    agent.send_heartbeat()
+                    last_heartbeat = now
             except Exception as e:
                 print(f"[agent] error in main loop: {e}")
-                time.sleep(0.5)
+                time.sleep(0.2)
                 continue
             
-            time.sleep(1.0)
+            time.sleep(0.25)
     except KeyboardInterrupt:
         print("\n[agent] stopping...")
     finally:

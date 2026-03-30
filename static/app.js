@@ -141,6 +141,9 @@ function makeWindowDraggable(windowEl) {
   };
 
   const stopDrag = () => {
+    if (dragging && windowEl?.id) {
+      persistWindowState(windowEl, windowEl.id);
+    }
     dragging = false;
   };
 
@@ -243,19 +246,40 @@ function formatPolling(value) {
   return `${Number(value).toFixed(1)} s`;
 }
 
-function formatFunctions(functionsSeen) {
-  if (!Array.isArray(functionsSeen) || functionsSeen.length === 0) {
+function formatFunctions(functionsSeen, exceptionFunctionsSeen = []) {
+  if ((!Array.isArray(functionsSeen) || functionsSeen.length === 0) && (!Array.isArray(exceptionFunctionsSeen) || exceptionFunctionsSeen.length === 0)) {
     return `<div class="event-value">-</div>`;
   }
 
+  const normal = new Set();
+  const exceptions = new Set();
+  for (const rawFc of functionsSeen || []) {
+    const fc = Number(rawFc);
+    if (!Number.isFinite(fc)) continue;
+    if (fc > 127) {
+      exceptions.add(fc & 0x7f);
+    } else {
+      normal.add(fc);
+    }
+  }
+
+  const normalList = [...normal].sort((a, b) => a - b);
+  for (const rawFc of exceptionFunctionsSeen || []) {
+    const fc = Number(rawFc);
+    if (!Number.isFinite(fc)) continue;
+    if (fc > 0 && fc < 128) {
+      exceptions.add(fc);
+    }
+  }
+  const exceptionList = [...exceptions].sort((a, b) => a - b);
+
   return `
     <div class="fc-list">
-      ${functionsSeen
-        .slice()
-        .sort((a, b) => a - b)
+      ${normalList
         .map((fc) => `<span class="fc-badge">FC${escapeHtml(fc)}</span>`)
         .join("")}
     </div>
+    ${exceptionList.length ? `<div class="fc-exceptions-note">Exceptions: ${exceptionList.map((fc) => `FC${escapeHtml(fc)}`).join(", ")}</div>` : ""}
   `;
 }
 
@@ -330,7 +354,7 @@ function renderEventsPanel(summary, events = []) {
 
       <div class="event-item wide">
         <div class="event-label">Observed functions</div>
-        ${formatFunctions(summary.functions_seen)}
+        ${formatFunctions(summary.functions_seen, summary.exception_functions_seen)}
       </div>
     </div>
   `;
@@ -552,6 +576,23 @@ const MODBUS_EXCEPTION_MAP = {
   11: "Gateway Target Failed to Respond",
 };
 
+const WINDOW_STATE_KEY_PREFIX = "otlab_window_state_v1_";
+const openAlertDetails = new Set();
+let lastAlertsFingerprint = "";
+let lastAlertsPlain = "";
+let lastLogsFingerprint = "";
+
+function getAlertKey(alert) {
+  return [
+    alert.timestamp ?? "-",
+    alert.severity ?? "-",
+    alert.event_type ?? "-",
+    alert.src ?? "-",
+    alert.dst ?? "-",
+    alert.summary ?? "-",
+  ].join("|");
+}
+
 function parseExceptionCode(alert) {
   const reasons = Array.isArray(alert.reasons) ? alert.reasons : [];
   for (const reason of reasons) {
@@ -588,15 +629,17 @@ function formatAlertCard(alert) {
   const severityClass = `alert-level-${escapeHtml(severity)}`;
   const severityBadgeClass = `sev-${escapeHtml(severity)}`;
   const context = inferModbusContext(alert);
+  const alertKey = getAlertKey(alert);
+  const detailsOpen = openAlertDetails.has(alertKey) ? "open" : "";
 
   let readableTitle = summary;
   if (context.isException) {
     readableTitle = context.fc
-      ? `PLC/Servidor rejeitou FC${context.fc} (Exception)`
-      : "PLC/Servidor retornou Exception";
+      ? `Server rejected FC${context.fc} (Exception response)`
+      : "Server returned an exception response";
   }
   const readableReason = context.isException
-    ? `Motivo: ${context.exceptionLabel || "não identificado"}`
+    ? `Reason: ${context.exceptionLabel || "not identified"}`
     : reasons.join(" | ");
 
   return `
@@ -608,12 +651,12 @@ function formatAlertCard(alert) {
       <div class="alert-summary">${escapeHtml(readableTitle)}</div>
       <div class="alert-srcdst">${escapeHtml(alert.src || "-")} → ${escapeHtml(alert.dst || "-")}</div>
       ${readableReason ? `<div class="alert-reason">${escapeHtml(readableReason)}</div>` : ""}
-      <details class="alert-detail">
+      <details class="alert-detail" data-alert-key="${escapeHtml(alertKey)}" ${detailsOpen}>
         <summary>Technical details</summary>
-        <div><strong>Summary:</strong> ${escapeHtml(summary)}</div>
-        ${context.fc ? `<div><strong>Function:</strong> FC${escapeHtml(context.fc)}</div>` : ""}
-        ${context.exceptionLabel ? `<div><strong>Exception:</strong> ${escapeHtml(context.exceptionLabel)}</div>` : ""}
-        ${reasons.length ? `<div><strong>Reasons:</strong> ${escapeHtml(reasons.join(" | "))}</div>` : ""}
+        <div class="alert-technical-line"><strong>Summary:</strong> ${escapeHtml(summary)}</div>
+        ${context.fc ? `<div class="alert-technical-line"><strong>Function:</strong> FC${escapeHtml(context.fc)}</div>` : ""}
+        ${context.exceptionLabel ? `<div class="alert-technical-line"><strong>Exception:</strong> ${escapeHtml(context.exceptionLabel)}</div>` : ""}
+        ${reasons.length ? `<div class="alert-technical-line"><strong>Reasons:</strong> ${escapeHtml(reasons.join(" | "))}</div>` : ""}
       </details>
     </div>
   `;
@@ -647,12 +690,32 @@ function simplifyLogLine(log) {
 async function refreshEvents() {
   const data = await apiGet("/api/events");
   const alerts = Array.isArray(data.alerts) ? data.alerts : [];
+  const logs = Array.isArray(data.logs) ? data.logs : [];
 
   renderEventsPanel(data.modbus_summary, data.events);
-  renderList("alertsPanel", alerts, (a) => formatAlertCard(a));
-  renderList("alertsWindowPanel", alerts, (a) => formatAlertCard(a));
-  setText("alertsPlainPanel", alerts.map((a) => formatAlertPlain(a)).join("\n\n"));
-  renderList("logsPanel", data.logs, (log) => escapeHtml(simplifyLogLine(log)));
+  const alertsFingerprint = alerts
+    .map((a) => `${a.timestamp}|${a.severity}|${a.event_type}|${a.src}|${a.dst}|${a.summary}`)
+    .join("||");
+  const alertsPlain = alerts.map((a) => formatAlertPlain(a)).join("\n\n");
+  const logsFingerprint = logs.map((line) => simplifyLogLine(line)).join("\n");
+
+  if (alertsFingerprint !== lastAlertsFingerprint) {
+    renderList("alertsPanel", alerts, (a) => formatAlertCard(a));
+    renderList("alertsWindowPanel", alerts, (a) => formatAlertCard(a));
+    bindAlertDetails("alertsPanel");
+    bindAlertDetails("alertsWindowPanel");
+    lastAlertsFingerprint = alertsFingerprint;
+  }
+
+  if (alertsPlain !== lastAlertsPlain) {
+    setText("alertsPlainPanel", alertsPlain);
+    lastAlertsPlain = alertsPlain;
+  }
+
+  if (logsFingerprint !== lastLogsFingerprint) {
+    renderList("logsPanel", logs, (log) => escapeHtml(simplifyLogLine(log)));
+    lastLogsFingerprint = logsFingerprint;
+  }
 }
 
 async function refreshAll() {
@@ -944,10 +1007,9 @@ function initFloatingWindows() {
     const el = byId(id);
     if (!el) return;
 
-    el.style.left = `${120 + index * 30}px`;
-    el.style.top = `${120 + index * 30}px`;
-
+    applyWindowState(el, id, index);
     makeWindowDraggable(el);
+    observeWindowResize(el, id);
   });
 
   byId("copyAlertsBtn")?.addEventListener("click", async () => {
@@ -959,6 +1021,75 @@ function initFloatingWindows() {
       console.error("Failed to copy alerts");
     }
   });
+}
+
+function bindAlertDetails(containerId) {
+  const container = byId(containerId);
+  if (!container) return;
+  container.querySelectorAll(".alert-detail[data-alert-key]").forEach((detailsEl) => {
+    const key = detailsEl.dataset.alertKey;
+    if (!key) return;
+    detailsEl.addEventListener("toggle", () => {
+      if (detailsEl.open) {
+        openAlertDetails.add(key);
+      } else {
+        openAlertDetails.delete(key);
+      }
+    });
+  });
+}
+
+function windowStateStorageKey(id) {
+  return `${WINDOW_STATE_KEY_PREFIX}${id}`;
+}
+
+function applyWindowState(el, id, index) {
+  const fallbackLeft = 120 + index * 30;
+  const fallbackTop = 120 + index * 30;
+
+  try {
+    const raw = localStorage.getItem(windowStateStorageKey(id));
+    if (!raw) {
+      el.style.left = `${fallbackLeft}px`;
+      el.style.top = `${fallbackTop}px`;
+      return;
+    }
+
+    const state = JSON.parse(raw);
+    if (Number.isFinite(state.left)) el.style.left = `${state.left}px`;
+    if (Number.isFinite(state.top)) el.style.top = `${state.top}px`;
+    if (Number.isFinite(state.width)) el.style.width = `${state.width}px`;
+    if (Number.isFinite(state.height)) el.style.height = `${state.height}px`;
+  } catch (_err) {
+    el.style.left = `${fallbackLeft}px`;
+    el.style.top = `${fallbackTop}px`;
+  }
+}
+
+function persistWindowState(el, id) {
+  if (!el) return;
+  const left = parseFloat(el.style.left || "0");
+  const top = parseFloat(el.style.top || "0");
+  const width = el.offsetWidth;
+  const height = el.offsetHeight;
+  try {
+    localStorage.setItem(
+      windowStateStorageKey(id),
+      JSON.stringify({ left, top, width, height })
+    );
+  } catch (_err) {
+    // Ignore storage failures.
+  }
+}
+
+function observeWindowResize(el, id) {
+  if (typeof ResizeObserver === "undefined") return;
+  let timeout = null;
+  const observer = new ResizeObserver(() => {
+    if (timeout) clearTimeout(timeout);
+    timeout = setTimeout(() => persistWindowState(el, id), 120);
+  });
+  observer.observe(el);
 }
 
 window.addEventListener("DOMContentLoaded", () => {

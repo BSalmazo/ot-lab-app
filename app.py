@@ -227,6 +227,7 @@ def default_modbus_summary():
         "client_ip": None,
         "server_ip": None,
         "functions_seen": [],
+        "exception_functions_seen": [],
         "avg_polling_s": None,
         "writes_detected": False,
         "state": "Inactive",
@@ -376,6 +377,12 @@ def update_modbus_summary_from_event(state: dict, payload: dict):
     except (TypeError, ValueError):
         return
 
+    is_exception = event_type == "EXCEPTION_RESPONSE"
+    if function_code > 127:
+        base_fc = function_code & 0x7F
+    else:
+        base_fc = function_code
+
     summary["detected"] = True
     summary["protocol"] = "Modbus/TCP"
     summary["interface"] = iface
@@ -386,10 +393,17 @@ def update_modbus_summary_from_event(state: dict, payload: dict):
     summary["state"] = "Active"
 
     existing_fc = set(summary.get("functions_seen") or [])
-    existing_fc.add(function_code)
-    summary["functions_seen"] = sorted(existing_fc)
+    exception_fc = set(summary.get("exception_functions_seen") or [])
 
-    if function_code in MODBUS_WRITE_FUNCTIONS or event_type in {"WRITE_REQUEST", "WRITE_RESPONSE"}:
+    if is_exception:
+        exception_fc.add(base_fc)
+    else:
+        existing_fc.add(base_fc)
+
+    summary["functions_seen"] = sorted(existing_fc)
+    summary["exception_functions_seen"] = sorted(exception_fc)
+
+    if base_fc in MODBUS_WRITE_FUNCTIONS or event_type in {"WRITE_REQUEST", "WRITE_RESPONSE"}:
         summary["writes_detected"] = True
 
     avg_polling = payload.get("avg_polling_s")
@@ -427,6 +441,7 @@ def build_modbus_summary(state: dict):
         "client_ip": summary.get("client_ip"),
         "server_ip": summary.get("server_ip"),
         "functions_seen": summary.get("functions_seen") or [],
+        "exception_functions_seen": summary.get("exception_functions_seen") or [],
         "avg_polling_s": summary.get("avg_polling_s"),
         "writes_detected": bool(summary.get("writes_detected")),
         "state": summary.get("state") or "Inactive",
