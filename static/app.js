@@ -278,8 +278,13 @@ function formatFunctions(functionsSeen, exceptionFunctionsSeen = []) {
       ${normalList
         .map((fc) => `<span class="fc-badge">FC${escapeHtml(fc)}</span>`)
         .join("")}
+      ${exceptionList
+        .map(
+          (fc) =>
+            `<span class="fc-badge fc-badge-exception" data-tooltip="Exception response detected for FC${escapeHtml(fc)} (raw frame can appear as FC${escapeHtml(fc + 128)}). See Alerts for full reason.">FC${escapeHtml(fc)}</span>`
+        )
+        .join("")}
     </div>
-    ${exceptionList.length ? `<div class="fc-exceptions-note">Exceptions: ${exceptionList.map((fc) => `FC${escapeHtml(fc)}`).join(", ")}</div>` : ""}
   `;
 }
 
