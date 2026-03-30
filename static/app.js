@@ -722,32 +722,38 @@ function formatAlertCard(alert) {
     ? getExceptionActionHint(context.exceptionCode)
     : "Validate whether this behavior is expected for the process state.";
 
+  const compactTitle = Number.isFinite(fc) ? `FC${fc} detected` : "Modbus event detected";
+  const compactValue = valueText != null ? valueText : "-";
+
   return `
     <div class="alert-card ${severityClass}">
       <div class="alert-top">
         <span class="alert-severity ${severityBadgeClass}">${escapeHtml(severity)}</span>
         <span class="alert-event">${escapeHtml(eventType)}</span>
       </div>
-      <div class="alert-summary">${escapeHtml(readableTitle)}</div>
+      <div class="alert-summary">${escapeHtml(compactTitle)}</div>
       <div class="alert-srcdst">${escapeHtml(alert.src || "-")} → ${escapeHtml(alert.dst || "-")}</div>
       <div class="alert-brief-grid">
-        <div class="alert-brief-row"><span class="alert-brief-k">Function</span><span class="alert-brief-v">${Number.isFinite(fc) ? `FC${escapeHtml(fc)} - ${escapeHtml(functionName)}` : "-"}</span></div>
-        <div class="alert-brief-row"><span class="alert-brief-k">Client</span><span class="alert-brief-v">${escapeHtml(clientEndpoint)}</span></div>
-        <div class="alert-brief-row"><span class="alert-brief-k">Server</span><span class="alert-brief-v">${escapeHtml(serverEndpoint)}</span></div>
-        ${register !== "-" ? `<div class="alert-brief-row"><span class="alert-brief-k">Register</span><span class="alert-brief-v">${escapeHtml(register)}</span></div>` : ""}
-        ${quantity != null ? `<div class="alert-brief-row"><span class="alert-brief-k">Quantity</span><span class="alert-brief-v">${escapeHtml(quantity)}</span></div>` : ""}
-        ${valueText != null ? `<div class="alert-brief-row"><span class="alert-brief-k">Value</span><span class="alert-brief-v">${escapeHtml(valueText)}</span></div>` : ""}
         <div class="alert-brief-row"><span class="alert-brief-k">What happened</span><span class="alert-brief-v">${escapeHtml(whatHappened)}</span></div>
-        <div class="alert-brief-row"><span class="alert-brief-k">Likely cause</span><span class="alert-brief-v">${escapeHtml(likelyCause)}</span></div>
-        <div class="alert-brief-row"><span class="alert-brief-k">Operator action</span><span class="alert-brief-v">${escapeHtml(operatorAction)}</span></div>
+        <div class="alert-brief-row"><span class="alert-brief-k">Value</span><span class="alert-brief-v">${escapeHtml(compactValue)}</span></div>
       </div>
-      ${readableReason ? `<div class="alert-reason">${escapeHtml(readableReason)}</div>` : ""}
       <details class="alert-detail" data-alert-key="${escapeHtml(alertKey)}" ${detailsOpen}>
         <summary>Technical details</summary>
+        <div class="alert-technical-line"><strong>Function:</strong> ${Number.isFinite(fc) ? `FC${escapeHtml(fc)} - ${escapeHtml(functionName)}` : "-"}</div>
+        <div class="alert-technical-line"><strong>Client:</strong> ${escapeHtml(clientEndpoint)}</div>
+        <div class="alert-technical-line"><strong>Server:</strong> ${escapeHtml(serverEndpoint)}</div>
+        ${register !== "-" ? `<div class="alert-technical-line"><strong>Register:</strong> ${escapeHtml(register)}</div>` : ""}
+        ${quantity != null ? `<div class="alert-technical-line"><strong>Quantity:</strong> ${escapeHtml(quantity)}</div>` : ""}
+        ${valueText != null ? `<div class="alert-technical-line"><strong>Value:</strong> ${escapeHtml(valueText)}</div>` : ""}
+        <div class="alert-technical-line"><strong>Likely cause:</strong> ${escapeHtml(likelyCause)}</div>
+        <div class="alert-technical-line"><strong>Operator action:</strong> ${escapeHtml(operatorAction)}</div>
+        ${readableReason ? `<div class="alert-technical-line"><strong>Reason:</strong> ${escapeHtml(readableReason)}</div>` : ""}
         <div class="alert-technical-line"><strong>Summary:</strong> ${escapeHtml(summary)}</div>
-        ${context.fc ? `<div class="alert-technical-line"><strong>Function:</strong> FC${escapeHtml(context.fc)}</div>` : ""}
         ${context.exceptionLabel ? `<div class="alert-technical-line"><strong>Exception:</strong> ${escapeHtml(context.exceptionLabel)}</div>` : ""}
         ${reasons.length ? `<div class="alert-technical-line"><strong>Reasons:</strong> ${escapeHtml(reasons.join(" | "))}</div>` : ""}
+        ${alert.unit_id != null ? `<div class="alert-technical-line"><strong>Unit ID:</strong> ${escapeHtml(alert.unit_id)}</div>` : ""}
+        ${alert.transaction_id != null ? `<div class="alert-technical-line"><strong>Transaction ID:</strong> ${escapeHtml(alert.transaction_id)}</div>` : ""}
+        ${alert.rtt != null ? `<div class="alert-technical-line"><strong>RTT:</strong> ${escapeHtml(alert.rtt)} s</div>` : ""}
       </details>
     </div>
   `;
