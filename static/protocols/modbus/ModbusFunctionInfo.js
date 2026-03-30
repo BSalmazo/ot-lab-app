@@ -8,7 +8,17 @@
       .replaceAll("'", "&#039;");
   }
 
-  function renderCatalog(container, functions) {
+  function shortLabel(label) {
+    const mapped = {
+      Reading: "Read",
+      Writing: "Write",
+      Diagnostics: "Diag",
+      Identification: "ID",
+    };
+    return mapped[label] || label;
+  }
+
+  function renderCatalog(container, functions, onExpandedChange) {
     const groups = {};
     for (const item of functions || []) {
       const key = item.category || "Other";
@@ -16,10 +26,24 @@
       groups[key].push(item);
     }
 
-    const groupEntries = Object.entries(groups);
-    const groupHtml = groupEntries
-      .map(([category, items], index) => {
-        const cards = items
+    const categories = Object.keys(groups);
+    let activeCategory = null;
+
+    function renderPanel() {
+      const bar = categories
+        .map((category) => {
+          const isActive = category === activeCategory;
+          return `
+            <button type="button" class="modbus-cat-btn ${isActive ? "active" : ""}" data-category="${esc(category)}">
+              ${esc(shortLabel(category))}
+            </button>
+          `;
+        })
+        .join("");
+
+      let panelHtml = '<div class="modbus-catalog-hint">Choose a category to expand details.</div>';
+      if (activeCategory && groups[activeCategory]) {
+        const cards = groups[activeCategory]
           .map(
             (item) => `
               <article class="modbus-fc-card">
@@ -35,19 +59,41 @@
           )
           .join("");
 
-        return `
-          <details class="modbus-fc-group" ${index === 0 ? "open" : ""}>
-            <summary>
-              <span>${esc(category)}</span>
-              <span class="modbus-fc-count">${items.length}</span>
-            </summary>
-            <div class="modbus-fc-grid">${cards}</div>
-          </details>
+        panelHtml = `
+          <div class="modbus-catalog-panel-head">
+            <strong>${esc(activeCategory)}</strong>
+            <span>${groups[activeCategory].length} functions</span>
+          </div>
+          <div class="modbus-fc-grid">${cards}</div>
         `;
-      })
-      .join("");
+      }
 
-    container.innerHTML = groupHtml || '<div class="status slim">No Modbus functions available.</div>';
+      container.innerHTML = `
+        <div class="modbus-cat-bar">${bar}</div>
+        <div class="modbus-catalog-panel">${panelHtml}</div>
+      `;
+
+      container.querySelectorAll("[data-category]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const next = btn.dataset.category;
+          activeCategory = activeCategory === next ? null : next;
+          if (typeof onExpandedChange === "function") {
+            onExpandedChange(Boolean(activeCategory));
+          }
+          renderPanel();
+        });
+      });
+    }
+
+    if (!categories.length) {
+      container.innerHTML = '<div class="status slim">No Modbus functions available.</div>';
+      return;
+    }
+
+    if (typeof onExpandedChange === "function") {
+      onExpandedChange(false);
+    }
+    renderPanel();
   }
 
   global.OTLabModbusFunctionInfo = {

@@ -298,6 +298,10 @@ button:disabled {
 
 .actions-window-body {
   max-height: 72vh;
+  overflow: hidden;
+}
+
+.actions-window-body.catalog-expanded {
   overflow: auto;
 }
 
@@ -342,53 +346,49 @@ button:disabled {
 
 .modbus-catalog {
   margin-top: 12px;
+}
+
+.modbus-cat-bar {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
   gap: 8px;
-  max-height: 280px;
-  overflow: auto;
-  padding-right: 4px;
 }
 
-.modbus-fc-group {
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  border-radius: 10px;
-  background: rgba(15, 23, 42, 0.58);
-}
-
-.modbus-fc-group summary {
-  list-style: none;
-  cursor: pointer;
-  padding: 10px 12px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: #93c5fd;
-}
-
-.modbus-fc-group summary::-webkit-details-marker {
-  display: none;
-}
-
-.modbus-fc-count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 22px;
-  height: 22px;
-  border-radius: 999px;
+.modbus-cat-btn {
+  background: rgba(51, 65, 85, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  color: #cbd5e1;
   font-size: 11px;
+  padding: 6px 10px;
+}
+
+.modbus-cat-btn.active {
+  background: rgba(59, 130, 246, 0.8);
+  border-color: rgba(147, 197, 253, 0.8);
+  color: #eff6ff;
+}
+
+.modbus-catalog-panel {
+  margin-top: 10px;
+}
+
+.modbus-catalog-hint {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 6px 2px;
+}
+
+.modbus-catalog-panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 8px;
   color: #bfdbfe;
-  background: rgba(59, 130, 246, 0.18);
-  border: 1px solid rgba(59, 130, 246, 0.24);
+  font-size: 12px;
 }
 
 .modbus-fc-grid {
-  padding: 0 10px 10px 10px;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 8px;
