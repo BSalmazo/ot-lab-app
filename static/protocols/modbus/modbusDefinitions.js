@@ -14,8 +14,22 @@
   }
 
   async function fetchProtocolDefinition() {
-    const response = await fetch("/api/actions/definitions", { credentials: "same-origin" });
-    const data = await response.json();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 7000);
+    let data = null;
+
+    try {
+      const response = await fetch("/api/actions/definitions", {
+        credentials: "same-origin",
+        signal: controller.signal,
+      });
+      data = await response.json();
+    } catch (_err) {
+      return fallback;
+    } finally {
+      clearTimeout(timeout);
+    }
+
     if (!data || !data.ok) return fallback;
 
     const protocols = Array.isArray(data.protocols) ? data.protocols : [];
