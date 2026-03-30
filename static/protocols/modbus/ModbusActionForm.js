@@ -77,8 +77,11 @@
       <div class="action-form-actions">
         <button type="button" data-action-run>Execute Test</button>
       </div>
-      <pre class="action-preview" data-action-preview></pre>
-      <div class="status slim" data-action-result>-</div>
+      <details class="action-preview-wrap">
+        <summary>Request Preview</summary>
+        <pre class="action-preview" data-action-preview></pre>
+      </details>
+      <div class="status slim action-result" data-action-result>-</div>
     `;
 
     const runBtn = container.querySelector("[data-action-run]");
