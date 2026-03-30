@@ -1,4 +1,7 @@
-MODBUS_KNOWN_FUNCTION_CODES = {1, 2, 3, 4, 5, 6, 15, 16, 22, 23, 24, 43}
+from .protocols.modbus.modbus_definitions import get_modbus_known_function_codes
+
+
+MODBUS_KNOWN_FUNCTION_CODES = get_modbus_known_function_codes()
 
 
 def looks_like_modbus_tcp(payload: bytes) -> bool:
@@ -116,7 +119,7 @@ def decode_modbus(payload: bytes, src_ip: str, src_port: int, dst_ip: str, dst_p
         })
         return decoded
 
-    if function_code in (3, 4):
+    if function_code in (1, 2, 3, 4):
         if not is_response and len(payload) >= 12:
             start_addr = int.from_bytes(payload[8:10], "big")
             quantity = int.from_bytes(payload[10:12], "big")
@@ -187,6 +190,56 @@ def decode_modbus(payload: bytes, src_ip: str, src_port: int, dst_ip: str, dst_p
     if function_code in (5, 15):
         decoded.update({
             "type": "WRITE_RESPONSE" if is_response else "WRITE_REQUEST",
+        })
+        return decoded
+
+    if function_code == 22 and len(payload) >= 14:
+        decoded.update({
+            "type": "WRITE_RESPONSE" if is_response else "WRITE_REQUEST",
+            "register": int.from_bytes(payload[8:10], "big"),
+            "and_mask": int.from_bytes(payload[10:12], "big"),
+            "or_mask": int.from_bytes(payload[12:14], "big"),
+        })
+        return decoded
+
+    if function_code == 23 and len(payload) >= 17 and not is_response:
+        read_start = int.from_bytes(payload[8:10], "big")
+        read_quantity = int.from_bytes(payload[10:12], "big")
+        write_start = int.from_bytes(payload[12:14], "big")
+        write_quantity = int.from_bytes(payload[14:16], "big")
+        byte_count = payload[16]
+        values = []
+        values_data = payload[17:17 + byte_count]
+        for i in range(0, len(values_data), 2):
+            if i + 1 < len(values_data):
+                values.append(int.from_bytes(values_data[i:i + 2], "big"))
+        decoded.update({
+            "type": "WRITE_REQUEST",
+            "start_addr": write_start,
+            "register": write_start,
+            "quantity": write_quantity,
+            "read_start": read_start,
+            "read_quantity": read_quantity,
+            "values": values,
+            "value": values[0] if values else None,
+        })
+        return decoded
+
+    if function_code == 23 and is_response:
+        decoded.update({
+            "type": "WRITE_RESPONSE",
+        })
+        return decoded
+
+    if function_code == 21 and not is_response:
+        decoded.update({
+            "type": "WRITE_REQUEST",
+        })
+        return decoded
+
+    if function_code == 21 and is_response:
+        decoded.update({
+            "type": "WRITE_RESPONSE",
         })
         return decoded
 

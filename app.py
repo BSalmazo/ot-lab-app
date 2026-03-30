@@ -15,6 +15,15 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from agent.protocols.modbus.modbus_builder import build_modbus_tcp_request
+from agent.protocols.modbus.modbus_definitions import (
+    get_modbus_function_definitions,
+    get_modbus_write_function_codes,
+)
+from agent.protocols.modbus.modbus_validators import (
+    ValidationError as ModbusValidationError,
+    validate_modbus_action_payload,
+)
 
 app = FastAPI(title="OT Lab App")
 
@@ -281,7 +290,7 @@ def push_log_for_session(session_id: str, message: str):
     with lock:
         state["logs"].append(message)
 
-MODBUS_WRITE_FUNCTIONS = {5, 6, 15, 16}
+MODBUS_WRITE_FUNCTIONS = get_modbus_write_function_codes()
 
 
 def normalize_event_type(event_type: str):
@@ -659,6 +668,69 @@ def api_events(request: Request):
     })
     set_session_cookie_if_needed(request, response, session_id)
     return response
+
+
+@app.get("/api/actions/definitions")
+def api_actions_definitions(request: Request):
+    session_id, _state = get_session_state_from_request(request)
+    response = JSONResponse({
+        "ok": True,
+        "protocols": [
+            {
+                "id": "modbus",
+                "name": "Modbus",
+                "functions": get_modbus_function_definitions(),
+            }
+        ],
+    })
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.post("/api/actions/modbus/execute")
+def api_execute_modbus_action(request: Request, payload: dict = Body(default={})):
+    session_id, state = get_session_state_from_request(request)
+
+    try:
+        function_def, normalized = validate_modbus_action_payload(payload)
+    except ModbusValidationError as exc:
+        response = JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+
+    transaction_id = int(time.time() * 1000) & 0xFFFF
+    built = build_modbus_tcp_request(function_def, normalized, transaction_id=transaction_id)
+
+    cmd_payload = {
+        "host": normalized["host"],
+        "port": normalized["port"],
+        "function_id": normalized["function_id"],
+        "values": normalized,
+        "request_hex": built["request_hex"],
+    }
+    queued = queue_command(session_id, "RUN_MODBUS_ACTION", cmd_payload)
+
+    response = JSONResponse({
+        "ok": True,
+        "queued_command_id": queued["id"],
+        "function": {
+            "id": function_def["id"],
+            "code": function_def["code"],
+            "code_label": function_def.get("code_label"),
+            "name": function_def["name"],
+        },
+        "preview": {
+            "host": normalized["host"],
+            "port": normalized["port"],
+            "unit_id": built["unit_id"],
+            "transaction_id": built["transaction_id"],
+            "request_hex": built["request_hex"],
+            "pdu_hex": built["pdu_hex"],
+        },
+    })
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
 
 @app.get("/api/agent/interfaces")
 def get_agent_interfaces(request: Request):

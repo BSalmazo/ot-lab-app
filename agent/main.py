@@ -8,6 +8,12 @@ from scapy.all import get_if_list
 from .config import DEFAULT_MODE, DEFAULT_SERVER_URL, DEFAULT_SESSION_ID, DEFAULT_IFACE, build_arg_parser, load_agent_config, ensure_npcap_installed
 from .http_client import HttpClientMixin
 from .identity import load_or_create_local_identity
+from .protocols.modbus.modbus_builder import build_modbus_tcp_request
+from .protocols.modbus.modbus_definitions import get_modbus_function_label
+from .protocols.modbus.modbus_validators import (
+    ValidationError as ModbusValidationError,
+    validate_modbus_action_payload,
+)
 from .runtime import SimpleModbusClient, SimpleModbusServer
 from .sniffer import SnifferMixin
 
@@ -101,6 +107,8 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
                     )
                 elif cmd_type == "STOP_CLIENT":
                     self.stop_modbus_client()
+                elif cmd_type == "RUN_MODBUS_ACTION":
+                    self.execute_modbus_action(payload)
             except Exception as e:
                 print(f"[agent] command {cmd_type} failed: {e}")
 
@@ -172,6 +180,56 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
             self.client_runtime["running"] = False
 
         print("[agent] modbus client stopped")
+
+    def execute_modbus_action(self, payload: dict):
+        try:
+            function_def, normalized = validate_modbus_action_payload(payload)
+        except ModbusValidationError as exc:
+            print(f"[agent] invalid modbus action payload: {exc}")
+            return
+
+        built = build_modbus_tcp_request(
+            function_def,
+            normalized,
+            transaction_id=int(time.time() * 1000) & 0xFFFF,
+        )
+
+        host = normalized["host"]
+        port = normalized["port"]
+        timeout_s = 2.0
+
+        print(
+            f"[agent] executing action {function_def['code_label']} {function_def['name']} "
+            f"to {host}:{port} unit={built['unit_id']}"
+        )
+
+        try:
+            with socket.create_connection((host, port), timeout=timeout_s) as conn:
+                conn.settimeout(timeout_s)
+                conn.sendall(built["request_bytes"])
+                response = conn.recv(512)
+        except Exception as exc:
+            print(f"[agent] modbus action send failed: {type(exc).__name__}: {exc}")
+            return
+
+        if not response:
+            print("[agent] modbus action completed without response")
+            return
+
+        if len(response) >= 8:
+            function_code = response[7]
+            if function_code & 0x80 and len(response) >= 9:
+                print(
+                    f"[agent] modbus action response exception fc={function_code & 0x7F} "
+                    f"code={response[8]} raw={response.hex(' ').upper()}"
+                )
+            else:
+                print(
+                    f"[agent] modbus action response ok fc={function_code} "
+                    f"raw={response.hex(' ').upper()}"
+                )
+        else:
+            print(f"[agent] short modbus response raw={response.hex(' ').upper()}")
 
     def apply_config_if_needed(self, config: dict):
         if not config:
@@ -264,41 +322,42 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
         event_type = event.get("type")
         client = event.get("client") or f"{event.get('src_ip')}:{event.get('src_port')}"
         server = event.get("server") or f"{event.get('dst_ip')}:{event.get('dst_port')}"
+        function_label = get_modbus_function_label(event.get("function_code"), event)
 
         if event_type == "READ_REQUEST":
             return (
                 f"FC{event.get('function_code')} read request from {client} "
-                f"to {server} | start={event.get('start_addr')} qty={event.get('quantity')}"
+                f"to {server} | {function_label} | start={event.get('start_addr')} qty={event.get('quantity')}"
             )
 
         if event_type == "READ_RESPONSE":
             return (
                 f"FC{event.get('function_code')} read response from {server} "
-                f"to {client} | values={event.get('register_values', [])} | rtt={event.get('rtt')}"
+                f"to {client} | {function_label} | values={event.get('register_values', [])} | rtt={event.get('rtt')}"
             )
 
         if event_type == "WRITE_REQUEST":
             if event.get("values") is not None:
                 return (
                     f"FC{event.get('function_code')} write request from {client} "
-                    f"to {server} | start={event.get('start_addr')} qty={event.get('quantity')} "
+                    f"to {server} | {function_label} | start={event.get('start_addr')} qty={event.get('quantity')} "
                     f"values={event.get('values')}"
                 )
             return (
                 f"FC{event.get('function_code')} write request from {client} "
-                f"to {server} | register={event.get('register')} value={event.get('value')}"
+                f"to {server} | {function_label} | register={event.get('register')} value={event.get('value')}"
             )
 
         if event_type == "WRITE_RESPONSE":
             return (
                 f"FC{event.get('function_code')} write response from {server} "
-                f"to {client} | register={event.get('register')} value={event.get('value')} | rtt={event.get('rtt')}"
+                f"to {client} | {function_label} | register={event.get('register')} value={event.get('value')} | rtt={event.get('rtt')}"
             )
 
         if event_type == "EXCEPTION_RESPONSE":
             return (
                 f"FC{event.get('function_code')} exception response from {server} "
-                f"to {client} | exception_code={event.get('exception_code')} | rtt={event.get('rtt')}"
+                f"to {client} | {function_label} | exception_code={event.get('exception_code')} | rtt={event.get('rtt')}"
             )
 
         return (

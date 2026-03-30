@@ -839,12 +839,6 @@ function getBundleDownloadUrl(platform) {
   return "#";
 }
 
-function disableLegacySections() {
-  setDisabled("sendReadBtn", true);
-  setDisabled("sendWriteBtn", true);
-  setText("actionResult", "Local READ/WRITE actions are disabled in this version.");
-}
-
 function initFloatingWindows() {
   byId("openIdsWindowBtn")?.addEventListener("click", () => openWindow("idsWindow"));
   byId("openLogsWindowBtn")?.addEventListener("click", () => openWindow("logsWindow"));
@@ -897,7 +891,12 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   initFloatingWindows();
-  disableLegacySections();
+  if (window.OTLabActions?.mountActionsWindow) {
+    window.OTLabActions.mountActionsWindow("actionsWindowBody").catch((err) => {
+      console.error(err);
+      setText("actionsWindowBody", "Failed to load Actions window.");
+    });
+  }
   refreshAll();
   setInterval(refreshAll, 1000);
 });
