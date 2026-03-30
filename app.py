@@ -546,22 +546,53 @@ def download_agent_file(platform: str, request: Request):
         return JSONResponse({"error": "Invalid platform"}, status_code=400)
     
     config = platform_config[platform]
-    agent_path = config["agent_path"]
     script_path = config["script_path"]
     runtime_config = build_agent_config(request, session_id, state)
-    
-    # Verify all files exist
-    if not agent_path.exists():
-        return JSONResponse({"error": "Agent file not found"}, status_code=404)
+
+    # Try to fetch the newest agent binary from GitHub releases first.
+    # Fallback to local bundled copy if unavailable.
+    agent_bytes = None
+    agent_source = "local"
+
+    try:
+        releases = get_github_releases() or []
+        for release in releases:
+            assets = release.get("assets") or {}
+            asset = assets.get(platform)
+            if not asset:
+                continue
+
+            asset_url = asset.get("url")
+            if not asset_url:
+                continue
+
+            fetch_resp = requests.get(asset_url, timeout=20)
+            fetch_resp.raise_for_status()
+            agent_bytes = fetch_resp.content
+            agent_source = f"github:{release.get('tag', 'unknown')}"
+            break
+    except Exception as e:
+        print(f"[app] failed to fetch agent from GitHub releases ({platform}): {e}")
+
+    if agent_bytes is None:
+        agent_path = config["agent_path"]
+        if not agent_path.exists():
+            return JSONResponse({"error": "Agent file not found (release + local fallback unavailable)"}, status_code=404)
+        with open(agent_path, "rb") as f:
+            agent_bytes = f.read()
+        agent_source = "local-fallback"
+
     if not script_path.exists():
         return JSONResponse({"error": "Installation script not found"}, status_code=404)
     
     # Create ZIP with only the files needed for one-click install/run.
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.write(agent_path, arcname=config["agent_name"])
+        zf.writestr(config["agent_name"], agent_bytes)
         zf.write(script_path, arcname=config["script_name"])
         zf.writestr("agent-config.json", json.dumps(runtime_config, indent=2))
+
+    push_log_for_session(session_id, f"Agent bundle generated for {platform} (binary source={agent_source})")
     
     zip_buffer.seek(0)
     
