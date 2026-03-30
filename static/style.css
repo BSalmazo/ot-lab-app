@@ -344,18 +344,51 @@ button:disabled {
   margin-top: 12px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
+  max-height: 280px;
+  overflow: auto;
+  padding-right: 4px;
 }
 
-.modbus-fc-group h4 {
-  margin: 0 0 8px 0;
+.modbus-fc-group {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.modbus-fc-group summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: #93c5fd;
 }
 
+.modbus-fc-group summary::-webkit-details-marker {
+  display: none;
+}
+
+.modbus-fc-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: #bfdbfe;
+  background: rgba(59, 130, 246, 0.18);
+  border: 1px solid rgba(59, 130, 246, 0.24);
+}
+
 .modbus-fc-grid {
+  padding: 0 10px 10px 10px;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 8px;
@@ -403,10 +436,6 @@ button:disabled {
   color: #94a3b8;
 }
 
-.action-selector {
-  margin-top: 12px;
-}
-
 .modbus-action-form {
   margin-top: 12px;
 }
@@ -450,6 +479,8 @@ button:disabled {
   min-height: 72px;
   max-height: 180px;
   overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* LOGS / PANELS */

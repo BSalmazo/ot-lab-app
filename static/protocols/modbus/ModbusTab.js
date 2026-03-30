@@ -30,19 +30,11 @@
     container.innerHTML = `
       <section class="actions-section">
         <div class="actions-section-head">
-          <h3>Modbus Function Catalog</h3>
-          <div class="actions-section-sub">Compact technical view by category</div>
-        </div>
-        <div class="modbus-catalog" data-modbus-catalog></div>
-      </section>
-
-      <section class="actions-section">
-        <div class="actions-section-head">
           <h3>Interactive Test</h3>
           <div class="actions-section-sub">Select a function and queue a request to the agent</div>
         </div>
 
-        <label class="action-form-item action-selector">
+        <label class="action-form-item">
           <span>Function</span>
           <select data-function-select>
             ${functions
@@ -55,6 +47,14 @@
         </label>
 
         <div class="modbus-action-form" data-modbus-form></div>
+      </section>
+
+      <section class="actions-section">
+        <div class="actions-section-head">
+          <h3>Modbus Function Catalog</h3>
+          <div class="actions-section-sub">Compact technical view by category</div>
+        </div>
+        <div class="modbus-catalog" data-modbus-catalog></div>
       </section>
     `;
 

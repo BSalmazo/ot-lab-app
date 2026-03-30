@@ -16,8 +16,9 @@
       groups[key].push(item);
     }
 
-    const groupHtml = Object.entries(groups)
-      .map(([category, items]) => {
+    const groupEntries = Object.entries(groups);
+    const groupHtml = groupEntries
+      .map(([category, items], index) => {
         const cards = items
           .map(
             (item) => `
@@ -35,10 +36,13 @@
           .join("");
 
         return `
-          <section class="modbus-fc-group">
-            <h4>${esc(category)}</h4>
+          <details class="modbus-fc-group" ${index === 0 ? "open" : ""}>
+            <summary>
+              <span>${esc(category)}</span>
+              <span class="modbus-fc-count">${items.length}</span>
+            </summary>
             <div class="modbus-fc-grid">${cards}</div>
-          </section>
+          </details>
         `;
       })
       .join("");
