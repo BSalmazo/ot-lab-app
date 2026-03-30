@@ -186,6 +186,7 @@ def default_agent_info():
         "running": False,
         "last_seen": None,
         "available_ifaces": [],
+        "capabilities": [],
     }
 
 
@@ -445,6 +446,11 @@ def build_command_log_message(command_type: str, payload: dict):
         )
     if command_type == "STOP_CLIENT":
         return "Modbus client stop requested"
+    if command_type == "RUN_MODBUS_ACTION":
+        return (
+            f"Modbus action queued "
+            f"({payload.get('function_id', '-')}, {payload.get('host', '-') }:{payload.get('port', '-')})"
+        )
     return f"Command queued: {command_type}"
 
 
@@ -690,6 +696,32 @@ def api_actions_definitions(request: Request):
 @app.post("/api/actions/modbus/execute")
 def api_execute_modbus_action(request: Request, payload: dict = Body(default={})):
     session_id, state = get_session_state_from_request(request)
+    agent_info = state.get("agent_info") or {}
+    if not agent_info.get("connected"):
+        response = JSONResponse(
+            {"ok": False, "error": "Agent is not connected. Connect the local agent first."},
+            status_code=409,
+        )
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+
+    capabilities = set(agent_info.get("capabilities") or [])
+
+    if "modbus_actions_v1" not in capabilities:
+        response = JSONResponse(
+            {
+                "ok": False,
+                "error": (
+                    "Connected agent does not support Modbus Actions execution yet. "
+                    "Please update/restart the local agent and reconnect."
+                ),
+                "required_capability": "modbus_actions_v1",
+                "agent_capabilities": sorted(capabilities),
+            },
+            status_code=409,
+        )
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
 
     try:
         function_def, normalized = validate_modbus_action_payload(payload)
@@ -1088,6 +1120,7 @@ def agent_register(payload: dict = Body(...)):
     agent_info["running"] = payload.get("running", False)
     agent_info["last_seen"] = payload.get("timestamp", time.time())
     agent_info["available_ifaces"] = payload.get("available_ifaces", [])
+    agent_info["capabilities"] = payload.get("capabilities", agent_info.get("capabilities", []))
 
     push_log_for_session(
         session_id,
@@ -1122,6 +1155,10 @@ def agent_heartbeat(payload: dict = Body(...)):
         "available_ifaces",
         agent_info.get("available_ifaces", [])
     )
+    agent_info["capabilities"] = payload.get(
+        "capabilities",
+        agent_info.get("capabilities", [])
+    )
 
     return {
         "ok": True,
@@ -1151,6 +1188,10 @@ def agent_snapshot_ingest(payload: dict = Body(...)):
     agent_info["available_ifaces"] = payload.get(
         "available_ifaces",
         agent_info.get("available_ifaces", [])
+    )
+    agent_info["capabilities"] = payload.get(
+        "capabilities",
+        agent_info.get("capabilities", [])
     )
 
     modbus_summary = state.get("modbus_summary") or default_modbus_summary()

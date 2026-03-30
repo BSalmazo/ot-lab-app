@@ -54,6 +54,7 @@ class HttpClientMixin:
             "running": False,
             "timestamp": time.time(),
             "available_ifaces": self.get_available_interfaces(),
+            "capabilities": list(getattr(self, "capabilities", [])),
         }
         self._post("/api/agent/register", payload)
 
@@ -71,6 +72,7 @@ class HttpClientMixin:
             "running": self.sniffer is not None,
             "timestamp": time.time(),
             "available_ifaces": self.get_available_interfaces(),
+            "capabilities": list(getattr(self, "capabilities", [])),
         }
         self._post("/api/agent/heartbeat", payload)
         self.send_runtime_update()

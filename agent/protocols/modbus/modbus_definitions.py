@@ -1,6 +1,7 @@
 """Central source of truth for Modbus action metadata."""
 
 from copy import deepcopy
+from typing import Optional
 
 
 def _field(key, label, kind="number", required=True, placeholder="", default=None, minimum=None, maximum=None, options=None, help_text=""):
@@ -356,7 +357,7 @@ def get_modbus_function_by_id(function_id: str):
     return None
 
 
-def get_modbus_function_label(function_code: int, payload: dict | None = None):
+def get_modbus_function_label(function_code: int, payload: Optional[dict] = None):
     payload = payload or {}
     for function in MODBUS_FUNCTION_DEFINITIONS:
         if function["code"] != function_code:
