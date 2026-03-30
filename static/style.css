@@ -330,7 +330,7 @@ button:disabled {
   border: 1px solid rgba(148, 163, 184, 0.16);
   background: linear-gradient(180deg, rgba(17, 24, 39, 0.9), rgba(15, 23, 42, 0.95));
   border-radius: 12px;
-  padding: 12px;
+  padding: 10px;
 }
 
 .actions-section-head h3 {
@@ -437,50 +437,78 @@ button:disabled {
 }
 
 .modbus-action-form {
-  margin-top: 12px;
+  margin-top: 8px;
 }
 
 .action-host-row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: 2fr 1fr;
+  gap: 8px;
 }
 
 .action-form-grid {
-  margin-top: 10px;
+  margin-top: 8px;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .action-form-item {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
 }
 
 .action-form-item span {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--muted);
 }
 
+.modbus-action-form input,
+.modbus-action-form select {
+  padding: 7px 8px;
+  font-size: 12px;
+}
+
 .action-form-actions {
-  margin-top: 12px;
+  margin-top: 8px;
+}
+
+.action-preview-wrap {
+  margin-top: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 9px;
+  background: rgba(2, 6, 23, 0.45);
+}
+
+.action-preview-wrap summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: #93c5fd;
+  padding: 7px 9px;
+  user-select: none;
 }
 
 .action-preview {
-  margin-top: 10px;
+  margin-top: 0;
   background: var(--panel-3);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 10px;
-  padding: 10px;
+  border-top: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 0 0 9px 9px;
+  padding: 8px;
   font-size: 11px;
-  min-height: 72px;
-  max-height: 180px;
+  min-height: 54px;
+  max-height: 120px;
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.action-result {
+  margin-top: 8px;
+  min-height: 38px !important;
+  padding: 8px 10px;
+  font-size: 12px;
 }
 
 /* LOGS / PANELS */
@@ -787,6 +815,10 @@ button:disabled {
   .action-host-row,
   .action-form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .action-preview {
+    max-height: 100px;
   }
 }
 
