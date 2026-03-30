@@ -331,7 +331,10 @@ class SnifferMixin:
                 if self.mode == "MONITORING":
                     self._emit_alert(event, reasons, score)
 
-            self.send_snapshot()
+            now = time.time()
+            if (now - float(getattr(self, "_last_snapshot_sent_at", 0.0))) >= float(getattr(self, "snapshot_interval_s", 1.0)):
+                self.send_snapshot()
+                self._last_snapshot_sent_at = now
 
         except Exception as e:
             print(f"[agent] packet handling error: {type(e).__name__}: {e}")
