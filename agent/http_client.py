@@ -86,6 +86,17 @@ class HttpClientMixin:
     def send_event(self, event):
         self._post("/api/agent/event", event)
 
+    def send_command_result(self, command_id: str, status: str, message: str = ""):
+        self._post(
+            "/api/agent/command_result",
+            {
+                "session_id": self.session_id,
+                "command_id": command_id,
+                "status": status,
+                "message": message,
+            },
+        )
+
     def _post(self, path: str, payload: dict):
         try:
             requests.post(f"{self.server_url}{path}", json=payload, timeout=2)

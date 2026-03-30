@@ -89,6 +89,7 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
     def process_pending_commands(self):
         commands = self.fetch_pending_commands()
         for cmd in commands:
+            cmd_id = cmd.get("id")
             cmd_type = cmd.get("type")
             payload = cmd.get("payload", {}) or {}
             print(f"[agent] processing command {cmd_type} {payload}")
@@ -112,9 +113,15 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
                 elif cmd_type == "STOP_CLIENT":
                     self.stop_modbus_client()
                 elif cmd_type == "RUN_MODBUS_ACTION":
-                    self.execute_modbus_action(payload)
+                    result_msg = self.execute_modbus_action(payload)
+                    if cmd_id:
+                        self.send_command_result(cmd_id, "done", result_msg)
+                if cmd_type != "RUN_MODBUS_ACTION" and cmd_id:
+                    self.send_command_result(cmd_id, "done", f"{cmd_type} executed")
             except Exception as e:
                 print(f"[agent] command {cmd_type} failed: {e}")
+                if cmd_id:
+                    self.send_command_result(cmd_id, "error", str(e))
 
         if commands:
             self.send_runtime_update()
@@ -189,8 +196,7 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
         try:
             function_def, normalized = validate_modbus_action_payload(payload)
         except ModbusValidationError as exc:
-            print(f"[agent] invalid modbus action payload: {exc}")
-            return
+            raise RuntimeError(f"invalid modbus action payload: {exc}") from exc
 
         built = build_modbus_tcp_request(
             function_def,
@@ -213,27 +219,25 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
                 conn.sendall(built["request_bytes"])
                 response = conn.recv(512)
         except Exception as exc:
-            print(f"[agent] modbus action send failed: {type(exc).__name__}: {exc}")
-            return
+            raise RuntimeError(f"modbus action send failed: {type(exc).__name__}: {exc}") from exc
 
         if not response:
-            print("[agent] modbus action completed without response")
-            return
+            return "Request sent, no response received"
 
         if len(response) >= 8:
             function_code = response[7]
             if function_code & 0x80 and len(response) >= 9:
-                print(
-                    f"[agent] modbus action response exception fc={function_code & 0x7F} "
-                    f"code={response[8]} raw={response.hex(' ').upper()}"
+                response_message = (
+                    f"Exception response on FC{function_code & 0x7F} (code={response[8]})"
                 )
+                print(f"[agent] {response_message} raw={response.hex(' ').upper()}")
+                return response_message
             else:
-                print(
-                    f"[agent] modbus action response ok fc={function_code} "
-                    f"raw={response.hex(' ').upper()}"
-                )
+                response_message = f"Response received for FC{function_code}"
+                print(f"[agent] {response_message} raw={response.hex(' ').upper()}")
+                return response_message
         else:
-            print(f"[agent] short modbus response raw={response.hex(' ').upper()}")
+            return "Short response received"
 
     def apply_config_if_needed(self, config: dict):
         if not config:

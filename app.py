@@ -248,6 +248,7 @@ def ensure_session_state(session_id: str):
                 "remote_client": default_remote_client(),
                 "modbus_summary": default_modbus_summary(),
                 "pending_commands": [],
+                "action_commands": deque(maxlen=80),
             }
         return agents_by_session[session_id]
 
@@ -463,10 +464,43 @@ def queue_command(session_id: str, command_type: str, payload: dict):
         "created_at": time.time(),
     }
     with lock:
+        if "action_commands" not in state:
+            state["action_commands"] = deque(maxlen=80)
         state["pending_commands"].append(cmd)
+        if command_type == "RUN_MODBUS_ACTION":
+            state["action_commands"].appendleft({
+                "id": cmd["id"],
+                "status": "queued",
+                "protocol": "modbus",
+                "function_id": payload.get("function_id"),
+                "function_name": payload.get("function_name"),
+                "code_label": payload.get("code_label"),
+                "created_at": cmd["created_at"],
+                "updated_at": cmd["created_at"],
+                "message": "Queued for agent execution",
+            })
 
     push_log_for_session(session_id, build_command_log_message(command_type, payload))
     return cmd
+
+
+def update_action_command_status(
+    state: dict,
+    command_id: str,
+    status: str,
+    message: str = "",
+):
+    history = state.get("action_commands") or []
+    now = time.time()
+    for entry in history:
+        if entry.get("id") != command_id:
+            continue
+        entry["status"] = status
+        entry["updated_at"] = now
+        if message:
+            entry["message"] = message
+        return entry
+    return None
 
 
 def build_agent_config(request: Request, session_id: str, state: dict):
@@ -768,6 +802,8 @@ def api_execute_modbus_action(request: Request, payload: dict = Body(default={})
         "host": normalized["host"],
         "port": normalized["port"],
         "function_id": normalized["function_id"],
+        "function_name": function_def["name"],
+        "code_label": function_def.get("code_label"),
         "values": normalized,
         "request_hex": built["request_hex"],
     }
@@ -775,7 +811,7 @@ def api_execute_modbus_action(request: Request, payload: dict = Body(default={})
 
     response = JSONResponse({
         "ok": True,
-        "queued_command_id": queued["id"],
+        "command_id": queued["id"],
         "function": {
             "id": function_def["id"],
             "code": function_def["code"],
@@ -791,6 +827,15 @@ def api_execute_modbus_action(request: Request, payload: dict = Body(default={})
             "pdu_hex": built["pdu_hex"],
         },
     })
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.get("/api/actions/modbus/commands")
+def api_modbus_action_commands(request: Request):
+    session_id, state = get_session_state_from_request(request)
+    history = list(state.get("action_commands") or [])
+    response = JSONResponse({"ok": True, "commands": history, "session_id": session_id})
     set_session_cookie_if_needed(request, response, session_id)
     return response
 
@@ -1060,7 +1105,43 @@ def get_agent_commands(session_id: str):
     with lock:
         commands = list(state["pending_commands"])
         state["pending_commands"].clear()
+        for cmd in commands:
+            if cmd.get("type") == "RUN_MODBUS_ACTION":
+                update_action_command_status(
+                    state,
+                    command_id=cmd.get("id"),
+                    status="sent",
+                    message="Delivered to agent",
+                )
     return {"ok": True, "commands": commands}
+
+
+@app.post("/api/agent/command_result")
+def agent_command_result(payload: dict = Body(...)):
+    session_id = payload.get("session_id")
+    command_id = payload.get("command_id")
+    status = str(payload.get("status") or "").strip().lower()
+    message = str(payload.get("message") or "").strip()
+
+    if not session_id or not command_id:
+        return JSONResponse({"ok": False, "error": "Missing session_id or command_id"}, status_code=400)
+
+    if status not in {"done", "error"}:
+        status = "done"
+
+    state = ensure_session_state(session_id)
+    with lock:
+        updated = update_action_command_status(
+            state,
+            command_id=command_id,
+            status=status,
+            message=message or ("Completed" if status == "done" else "Execution failed"),
+        )
+
+    if updated and status == "error":
+        push_log_for_session(session_id, f"Modbus action failed: {updated.get('code_label', '-') } {updated.get('function_name', '-') } | {updated.get('message', '-')}")
+
+    return {"ok": True}
 
 
 @app.post("/api/agent/runtime")
@@ -1128,6 +1209,8 @@ def reset_system(request: Request):
         state["remote_client"] = default_remote_client()
         state["modbus_summary"] = default_modbus_summary()
         state["pending_commands"].clear()
+        if "action_commands" in state:
+            state["action_commands"].clear()
 
     response = JSONResponse({"ok": True, "session_id": session_id})
     set_session_cookie_if_needed(request, response, session_id)

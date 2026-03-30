@@ -113,6 +113,9 @@ def decode_modbus(payload: bytes, src_ip: str, src_port: int, dst_ip: str, dst_p
     }
 
     if function_code & 0x80:
+        base_function_code = function_code & 0x7F
+        decoded["raw_function_code"] = function_code
+        decoded["function_code"] = base_function_code
         decoded.update({
             "type": "EXCEPTION_RESPONSE" if is_response else "UNKNOWN_REQUEST",
             "exception_code": payload[8] if len(payload) > 8 else None,
