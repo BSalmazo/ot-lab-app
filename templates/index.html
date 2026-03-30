@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OT Lab App</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260330e" />
+  <link rel="stylesheet" href="/static/style.css?v=20260330f" />
 </head>
 <body>
   <div class="page">
@@ -72,6 +72,9 @@
           <section class="card alerts-card">
             <div class="card-head">
               <h2>Alerts</h2>
+              <div class="card-tools">
+                <button class="secondary small" id="openAlertsWindowBtn" type="button">Expand</button>
+              </div>
             </div>
             <div id="alertsPanel" class="log-panel"></div>
           </section>
@@ -116,6 +119,30 @@
         </div>
         <div class="window-body actions-window-body" id="actionsWindowBody">
           <div class="status slim">Loading Actions modules...</div>
+        </div>
+      </div>
+
+      <div class="floating-window hidden" id="actionsHistoryWindow">
+        <div class="window-head">
+          <span>Actions History</span>
+          <button class="window-close" type="button" data-close-window="actionsHistoryWindow">✕</button>
+        </div>
+        <div class="window-body">
+          <div id="actionsHistoryPanel" class="log-panel floating-log"></div>
+        </div>
+      </div>
+
+      <div class="floating-window hidden" id="alertsWindow">
+        <div class="window-head">
+          <span>Alerts Details</span>
+          <div class="window-tools">
+            <button id="copyAlertsBtn" class="secondary small" type="button">Copy</button>
+            <button class="window-close" type="button" data-close-window="alertsWindow">✕</button>
+          </div>
+        </div>
+        <div class="window-body">
+          <div id="alertsWindowPanel" class="log-panel floating-log"></div>
+          <pre id="alertsPlainPanel" class="log-panel floating-panel alerts-plain"></pre>
         </div>
       </div>
     </main>
@@ -240,13 +267,13 @@
     </div>
   </div>
 
-  <script src="/static/protocols/modbus/modbusDefinitions.js?v=20260330e"></script>
-  <script src="/static/protocols/modbus/modbusValidators.js?v=20260330e"></script>
-  <script src="/static/protocols/modbus/modbusBuilder.js?v=20260330e"></script>
-  <script src="/static/protocols/modbus/ModbusFunctionInfo.js?v=20260330e"></script>
-  <script src="/static/protocols/modbus/ModbusActionForm.js?v=20260330e"></script>
-  <script src="/static/protocols/modbus/ModbusTab.js?v=20260330e"></script>
-  <script src="/static/actions/ActionsWindow.js?v=20260330e"></script>
-  <script src="/static/app.js?v=20260330e"></script>
+  <script src="/static/protocols/modbus/modbusDefinitions.js?v=20260330f"></script>
+  <script src="/static/protocols/modbus/modbusValidators.js?v=20260330f"></script>
+  <script src="/static/protocols/modbus/modbusBuilder.js?v=20260330f"></script>
+  <script src="/static/protocols/modbus/ModbusFunctionInfo.js?v=20260330f"></script>
+  <script src="/static/protocols/modbus/ModbusActionForm.js?v=20260330f"></script>
+  <script src="/static/protocols/modbus/ModbusTab.js?v=20260330f"></script>
+  <script src="/static/actions/ActionsWindow.js?v=20260330f"></script>
+  <script src="/static/app.js?v=20260330f"></script>
 </body>
 </html>

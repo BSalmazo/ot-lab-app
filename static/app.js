@@ -561,6 +561,16 @@ function formatAlertCard(alert) {
   `;
 }
 
+function formatAlertPlain(alert) {
+  const severity = alert.severity || "INFO";
+  const eventType = String(alert.event_type || "UNKNOWN").replaceAll("_", " ");
+  const summary = alert.summary || "-";
+  const src = alert.src || "-";
+  const dst = alert.dst || "-";
+  const reasons = Array.isArray(alert.reasons) ? alert.reasons.join(" | ") : "-";
+  return `[${severity}] ${eventType}\n${summary}\n${src} -> ${dst}\nReasons: ${reasons}`;
+}
+
 function simplifyLogLine(log) {
   const line = String(log || "").trim();
   if (!line) return "-";
@@ -578,9 +588,12 @@ function simplifyLogLine(log) {
 
 async function refreshEvents() {
   const data = await apiGet("/api/events");
+  const alerts = Array.isArray(data.alerts) ? data.alerts : [];
 
   renderEventsPanel(data.modbus_summary, data.events);
-  renderList("alertsPanel", data.alerts, (a) => formatAlertCard(a));
+  renderList("alertsPanel", alerts, (a) => formatAlertCard(a));
+  renderList("alertsWindowPanel", alerts, (a) => formatAlertCard(a));
+  setText("alertsPlainPanel", alerts.map((a) => formatAlertPlain(a)).join("\n\n"));
   renderList("logsPanel", data.logs, (log) => escapeHtml(simplifyLogLine(log)));
 }
 
@@ -863,12 +876,13 @@ function initFloatingWindows() {
   byId("openIdsWindowBtn")?.addEventListener("click", () => openWindow("idsWindow"));
   byId("openLogsWindowBtn")?.addEventListener("click", () => openWindow("logsWindow"));
   byId("openActionsWindowBtn")?.addEventListener("click", () => openWindow("actionsWindow"));
+  byId("openAlertsWindowBtn")?.addEventListener("click", () => openWindow("alertsWindow"));
 
   document.querySelectorAll("[data-close-window]").forEach((btn) => {
     btn.addEventListener("click", () => closeWindow(btn.dataset.closeWindow));
   });
 
-  ["idsWindow", "logsWindow", "actionsWindow"].forEach((id, index) => {
+  ["idsWindow", "logsWindow", "actionsWindow", "actionsHistoryWindow", "alertsWindow"].forEach((id, index) => {
     const el = byId(id);
     if (!el) return;
 
@@ -876,6 +890,16 @@ function initFloatingWindows() {
     el.style.top = `${120 + index * 30}px`;
 
     makeWindowDraggable(el);
+  });
+
+  byId("copyAlertsBtn")?.addEventListener("click", async () => {
+    const plain = byId("alertsPlainPanel")?.textContent || "";
+    if (!plain.trim()) return;
+    try {
+      await navigator.clipboard.writeText(plain);
+    } catch (_err) {
+      console.error("Failed to copy alerts");
+    }
   });
 }
 
