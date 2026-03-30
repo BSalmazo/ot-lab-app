@@ -42,7 +42,7 @@ class HttpClientMixin:
                 "server": dict(self.server_runtime),
                 "client": dict(self.client_runtime),
             }
-        self._post("/api/agent/runtime", payload)
+        self._post("/api/agent/runtime", payload, timeout=(0.4, 0.8))
 
     def register(self):
         payload = {
@@ -56,7 +56,7 @@ class HttpClientMixin:
             "available_ifaces": self.get_available_interfaces(),
             "capabilities": list(getattr(self, "capabilities", [])),
         }
-        self._post("/api/agent/register", payload)
+        self._post("/api/agent/register", payload, timeout=(1.0, 2.0))
 
     def send_heartbeat(self):
         with self.runtime_lock:
@@ -74,17 +74,17 @@ class HttpClientMixin:
             "available_ifaces": self.get_available_interfaces(),
             "capabilities": list(getattr(self, "capabilities", [])),
         }
-        self._post("/api/agent/heartbeat", payload)
+        self._post("/api/agent/heartbeat", payload, timeout=(0.4, 0.8))
         self.send_runtime_update()
 
     def send_snapshot(self):
-        self._post("/api/agent/snapshot", self.snapshot())
+        self._post("/api/agent/snapshot", self.snapshot(), timeout=(0.4, 0.8))
 
     def send_alert(self, alert):
-        self._post("/api/agent/alert", alert)
+        self._post("/api/agent/alert", alert, timeout=(0.3, 0.6))
 
     def send_event(self, event):
-        self._post("/api/agent/event", event)
+        self._post("/api/agent/event", event, timeout=(0.3, 0.6))
 
     def send_command_result(self, command_id: str, status: str, message: str = ""):
         self._post(
@@ -95,10 +95,11 @@ class HttpClientMixin:
                 "status": status,
                 "message": message,
             },
+            timeout=(1.0, 2.0),
         )
 
-    def _post(self, path: str, payload: dict):
+    def _post(self, path: str, payload: dict, timeout=2):
         try:
-            requests.post(f"{self.server_url}{path}", json=payload, timeout=2)
+            requests.post(f"{self.server_url}{path}", json=payload, timeout=timeout)
         except Exception:
             pass

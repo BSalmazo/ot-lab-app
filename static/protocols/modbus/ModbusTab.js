@@ -154,6 +154,7 @@
 
       const startedAt = Date.now();
       let finalStatus = null;
+      const pollDelayMs = 300;
 
       while (Date.now() - startedAt < 20000) {
         const history = await fetchCommandHistory();
@@ -161,19 +162,19 @@
 
         const current = history.find((item) => item.id === commandId);
         if (!current) {
-          await new Promise((resolve) => setTimeout(resolve, 900));
+          await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
           continue;
         }
 
         finalStatus = String(current.status || "").toLowerCase();
         if (finalStatus === "queued") {
           statusEl.textContent = "Pending";
-          await new Promise((resolve) => setTimeout(resolve, 900));
+          await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
           continue;
         }
         if (finalStatus === "sent") {
           statusEl.textContent = "Sent";
-          await new Promise((resolve) => setTimeout(resolve, 900));
+          await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
           continue;
         }
         if (finalStatus === "done") {
