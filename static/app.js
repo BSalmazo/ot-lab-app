@@ -587,6 +587,7 @@ const openAlertDetails = new Set();
 let lastAlertsFingerprint = "";
 let lastAlertsPlain = "";
 let lastLogsFingerprint = "";
+let lastConnectionsFingerprint = "";
 
 function getAlertKey(alert) {
   return [
@@ -678,6 +679,29 @@ function formatAlertPlain(alert) {
   return `[${severity}] ${eventType}\n${summary}\n${src} -> ${dst}\nReasons: ${reasons}`;
 }
 
+function formatConnectionHistoryRow(row) {
+  const stateBadge = row.active ? "conn-active" : "conn-inactive";
+  const stateLabel = row.active ? "Active" : "Closed";
+  const normalFcs = Array.isArray(row.functions_seen) ? row.functions_seen : [];
+  const exceptionFcs = Array.isArray(row.exception_functions_seen) ? row.exception_functions_seen : [];
+  const fcText = normalFcs.map((fc) => `FC${fc}`).join(", ") || "-";
+  const excText = exceptionFcs.length ? ` | Exceptions: ${exceptionFcs.map((fc) => `FC${fc}`).join(", ")}` : "";
+  const ageText = row.age_s == null ? "-" : `${Number(row.age_s).toFixed(1)}s ago`;
+  const durText = row.duration_s == null ? "-" : `${Number(row.duration_s).toFixed(3)}s`;
+  const portText = row.port == null ? "-" : row.port;
+  return `
+    <div class="conn-row">
+      <div class="conn-top">
+        <span class="conn-state ${stateBadge}">${stateLabel}</span>
+        <span class="conn-meta">${escapeHtml(row.protocol || "Modbus/TCP")} | iface=${escapeHtml(row.interface || "-")} | port=${escapeHtml(portText)}</span>
+      </div>
+      <div class="conn-path">${escapeHtml(row.client_ip || "-")} → ${escapeHtml(row.server_ip || "-")}</div>
+      <div class="conn-fcs">${escapeHtml(fcText)}${escapeHtml(excText)}</div>
+      <div class="conn-extra">events=${escapeHtml(row.event_count || 0)} | duration=${escapeHtml(durText)} | last=${escapeHtml(ageText)}</div>
+    </div>
+  `;
+}
+
 function simplifyLogLine(log) {
   const line = String(log || "").trim();
   if (!line) return "-";
@@ -697,6 +721,7 @@ async function refreshEvents() {
   const data = await apiGet("/api/events");
   const alerts = Array.isArray(data.alerts) ? data.alerts : [];
   const logs = Array.isArray(data.logs) ? data.logs : [];
+  const connections = Array.isArray(data.connection_history) ? data.connection_history : [];
 
   renderEventsPanel(data.modbus_summary, data.events);
   const alertsFingerprint = alerts
@@ -721,6 +746,14 @@ async function refreshEvents() {
   if (logsFingerprint !== lastLogsFingerprint) {
     renderList("logsPanel", logs, (log) => escapeHtml(simplifyLogLine(log)));
     lastLogsFingerprint = logsFingerprint;
+  }
+
+  const connectionsFingerprint = connections
+    .map((c) => `${c.id}|${c.active}|${c.last_seen}|${(c.functions_seen || []).join(",")}|${(c.exception_functions_seen || []).join(",")}|${c.event_count}`)
+    .join("||");
+  if (connectionsFingerprint !== lastConnectionsFingerprint) {
+    renderList("connectionsHistoryPanel", connections, (row) => formatConnectionHistoryRow(row));
+    lastConnectionsFingerprint = connectionsFingerprint;
   }
 }
 
@@ -1002,6 +1035,7 @@ function getBundleDownloadUrl(platform) {
 function initFloatingWindows() {
   byId("openIdsWindowBtn")?.addEventListener("click", () => openWindow("idsWindow"));
   byId("openLogsWindowBtn")?.addEventListener("click", () => openWindow("logsWindow"));
+  byId("openConnectionsWindowBtn")?.addEventListener("click", () => openWindow("connectionsWindow"));
   byId("openActionsWindowBtn")?.addEventListener("click", () => openWindow("actionsWindow"));
   byId("openAlertsWindowBtn")?.addEventListener("click", () => openWindow("alertsWindow"));
 
@@ -1009,7 +1043,7 @@ function initFloatingWindows() {
     btn.addEventListener("click", () => closeWindow(btn.dataset.closeWindow));
   });
 
-  ["idsWindow", "logsWindow", "actionsWindow", "actionsHistoryWindow", "actionsPreviewWindow", "alertsWindow"].forEach((id, index) => {
+  ["idsWindow", "logsWindow", "connectionsWindow", "actionsWindow", "actionsHistoryWindow", "actionsPreviewWindow", "alertsWindow"].forEach((id, index) => {
     const el = byId(id);
     if (!el) return;
 
