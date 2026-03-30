@@ -148,6 +148,8 @@ body {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .alerts-card {
@@ -511,7 +513,7 @@ button:disabled {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: #93c5fd;
-  margin: 0 0 4px;
+  margin: 0 0 2px;
 }
 
 .action-command-history-list {
@@ -524,7 +526,7 @@ button:disabled {
   grid-template-columns: minmax(0, 1.4fr) auto minmax(0, 1.7fr);
   gap: 6px;
   align-items: center;
-  padding: 5px 7px;
+  padding: 4px 6px;
   border: 1px solid rgba(148, 163, 184, 0.16);
   background: rgba(15, 23, 42, 0.62);
   border-radius: 7px;
@@ -570,7 +572,7 @@ button:disabled {
 }
 
 #actionsHistoryPanel {
-  padding: 6px 8px;
+  padding: 4px 6px;
 }
 
 /* LOGS / PANELS */
@@ -1061,8 +1063,13 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: 12px;
   min-height: 0;
-  height: 100%;
+  height: auto;
   overflow: auto;
+}
+
+#eventsPanel {
+  flex: 1;
+  min-height: 0;
 }
 
 .event-summary.empty {
@@ -1162,8 +1169,8 @@ button:disabled {
 .fc-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 2px;
+  gap: 8px;
+  margin-top: 0;
 }
 
 .fc-badge {

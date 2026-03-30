@@ -273,16 +273,17 @@ function formatFunctions(functionsSeen, exceptionFunctionsSeen = []) {
   }
   const exceptionList = [...exceptions].sort((a, b) => a - b);
 
+  const union = [...new Set([...normalList, ...exceptionList])].sort((a, b) => a - b);
   return `
     <div class="fc-list">
-      ${normalList
-        .map((fc) => `<span class="fc-badge">FC${escapeHtml(fc)}</span>`)
-        .join("")}
-      ${exceptionList
-        .map(
-          (fc) =>
-            `<span class="fc-badge fc-badge-exception" data-tooltip="Exception response detected for FC${escapeHtml(fc)} (raw frame can appear as FC${escapeHtml(fc + 128)}). See Alerts for full reason.">FC${escapeHtml(fc)}</span>`
-        )
+      ${union
+        .map((fc) => {
+          const hasException = exceptionList.includes(fc);
+          if (!hasException) {
+            return `<span class="fc-badge">FC${escapeHtml(fc)}</span>`;
+          }
+          return `<span class="fc-badge fc-badge-exception" data-tooltip="Exception response detected for FC${escapeHtml(fc)} (raw frame can appear as FC${escapeHtml(fc + 128)}). Check Alerts for details.">FC${escapeHtml(fc)}</span>`;
+        })
         .join("")}
     </div>
   `;

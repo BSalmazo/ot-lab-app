@@ -42,7 +42,7 @@ class HttpClientMixin:
                 "server": dict(self.server_runtime),
                 "client": dict(self.client_runtime),
             }
-        self._post("/api/agent/runtime", payload, timeout=(0.4, 0.8))
+        self._post("/api/agent/runtime", payload, timeout=(0.8, 1.5))
 
     def register(self):
         payload = {
@@ -74,17 +74,17 @@ class HttpClientMixin:
             "available_ifaces": self.get_available_interfaces(),
             "capabilities": list(getattr(self, "capabilities", [])),
         }
-        self._post("/api/agent/heartbeat", payload, timeout=(0.4, 0.8))
+        self._post("/api/agent/heartbeat", payload, timeout=(0.8, 1.5))
         self.send_runtime_update()
 
     def send_snapshot(self):
-        self._post("/api/agent/snapshot", self.snapshot(), timeout=(0.4, 0.8))
+        self._post("/api/agent/snapshot", self.snapshot(), timeout=(0.8, 1.5))
 
     def send_alert(self, alert):
-        self._post("/api/agent/alert", alert, timeout=(0.3, 0.6))
+        self._post("/api/agent/alert", alert, timeout=(0.8, 1.5))
 
     def send_event(self, event):
-        self._post("/api/agent/event", event, timeout=(0.3, 0.6))
+        self._post("/api/agent/event", event, timeout=(0.8, 1.5))
 
     def send_command_result(self, command_id: str, status: str, message: str = ""):
         self._post(

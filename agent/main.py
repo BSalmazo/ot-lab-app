@@ -42,6 +42,8 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
         self.min_samples = 3
         self.period_deviation_threshold = 0.20
         self.max_timestamps = 20
+        self.snapshot_interval_s = 1.0
+        self._last_snapshot_sent_at = 0.0
 
         self.state = self._empty_state()
         self.runtime_lock = threading.Lock()
