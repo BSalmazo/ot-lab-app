@@ -248,6 +248,7 @@ def ensure_session_state(session_id: str):
                 "remote_server": default_remote_server(),
                 "remote_client": default_remote_client(),
                 "modbus_summary": default_modbus_summary(),
+                "connection_history": deque(maxlen=80),
                 "pending_commands": [],
                 "action_commands": deque(maxlen=80),
             }
@@ -294,6 +295,7 @@ def push_log_for_session(session_id: str, message: str):
         state["logs"].append(message)
 
 MODBUS_WRITE_FUNCTIONS = get_modbus_write_function_codes()
+MODBUS_ACTIVE_WINDOW_SECONDS = 2.0
 
 
 def normalize_event_type(event_type: str):
@@ -420,6 +422,74 @@ def update_modbus_summary_from_event(state: dict, payload: dict):
         except (TypeError, ValueError):
             pass
 
+    update_connection_history_from_event(
+        state=state,
+        iface=iface,
+        client_ip=client_ip,
+        server_ip=server_ip,
+        port=port,
+        function_code=base_fc,
+        is_exception=is_exception,
+        is_write=(base_fc in MODBUS_WRITE_FUNCTIONS or event_type in {"WRITE_REQUEST", "WRITE_RESPONSE"}),
+    )
+
+
+def update_connection_history_from_event(
+    state: dict,
+    iface: str,
+    client_ip: str,
+    server_ip: str,
+    port,
+    function_code: int,
+    is_exception: bool,
+    is_write: bool,
+):
+    history = state.get("connection_history")
+    if history is None:
+        history = deque(maxlen=80)
+        state["connection_history"] = history
+
+    key = f"{iface}|{client_ip}|{server_ip}|{port}"
+    now = time.time()
+    target = None
+
+    for item in history:
+        if item.get("key") == key:
+            target = item
+            break
+
+    if target is None:
+        target = {
+            "id": str(uuid.uuid4()),
+            "key": key,
+            "protocol": "Modbus/TCP",
+            "interface": iface,
+            "client_ip": client_ip,
+            "server_ip": server_ip,
+            "port": port,
+            "first_seen": now,
+            "last_seen": now,
+            "event_count": 0,
+            "functions_seen": [],
+            "exception_functions_seen": [],
+            "writes_detected": False,
+        }
+        history.appendleft(target)
+    else:
+        target["last_seen"] = now
+
+    target["event_count"] = int(target.get("event_count") or 0) + 1
+    fc = set(target.get("functions_seen") or [])
+    exc = set(target.get("exception_functions_seen") or [])
+    if is_exception:
+        exc.add(function_code)
+    else:
+        fc.add(function_code)
+    target["functions_seen"] = sorted(fc)
+    target["exception_functions_seen"] = sorted(exc)
+    if is_write:
+        target["writes_detected"] = True
+
 
 def build_modbus_summary(state: dict):
     summary = dict(state.get("modbus_summary") or default_modbus_summary())
@@ -428,7 +498,7 @@ def build_modbus_summary(state: dict):
         return {"detected": False}
 
     last_seen = summary.get("last_seen")
-    if last_seen is not None and (time.time() - last_seen > 20):
+    if last_seen is not None and (time.time() - last_seen > MODBUS_ACTIVE_WINDOW_SECONDS):
         summary["state"] = "Inactive"
     else:
         summary["state"] = "Active"
@@ -446,6 +516,37 @@ def build_modbus_summary(state: dict):
         "writes_detected": bool(summary.get("writes_detected")),
         "state": summary.get("state") or "Inactive",
     }
+
+
+def build_connection_history(state: dict):
+    now = time.time()
+    rows = []
+    for item in list(state.get("connection_history") or []):
+        last_seen = item.get("last_seen")
+        first_seen = item.get("first_seen")
+        active = bool(last_seen is not None and (now - float(last_seen)) <= MODBUS_ACTIVE_WINDOW_SECONDS)
+        duration_s = None
+        if first_seen is not None and last_seen is not None:
+            duration_s = round(max(0.0, float(last_seen) - float(first_seen)), 3)
+
+        rows.append({
+            "id": item.get("id"),
+            "protocol": item.get("protocol") or "Modbus/TCP",
+            "interface": item.get("interface"),
+            "client_ip": item.get("client_ip"),
+            "server_ip": item.get("server_ip"),
+            "port": item.get("port"),
+            "first_seen": first_seen,
+            "last_seen": last_seen,
+            "active": active,
+            "age_s": round(max(0.0, now - float(last_seen)), 3) if last_seen is not None else None,
+            "duration_s": duration_s,
+            "event_count": item.get("event_count") or 0,
+            "functions_seen": item.get("functions_seen") or [],
+            "exception_functions_seen": item.get("exception_functions_seen") or [],
+            "writes_detected": bool(item.get("writes_detected")),
+        })
+    return list(reversed(rows[:60]))
 
 
 def build_command_log_message(command_type: str, payload: dict):
@@ -750,6 +851,7 @@ def api_events(request: Request):
         "alerts": list(state["alerts"]),
         "logs": list(state["logs"]),
         "modbus_summary": build_modbus_summary(state),
+        "connection_history": build_connection_history(state),
         "session_id": session_id,
     })
     set_session_cookie_if_needed(request, response, session_id)
@@ -1223,6 +1325,8 @@ def reset_system(request: Request):
         state["remote_server"] = default_remote_server()
         state["remote_client"] = default_remote_client()
         state["modbus_summary"] = default_modbus_summary()
+        if "connection_history" in state:
+            state["connection_history"].clear()
         state["pending_commands"].clear()
         if "action_commands" in state:
             state["action_commands"].clear()

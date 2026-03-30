@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OT Lab App</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260330k" />
+  <link rel="stylesheet" href="/static/style.css?v=20260330l" />
 </head>
 <body>
   <div class="page">
@@ -85,6 +85,7 @@
         <div class="bottom-dock">
           <button class="dock-btn" id="openIdsWindowBtn" type="button">IDS State</button>
           <button class="dock-btn" id="openLogsWindowBtn" type="button">System Logs</button>
+          <button class="dock-btn" id="openConnectionsWindowBtn" type="button">Connections</button>
           <button class="dock-btn" id="openActionsWindowBtn" type="button">Actions</button>
         </div>
       </section>
@@ -153,6 +154,16 @@
         <div class="window-body">
           <div id="alertsWindowPanel" class="log-panel floating-log"></div>
           <pre id="alertsPlainPanel" class="log-panel floating-panel alerts-plain"></pre>
+        </div>
+      </div>
+
+      <div class="floating-window hidden" id="connectionsWindow">
+        <div class="window-head">
+          <span>Connections History</span>
+          <button class="window-close" type="button" data-close-window="connectionsWindow">✕</button>
+        </div>
+        <div class="window-body">
+          <div id="connectionsHistoryPanel" class="log-panel floating-log"></div>
         </div>
       </div>
     </main>
@@ -277,13 +288,13 @@
     </div>
   </div>
 
-  <script src="/static/protocols/modbus/modbusDefinitions.js?v=20260330k"></script>
-  <script src="/static/protocols/modbus/modbusValidators.js?v=20260330k"></script>
-  <script src="/static/protocols/modbus/modbusBuilder.js?v=20260330k"></script>
-  <script src="/static/protocols/modbus/ModbusFunctionInfo.js?v=20260330k"></script>
-  <script src="/static/protocols/modbus/ModbusActionForm.js?v=20260330k"></script>
-  <script src="/static/protocols/modbus/ModbusTab.js?v=20260330k"></script>
-  <script src="/static/actions/ActionsWindow.js?v=20260330k"></script>
-  <script src="/static/app.js?v=20260330k"></script>
+  <script src="/static/protocols/modbus/modbusDefinitions.js?v=20260330l"></script>
+  <script src="/static/protocols/modbus/modbusValidators.js?v=20260330l"></script>
+  <script src="/static/protocols/modbus/modbusBuilder.js?v=20260330l"></script>
+  <script src="/static/protocols/modbus/ModbusFunctionInfo.js?v=20260330l"></script>
+  <script src="/static/protocols/modbus/ModbusActionForm.js?v=20260330l"></script>
+  <script src="/static/protocols/modbus/ModbusTab.js?v=20260330l"></script>
+  <script src="/static/actions/ActionsWindow.js?v=20260330l"></script>
+  <script src="/static/app.js?v=20260330l"></script>
 </body>
 </html>

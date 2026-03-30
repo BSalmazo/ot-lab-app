@@ -868,6 +868,11 @@ button:disabled {
   height: 620px;
 }
 
+#connectionsWindow {
+  width: 860px;
+  height: 520px;
+}
+
 #actionsPreviewWindow {
   width: 700px;
   height: 420px;
@@ -1201,6 +1206,62 @@ button:disabled {
 
 .write-no {
   color: var(--ok);
+}
+
+.conn-row {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.72);
+  padding: 7px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.conn-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.conn-state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.conn-state.conn-active {
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.16);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.conn-state.conn-inactive {
+  color: #cbd5e1;
+  background: rgba(100, 116, 139, 0.18);
+  border: 1px solid rgba(148, 163, 184, 0.26);
+}
+
+.conn-meta,
+.conn-path,
+.conn-fcs,
+.conn-extra {
+  font-size: 11px;
+  line-height: 1.25;
+  color: #cbd5e1;
+}
+
+.conn-path {
+  color: #dbeafe;
+}
+
+.conn-fcs {
+  color: #f8fafc;
 }
 
 /* RELEASES AND DOWNLOADS */
