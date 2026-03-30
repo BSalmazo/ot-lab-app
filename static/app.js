@@ -282,7 +282,7 @@ function formatFunctions(functionsSeen, exceptionFunctionsSeen = []) {
           if (!hasException) {
             return `<span class="fc-badge">FC${escapeHtml(fc)}</span>`;
           }
-          return `<span class="fc-badge fc-badge-exception" data-tooltip="Exception response detected for FC${escapeHtml(fc)} (raw frame can appear as FC${escapeHtml(fc + 128)}). Check Alerts for details.">FC${escapeHtml(fc)}</span>`;
+          return `<span class="fc-badge fc-badge-exception" title="Exception response detected for FC${escapeHtml(fc)} (raw frame can appear as FC${escapeHtml(fc + 128)}). Check Alerts for details.">FC${escapeHtml(fc)}</span>`;
         })
         .join("")}
     </div>

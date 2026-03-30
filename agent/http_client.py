@@ -1,9 +1,42 @@
 import time
+import threading
+from queue import Empty, Full, Queue
 
 import requests
 
 
 class HttpClientMixin:
+    def _ensure_async_post_worker(self):
+        if getattr(self, "_post_queue", None) is not None:
+            return
+
+        self._post_queue = Queue(maxsize=600)
+        self._post_session = requests.Session()
+
+        def worker():
+            while True:
+                try:
+                    item = self._post_queue.get()
+                except Exception:
+                    continue
+
+                if not item:
+                    continue
+
+                path, payload, timeout = item
+                try:
+                    self._post_session.post(
+                        f"{self.server_url}{path}",
+                        json=payload,
+                        timeout=timeout,
+                    )
+                except Exception:
+                    pass
+
+        thread = threading.Thread(target=worker, name="agent-http-post-worker", daemon=True)
+        thread.start()
+        self._post_worker = thread
+
     def fetch_remote_config(self):
         try:
             response = requests.get(
@@ -56,7 +89,7 @@ class HttpClientMixin:
             "available_ifaces": self.get_available_interfaces(),
             "capabilities": list(getattr(self, "capabilities", [])),
         }
-        self._post("/api/agent/register", payload, timeout=(1.0, 2.0))
+        self._post("/api/agent/register", payload, timeout=(1.0, 2.0), critical=True)
 
     def send_heartbeat(self):
         with self.runtime_lock:
@@ -96,10 +129,33 @@ class HttpClientMixin:
                 "message": message,
             },
             timeout=(1.0, 2.0),
+            critical=True,
         )
 
-    def _post(self, path: str, payload: dict, timeout=2):
+    def _post(self, path: str, payload: dict, timeout=2, critical: bool = False):
+        self._ensure_async_post_worker()
+        item = (path, payload, timeout)
+
         try:
-            requests.post(f"{self.server_url}{path}", json=payload, timeout=timeout)
+            self._post_queue.put_nowait(item)
+            return
+        except Full:
+            pass
+
+        if critical:
+            try:
+                self._post_queue.put(item, timeout=0.3)
+                return
+            except Full:
+                pass
+
+        # Queue is full: drop one oldest queued item and keep the freshest telemetry.
+        try:
+            _ = self._post_queue.get_nowait()
+        except Empty:
+            pass
+
+        try:
+            self._post_queue.put_nowait(item)
         except Exception:
             pass
