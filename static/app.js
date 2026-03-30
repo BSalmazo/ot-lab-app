@@ -282,7 +282,8 @@ function formatFunctions(functionsSeen, exceptionFunctionsSeen = []) {
           if (!hasException) {
             return `<span class="fc-badge">FC${escapeHtml(fc)}</span>`;
           }
-          return `<span class="fc-badge fc-badge-exception" title="Exception response detected for FC${escapeHtml(fc)} (raw frame can appear as FC${escapeHtml(fc + 128)}). Check Alerts for details.">FC${escapeHtml(fc)}</span>`;
+          const tip = exceptionInfoByFc.get(fc) || `Exception response detected for FC${fc} (raw frame may appear as FC${fc + 128}).`;
+          return `<span class="fc-badge fc-badge-exception" data-fc-exception-tooltip="${escapeHtml(tip)}">FC${escapeHtml(fc)}</span>`;
         })
         .join("")}
     </div>
@@ -364,6 +365,7 @@ function renderEventsPanel(summary, events = []) {
       </div>
     </div>
   `;
+  bindFcExceptionTooltips(el);
 }
 
 function stripPort(value) {
@@ -588,6 +590,8 @@ let lastAlertsFingerprint = "";
 let lastAlertsPlain = "";
 let lastLogsFingerprint = "";
 let lastConnectionsFingerprint = "";
+let exceptionInfoByFc = new Map();
+let fcTooltipEl = null;
 
 function getAlertKey(alert) {
   return [
@@ -609,6 +613,15 @@ function parseExceptionCode(alert) {
   const summaryMatch = String(alert.summary || "").match(/exception(?:[_ ]response)?(?:[_ ]code)?[=: ]+(\d+)/i);
   if (summaryMatch) return Number(summaryMatch[1]);
   return null;
+}
+
+function getExceptionActionHint(exceptionCode) {
+  if (exceptionCode === 1) return "Verify whether the PLC supports this function code.";
+  if (exceptionCode === 2) return "Check address mapping and register boundaries.";
+  if (exceptionCode === 3) return "Validate values/quantity against device limits.";
+  if (exceptionCode === 4) return "Check PLC diagnostics for internal device failure.";
+  if (exceptionCode === 6) return "Device busy. Retry with backoff or lower request burst.";
+  return "Review request payload and PLC-specific Modbus support.";
 }
 
 function inferModbusContext(alert) {
@@ -648,6 +661,15 @@ function formatAlertCard(alert) {
   const readableReason = context.isException
     ? `Reason: ${context.exceptionLabel || "not identified"}`
     : reasons.join(" | ");
+  const whatHappened = context.isException
+    ? `Server rejected ${context.fc ? `FC${context.fc}` : "the request"}`
+    : (eventType || "Modbus event");
+  const likelyCause = context.isException
+    ? (context.exceptionLabel || "Request not accepted by device")
+    : (reasons[0] || "Traffic matched a configured detection rule");
+  const operatorAction = context.isException
+    ? getExceptionActionHint(context.exceptionCode)
+    : "Validate whether this behavior is expected for the process state.";
 
   return `
     <div class="alert-card ${severityClass}">
@@ -657,6 +679,11 @@ function formatAlertCard(alert) {
       </div>
       <div class="alert-summary">${escapeHtml(readableTitle)}</div>
       <div class="alert-srcdst">${escapeHtml(alert.src || "-")} → ${escapeHtml(alert.dst || "-")}</div>
+      <div class="alert-brief-grid">
+        <div class="alert-brief-row"><span class="alert-brief-k">What happened</span><span class="alert-brief-v">${escapeHtml(whatHappened)}</span></div>
+        <div class="alert-brief-row"><span class="alert-brief-k">Likely cause</span><span class="alert-brief-v">${escapeHtml(likelyCause)}</span></div>
+        <div class="alert-brief-row"><span class="alert-brief-k">Operator action</span><span class="alert-brief-v">${escapeHtml(operatorAction)}</span></div>
+      </div>
       ${readableReason ? `<div class="alert-reason">${escapeHtml(readableReason)}</div>` : ""}
       <details class="alert-detail" data-alert-key="${escapeHtml(alertKey)}" ${detailsOpen}>
         <summary>Technical details</summary>
@@ -702,6 +729,59 @@ function formatConnectionHistoryRow(row) {
   `;
 }
 
+function buildExceptionInfoByFc(alerts) {
+  const map = new Map();
+  for (let i = alerts.length - 1; i >= 0; i -= 1) {
+    const alert = alerts[i];
+    const ctx = inferModbusContext(alert);
+    if (!ctx.isException || !ctx.fc) continue;
+    if (map.has(ctx.fc)) continue;
+    const reason = ctx.exceptionLabel || "Exception";
+    map.set(ctx.fc, `FC${ctx.fc} exception: ${reason}. ${getExceptionActionHint(ctx.exceptionCode)}`);
+  }
+  return map;
+}
+
+function ensureFcTooltip() {
+  if (fcTooltipEl) return fcTooltipEl;
+  const el = document.createElement("div");
+  el.id = "fcExceptionTooltip";
+  el.className = "floating-tip hidden";
+  document.body.appendChild(el);
+  fcTooltipEl = el;
+  return el;
+}
+
+function hideFcTooltip() {
+  const el = ensureFcTooltip();
+  el.classList.add("hidden");
+}
+
+function showFcTooltip(text, x, y) {
+  const el = ensureFcTooltip();
+  el.textContent = text || "";
+  const left = Math.min(window.innerWidth - 320, Math.max(8, x + 12));
+  const top = Math.min(window.innerHeight - 80, Math.max(8, y + 12));
+  el.style.left = `${left}px`;
+  el.style.top = `${top}px`;
+  el.classList.remove("hidden");
+}
+
+function bindFcExceptionTooltips(root) {
+  if (!root) return;
+  root.querySelectorAll("[data-fc-exception-tooltip]").forEach((node) => {
+    node.addEventListener("mouseenter", (ev) => {
+      showFcTooltip(node.getAttribute("data-fc-exception-tooltip") || "", ev.clientX || 20, ev.clientY || 20);
+    });
+    node.addEventListener("mousemove", (ev) => {
+      showFcTooltip(node.getAttribute("data-fc-exception-tooltip") || "", ev.clientX || 20, ev.clientY || 20);
+    });
+    node.addEventListener("mouseleave", () => {
+      hideFcTooltip();
+    });
+  });
+}
+
 function simplifyLogLine(log) {
   const line = String(log || "").trim();
   if (!line) return "-";
@@ -722,6 +802,7 @@ async function refreshEvents() {
   const alerts = Array.isArray(data.alerts) ? data.alerts : [];
   const logs = Array.isArray(data.logs) ? data.logs : [];
   const connections = Array.isArray(data.connection_history) ? data.connection_history : [];
+  exceptionInfoByFc = buildExceptionInfoByFc(alerts);
 
   renderEventsPanel(data.modbus_summary, data.events);
   const alertsFingerprint = alerts
@@ -1061,6 +1142,9 @@ function initFloatingWindows() {
       console.error("Failed to copy alerts");
     }
   });
+
+  document.addEventListener("mouseleave", () => hideFcTooltip());
+  window.addEventListener("blur", () => hideFcTooltip());
 }
 
 function bindAlertDetails(containerId) {
