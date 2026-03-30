@@ -1,5 +1,5 @@
 import platform
-import platform
+import time
 from statistics import mean
 
 from scapy.all import AsyncSniffer, IP, TCP, get_if_list
@@ -93,9 +93,18 @@ class SnifferMixin:
             self.sniffer = None
 
     def get_available_interfaces(self):
+        now = float(time.time())
+        cache_ttl_s = 15.0
+        cached_ifaces = getattr(self, "_cached_ifaces", None)
+        cached_at = getattr(self, "_cached_ifaces_at", 0.0)
+        if cached_ifaces is not None and (now - float(cached_at)) < cache_ttl_s:
+            return list(cached_ifaces)
         try:
             ifaces = sorted(set(get_if_list()))
-            return [iface for iface in ifaces if iface]
+            cleaned = [iface for iface in ifaces if iface]
+            self._cached_ifaces = cleaned
+            self._cached_ifaces_at = now
+            return cleaned
         except Exception:
             return []
 
