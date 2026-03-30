@@ -150,7 +150,7 @@ body {
 }
 
 .alerts-card {
-  min-height: 290px;
+  min-height: 360px;
 }
 
 /* HEADERS */
@@ -298,7 +298,7 @@ button:disabled {
 
 .actions-window-body {
   max-height: 72vh;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .actions-window-body.catalog-expanded {
@@ -472,14 +472,40 @@ button:disabled {
 }
 
 .action-form-actions {
+  margin-top: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.action-form-toolbar {
   margin-top: 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.action-form-actions button {
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+.action-inline-status {
+  font-size: 11px;
+  color: #cbd5e1;
 }
 
 .action-preview-wrap {
-  margin-top: 8px;
+  margin-top: 0;
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 9px;
   background: rgba(2, 6, 23, 0.45);
+}
+
+.action-preview-wrap.compact {
+  min-width: 0;
 }
 
 .action-preview-wrap summary {
@@ -497,18 +523,11 @@ button:disabled {
   border-radius: 0 0 9px 9px;
   padding: 8px;
   font-size: 11px;
-  min-height: 54px;
-  max-height: 120px;
+  min-height: 48px;
+  max-height: 90px;
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-.action-result {
-  margin-top: 8px;
-  min-height: 38px !important;
-  padding: 8px 10px;
-  font-size: 12px;
 }
 
 .action-command-history {
@@ -588,6 +607,7 @@ button:disabled {
   border: 1px solid var(--line);
   white-space: pre-wrap;
   min-height: 0;
+  user-select: text;
 }
 
 .events-card .log-panel {
@@ -597,7 +617,7 @@ button:disabled {
 }
 
 .alerts-card .log-panel {
-  height: 220px;
+  height: 290px;
   overflow: auto;
   font-size: 12px;
 }
@@ -822,6 +842,22 @@ button:disabled {
   font-size: 12px;
 }
 
+#actionsHistoryWindow {
+  width: 860px;
+}
+
+#alertsWindow {
+  width: 860px;
+}
+
+.alerts-plain {
+  margin-top: 10px;
+  height: 180px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 /* MODAL */
 
 .modal {
@@ -967,6 +1003,10 @@ button:disabled {
 
   .action-host-row,
   .action-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .action-form-toolbar {
     grid-template-columns: 1fr;
   }
 

@@ -55,7 +55,7 @@
     return values;
   }
 
-  function renderActionForm({ container, functionDef, values, onSubmit }) {
+  function renderActionForm({ container, functionDef, values, onSubmit, onOpenHistory }) {
     const fieldsHtml = (functionDef.fields || [])
       .map((field) => renderField(field, values[field.key]))
       .join("");
@@ -74,18 +74,22 @@
       <div class="action-form-grid">
         ${fieldsHtml}
       </div>
-      <div class="action-form-actions">
-        <button type="button" data-action-run>Execute Test</button>
+      <div class="action-form-toolbar">
+        <div class="action-form-actions">
+          <button type="button" data-action-run>Execute</button>
+          <button type="button" class="secondary" data-action-history>History</button>
+          <span class="action-inline-status" data-action-status></span>
+        </div>
+        <details class="action-preview-wrap compact">
+          <summary>Preview</summary>
+          <pre class="action-preview" data-action-preview></pre>
+        </details>
       </div>
-      <details class="action-preview-wrap">
-        <summary>Request Preview</summary>
-        <pre class="action-preview" data-action-preview></pre>
-      </details>
-      <div class="status slim action-result" data-action-result>-</div>
     `;
 
     const runBtn = container.querySelector("[data-action-run]");
-    const resultEl = container.querySelector("[data-action-result]");
+    const historyBtn = container.querySelector("[data-action-history]");
+    const statusEl = container.querySelector("[data-action-status]");
     const previewEl = container.querySelector("[data-action-preview]");
 
     function updatePreview() {
@@ -107,7 +111,7 @@
       const payloadValues = collectValues(container);
       const errors = validators.validateFields(functionDef.fields || [], payloadValues);
       if (errors.length > 0) {
-        resultEl.textContent = errors.join(" | ");
+        statusEl.textContent = errors.join(" | ");
         return;
       }
 
@@ -119,12 +123,18 @@
       };
 
       runBtn.disabled = true;
-      resultEl.textContent = "Queueing request...";
+      statusEl.textContent = "Pending...";
 
       try {
-        await onSubmit(payload, resultEl, previewEl);
+        await onSubmit(payload, statusEl, previewEl);
       } finally {
         runBtn.disabled = false;
+      }
+    });
+
+    historyBtn?.addEventListener("click", () => {
+      if (typeof onOpenHistory === "function") {
+        onOpenHistory();
       }
     });
 

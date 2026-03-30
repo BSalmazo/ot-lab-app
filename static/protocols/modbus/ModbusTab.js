@@ -54,7 +54,6 @@
         </label>
 
         <div class="modbus-action-form" data-modbus-form></div>
-        <div class="action-command-history" data-command-history></div>
       </section>
     `;
 
@@ -73,7 +72,11 @@
 
     const formContainer = container.querySelector("[data-modbus-form]");
     const functionSelect = container.querySelector("[data-function-select]");
-    const historyContainer = container.querySelector("[data-command-history]");
+    const historyContainer = document.getElementById("actionsHistoryPanel");
+    const openHistoryWindow = () => {
+      const win = document.getElementById("actionsHistoryWindow");
+      if (win) win.classList.remove("hidden");
+    };
 
     function formatStatus(status) {
       const normalized = String(status || "").toLowerCase();
@@ -85,9 +88,10 @@
     }
 
     function renderCommandHistory(commands) {
-      const rows = (commands || []).slice(0, 6);
+      const rows = (commands || []).slice(0, 40);
+      if (!historyContainer) return;
       if (!rows.length) {
-        historyContainer.innerHTML = "";
+        historyContainer.innerHTML = `<div class="log-item">No actions executed yet.</div>`;
         return;
       }
 
@@ -119,7 +123,7 @@
       return Array.isArray(data.commands) ? data.commands : [];
     }
 
-    async function submit(payload, resultEl, previewEl) {
+    async function submit(payload, statusEl, previewEl) {
       const response = await fetch("/api/actions/modbus/execute", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -129,13 +133,13 @@
       const data = await response.json();
 
       if (!data.ok) {
-        resultEl.textContent = `Error: ${data.error || "failed to execute action"}`;
+        statusEl.textContent = `Error: ${data.error || "failed to execute action"}`;
         renderCommandHistory(await fetchCommandHistory());
         return;
       }
 
       const commandId = data.command_id;
-      resultEl.textContent = `Pending: FC ${data.function.code_label} ${data.function.name}`;
+      statusEl.textContent = `Pending`;
       if (data.preview) {
         previewEl.textContent = JSON.stringify(data.preview, null, 2);
       }
@@ -155,27 +159,27 @@
 
         finalStatus = String(current.status || "").toLowerCase();
         if (finalStatus === "queued") {
-          resultEl.textContent = "Pending: queued";
+          statusEl.textContent = "Pending";
           await new Promise((resolve) => setTimeout(resolve, 900));
           continue;
         }
         if (finalStatus === "sent") {
-          resultEl.textContent = "Pending: sent to agent";
+          statusEl.textContent = "Sent";
           await new Promise((resolve) => setTimeout(resolve, 900));
           continue;
         }
         if (finalStatus === "done") {
-          resultEl.textContent = `Done: ${current.message || "request executed"}`;
+          statusEl.textContent = "Done";
           break;
         }
         if (finalStatus === "error") {
-          resultEl.textContent = `Error: ${current.message || "request failed"}`;
+          statusEl.textContent = "Error";
           break;
         }
       }
 
       if (!finalStatus || finalStatus === "queued" || finalStatus === "sent") {
-        resultEl.textContent = "Pending: awaiting agent confirmation";
+        statusEl.textContent = "Pending";
       }
     }
 
@@ -187,10 +191,11 @@
         container: formContainer,
         functionDef: selectedFunction,
         values,
-        onSubmit: async (payload, resultEl, previewEl) => {
+        onSubmit: async (payload, statusEl, previewEl) => {
           state.valuesByFunction[selectedFunction.id] = payload.values;
-          await submit(payload, resultEl, previewEl);
+          await submit(payload, statusEl, previewEl);
         },
+        onOpenHistory: openHistoryWindow,
       });
     }
 
