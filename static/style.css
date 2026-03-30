@@ -97,7 +97,7 @@ body {
   display: grid;
   grid-template-columns: 360px minmax(0, 1fr);
   gap: 12px;
-  align-items: start;
+  align-items: stretch;
   min-height: 0;
   flex: 1;
 }
@@ -143,14 +143,17 @@ body {
 }
 
 .events-card {
-  flex: 1;
+  flex: 0 0 auto;
   min-width: 0;
   min-height: 0;
   overflow: visible;
 }
 
 .alerts-card {
-  min-height: 360px;
+  flex: 1 1 0;
+  min-height: 420px;
+  display: flex;
+  flex-direction: column;
 }
 
 /* HEADERS */
@@ -481,10 +484,10 @@ button:disabled {
 
 .action-form-toolbar {
   margin-top: 8px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(240px, 1fr);
+  display: flex;
+  justify-content: space-between;
   gap: 8px;
-  align-items: start;
+  align-items: center;
 }
 
 .action-form-actions button {
@@ -495,39 +498,6 @@ button:disabled {
 .action-inline-status {
   font-size: 11px;
   color: #cbd5e1;
-}
-
-.action-preview-wrap {
-  margin-top: 0;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 9px;
-  background: rgba(2, 6, 23, 0.45);
-}
-
-.action-preview-wrap.compact {
-  min-width: 0;
-}
-
-.action-preview-wrap summary {
-  cursor: pointer;
-  font-size: 11px;
-  color: #93c5fd;
-  padding: 7px 9px;
-  user-select: none;
-}
-
-.action-preview {
-  margin-top: 0;
-  background: var(--panel-3);
-  border-top: 1px solid rgba(148, 163, 184, 0.15);
-  border-radius: 0 0 9px 9px;
-  padding: 8px;
-  font-size: 11px;
-  min-height: 48px;
-  max-height: 90px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
 }
 
 .action-command-history {
@@ -617,7 +587,9 @@ button:disabled {
 }
 
 .alerts-card .log-panel {
-  height: 290px;
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 360px;
   overflow: auto;
   font-size: 12px;
 }
@@ -755,6 +727,22 @@ button:disabled {
   color: #cbd5e1;
 }
 
+.alert-detail {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #cbd5e1;
+}
+
+.alert-detail summary {
+  cursor: pointer;
+  color: #93c5fd;
+  user-select: none;
+}
+
+.alert-detail div {
+  margin-top: 4px;
+}
+
 .on {
   color: var(--ok);
 }
@@ -848,6 +836,18 @@ button:disabled {
 
 #alertsWindow {
   width: 860px;
+}
+
+#actionsPreviewWindow {
+  width: 700px;
+}
+
+.preview-panel {
+  margin-top: 0;
+  height: 280px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .alerts-plain {
@@ -1007,7 +1007,8 @@ button:disabled {
   }
 
   .action-form-toolbar {
-    grid-template-columns: 1fr;
+    align-items: flex-start;
+    justify-content: flex-start;
   }
 
   .action-command-row {
@@ -1015,9 +1016,6 @@ button:disabled {
     gap: 4px;
   }
 
-  .action-preview {
-    max-height: 100px;
-  }
 }
 
 /* EVENTS SUMMARY PANEL */

@@ -540,6 +540,46 @@ function formatEventCard(event) {
   `;
 }
 
+const MODBUS_EXCEPTION_MAP = {
+  1: "Illegal Function",
+  2: "Illegal Data Address",
+  3: "Illegal Data Value",
+  4: "Server Device Failure",
+  5: "Acknowledge",
+  6: "Server Device Busy",
+  8: "Memory Parity Error",
+  10: "Gateway Path Unavailable",
+  11: "Gateway Target Failed to Respond",
+};
+
+function parseExceptionCode(alert) {
+  const reasons = Array.isArray(alert.reasons) ? alert.reasons : [];
+  for (const reason of reasons) {
+    const match = String(reason || "").match(/exception[_ ]code[=: ]+(\d+)/i);
+    if (match) return Number(match[1]);
+  }
+  const summaryMatch = String(alert.summary || "").match(/exception(?:[_ ]response)?(?:[_ ]code)?[=: ]+(\d+)/i);
+  if (summaryMatch) return Number(summaryMatch[1]);
+  return null;
+}
+
+function inferModbusContext(alert) {
+  const summary = String(alert.summary || "");
+  const functionMatch = summary.match(/\bFC(\d+)\b/i);
+  const fc = functionMatch ? Number(functionMatch[1]) : null;
+  const isException = String(alert.event_type || "").toUpperCase() === "EXCEPTION_RESPONSE" || /\bexception\b/i.test(summary);
+  const exceptionCode = isException ? parseExceptionCode(alert) : null;
+  return {
+    fc,
+    isException,
+    exceptionCode,
+    exceptionLabel:
+      exceptionCode !== null && MODBUS_EXCEPTION_MAP[exceptionCode]
+        ? `${exceptionCode} - ${MODBUS_EXCEPTION_MAP[exceptionCode]}`
+        : exceptionCode,
+  };
+}
+
 function formatAlertCard(alert) {
   const severity = alert.severity || "INFO";
   const summary = alert.summary || `${alert.event_type || "UNKNOWN"} from ${alert.src || "-"} to ${alert.dst || "-"}`;
@@ -547,6 +587,17 @@ function formatAlertCard(alert) {
   const eventType = String(alert.event_type || "UNKNOWN").replaceAll("_", " ");
   const severityClass = `alert-level-${escapeHtml(severity)}`;
   const severityBadgeClass = `sev-${escapeHtml(severity)}`;
+  const context = inferModbusContext(alert);
+
+  let readableTitle = summary;
+  if (context.isException) {
+    readableTitle = context.fc
+      ? `PLC/Servidor rejeitou FC${context.fc} (Exception)`
+      : "PLC/Servidor retornou Exception";
+  }
+  const readableReason = context.isException
+    ? `Motivo: ${context.exceptionLabel || "não identificado"}`
+    : reasons.join(" | ");
 
   return `
     <div class="alert-card ${severityClass}">
@@ -554,9 +605,16 @@ function formatAlertCard(alert) {
         <span class="alert-severity ${severityBadgeClass}">${escapeHtml(severity)}</span>
         <span class="alert-event">${escapeHtml(eventType)}</span>
       </div>
-      <div class="alert-summary">${escapeHtml(summary)}</div>
+      <div class="alert-summary">${escapeHtml(readableTitle)}</div>
       <div class="alert-srcdst">${escapeHtml(alert.src || "-")} → ${escapeHtml(alert.dst || "-")}</div>
-      ${reasons.length ? `<div class="alert-reason">${escapeHtml(reasons.join(" | "))}</div>` : ""}
+      ${readableReason ? `<div class="alert-reason">${escapeHtml(readableReason)}</div>` : ""}
+      <details class="alert-detail">
+        <summary>Technical details</summary>
+        <div><strong>Summary:</strong> ${escapeHtml(summary)}</div>
+        ${context.fc ? `<div><strong>Function:</strong> FC${escapeHtml(context.fc)}</div>` : ""}
+        ${context.exceptionLabel ? `<div><strong>Exception:</strong> ${escapeHtml(context.exceptionLabel)}</div>` : ""}
+        ${reasons.length ? `<div><strong>Reasons:</strong> ${escapeHtml(reasons.join(" | "))}</div>` : ""}
+      </details>
     </div>
   `;
 }
@@ -882,7 +940,7 @@ function initFloatingWindows() {
     btn.addEventListener("click", () => closeWindow(btn.dataset.closeWindow));
   });
 
-  ["idsWindow", "logsWindow", "actionsWindow", "actionsHistoryWindow", "alertsWindow"].forEach((id, index) => {
+  ["idsWindow", "logsWindow", "actionsWindow", "actionsHistoryWindow", "actionsPreviewWindow", "alertsWindow"].forEach((id, index) => {
     const el = byId(id);
     if (!el) return;
 
