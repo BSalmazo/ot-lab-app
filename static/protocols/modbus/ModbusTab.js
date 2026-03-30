@@ -54,6 +54,7 @@
         </label>
 
         <div class="modbus-action-form" data-modbus-form></div>
+        <div class="action-command-history" data-command-history></div>
       </section>
     `;
 
@@ -72,6 +73,51 @@
 
     const formContainer = container.querySelector("[data-modbus-form]");
     const functionSelect = container.querySelector("[data-function-select]");
+    const historyContainer = container.querySelector("[data-command-history]");
+
+    function formatStatus(status) {
+      const normalized = String(status || "").toLowerCase();
+      if (normalized === "queued") return "Pending";
+      if (normalized === "sent") return "Sent";
+      if (normalized === "done") return "Done";
+      if (normalized === "error") return "Error";
+      return "Pending";
+    }
+
+    function renderCommandHistory(commands) {
+      const rows = (commands || []).slice(0, 6);
+      if (!rows.length) {
+        historyContainer.innerHTML = "";
+        return;
+      }
+
+      historyContainer.innerHTML = `
+        <div class="action-command-history-head">Recent Executions</div>
+        <div class="action-command-history-list">
+          ${rows
+            .map((row) => {
+              const badgeClass = `status-${String(row.status || "queued").toLowerCase()}`;
+              return `
+                <div class="action-command-row">
+                  <span class="action-command-name">FC ${esc(row.code_label || "-")} ${esc(row.function_name || row.function_id || "Modbus")}</span>
+                  <span class="action-command-badge ${badgeClass}">${esc(formatStatus(row.status))}</span>
+                  <span class="action-command-msg">${esc(row.message || "-")}</span>
+                </div>
+              `;
+            })
+            .join("")}
+        </div>
+      `;
+    }
+
+    async function fetchCommandHistory() {
+      const response = await fetch("/api/actions/modbus/commands", {
+        credentials: "same-origin",
+      });
+      const data = await response.json();
+      if (!data.ok) return [];
+      return Array.isArray(data.commands) ? data.commands : [];
+    }
 
     async function submit(payload, resultEl, previewEl) {
       const response = await fetch("/api/actions/modbus/execute", {
@@ -84,12 +130,52 @@
 
       if (!data.ok) {
         resultEl.textContent = `Error: ${data.error || "failed to execute action"}`;
+        renderCommandHistory(await fetchCommandHistory());
         return;
       }
 
-      resultEl.textContent = `Queued ${data.function.code_label} ${data.function.name} (command ${data.queued_command_id})`;
+      const commandId = data.command_id;
+      resultEl.textContent = `Pending: FC ${data.function.code_label} ${data.function.name}`;
       if (data.preview) {
         previewEl.textContent = JSON.stringify(data.preview, null, 2);
+      }
+
+      const startedAt = Date.now();
+      let finalStatus = null;
+
+      while (Date.now() - startedAt < 20000) {
+        const history = await fetchCommandHistory();
+        renderCommandHistory(history);
+
+        const current = history.find((item) => item.id === commandId);
+        if (!current) {
+          await new Promise((resolve) => setTimeout(resolve, 900));
+          continue;
+        }
+
+        finalStatus = String(current.status || "").toLowerCase();
+        if (finalStatus === "queued") {
+          resultEl.textContent = "Pending: queued";
+          await new Promise((resolve) => setTimeout(resolve, 900));
+          continue;
+        }
+        if (finalStatus === "sent") {
+          resultEl.textContent = "Pending: sent to agent";
+          await new Promise((resolve) => setTimeout(resolve, 900));
+          continue;
+        }
+        if (finalStatus === "done") {
+          resultEl.textContent = `Done: ${current.message || "request executed"}`;
+          break;
+        }
+        if (finalStatus === "error") {
+          resultEl.textContent = `Error: ${current.message || "request failed"}`;
+          break;
+        }
+      }
+
+      if (!finalStatus || finalStatus === "queued" || finalStatus === "sent") {
+        resultEl.textContent = "Pending: awaiting agent confirmation";
       }
     }
 
@@ -114,6 +200,7 @@
     });
 
     renderSelectedForm();
+    fetchCommandHistory().then(renderCommandHistory).catch(() => {});
   }
 
   global.OTLabModbusTab = {

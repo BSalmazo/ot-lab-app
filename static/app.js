@@ -508,6 +508,19 @@ function formatEventDetails(event) {
     `;
   }
 
+  if (type === "EXCEPTION_RESPONSE") {
+    return `
+      ${formatSummaryBlock(summary)}
+      <div><strong>Action:</strong> Exception Response</div>
+      <div><strong>Server:</strong> ${escapeHtml(event.server || src)}</div>
+      <div><strong>Client:</strong> ${escapeHtml(event.client || dst)}</div>
+      <div><strong>Function:</strong> FC${functionCode}</div>
+      <div><strong>Exception Code:</strong> ${event.exception_code ?? "-"}</div>
+      <div><strong>RTT:</strong> ${event.rtt ?? "-"} s</div>
+      <div><strong>Transaction ID:</strong> ${txId}</div>
+    `;
+  }
+
   return `
     ${formatSummaryBlock(summary)}
     <div><strong>Source:</strong> ${escapeHtml(src)}</div>
@@ -531,12 +544,19 @@ function formatAlertCard(alert) {
   const severity = alert.severity || "INFO";
   const summary = alert.summary || `${alert.event_type || "UNKNOWN"} from ${alert.src || "-"} to ${alert.dst || "-"}`;
   const reasons = Array.isArray(alert.reasons) ? alert.reasons : [];
+  const eventType = String(alert.event_type || "UNKNOWN").replaceAll("_", " ");
+  const severityClass = `alert-level-${escapeHtml(severity)}`;
+  const severityBadgeClass = `sev-${escapeHtml(severity)}`;
 
   return `
-    <div class="alert-${escapeHtml(severity)}">
-      <strong>${escapeHtml(severity)}</strong><br>
-      ${escapeHtml(summary)}
-      ${reasons.length ? `<br><span>${escapeHtml(reasons.join(" | "))}</span>` : ""}
+    <div class="alert-card ${severityClass}">
+      <div class="alert-top">
+        <span class="alert-severity ${severityBadgeClass}">${escapeHtml(severity)}</span>
+        <span class="alert-event">${escapeHtml(eventType)}</span>
+      </div>
+      <div class="alert-summary">${escapeHtml(summary)}</div>
+      <div class="alert-srcdst">${escapeHtml(alert.src || "-")} → ${escapeHtml(alert.dst || "-")}</div>
+      ${reasons.length ? `<div class="alert-reason">${escapeHtml(reasons.join(" | "))}</div>` : ""}
     </div>
   `;
 }
