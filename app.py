@@ -428,7 +428,7 @@ def build_modbus_summary(state: dict):
         return {"detected": False}
 
     last_seen = summary.get("last_seen")
-    if last_seen is not None and (time.time() - last_seen > 5):
+    if last_seen is not None and (time.time() - last_seen > 20):
         summary["state"] = "Inactive"
     else:
         summary["state"] = "Active"
