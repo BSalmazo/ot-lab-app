@@ -314,7 +314,21 @@ class SnifferMixin:
                             decoded["dst_ip"],
                             decoded["dst_port"],
                         )
-                    ] = {"timestamp": decoded["timestamp"]}
+                    ] = {
+                        "timestamp": decoded["timestamp"],
+                        "request": {
+                            "function_code": decoded.get("function_code"),
+                            "unit_id": decoded.get("unit_id"),
+                            "register": decoded.get("register"),
+                            "address": decoded.get("address"),
+                            "start_addr": decoded.get("start_addr"),
+                            "quantity": decoded.get("quantity"),
+                            "read_start": decoded.get("read_start"),
+                            "read_quantity": decoded.get("read_quantity"),
+                            "value": decoded.get("value"),
+                            "values": decoded.get("values"),
+                        },
+                    }
 
                 elif decoded["type"] in ("READ_RESPONSE", "WRITE_RESPONSE", "GENERIC_RESPONSE", "EXCEPTION_RESPONSE"):
                     reverse_key_value = reverse_tx_key(
@@ -326,6 +340,27 @@ class SnifferMixin:
                     )
                     matched = self.state["pending_transactions"].pop(reverse_key_value, None)
                     event["rtt"] = round(decoded["timestamp"] - matched["timestamp"], 6) if matched else None
+                    request_ctx = (matched or {}).get("request") or {}
+
+                    # Carry request-side context into responses/exceptions so alerts can show
+                    # register/value even when the response frame does not include them.
+                    for key in (
+                        "function_code",
+                        "unit_id",
+                        "register",
+                        "address",
+                        "start_addr",
+                        "quantity",
+                        "read_start",
+                        "read_quantity",
+                    ):
+                        if event.get(key) is None and request_ctx.get(key) is not None:
+                            event[key] = request_ctx.get(key)
+
+                    if event.get("value") is None and request_ctx.get("value") is not None:
+                        event["value"] = request_ctx.get("value")
+                    if (not event.get("values")) and request_ctx.get("values"):
+                        event["values"] = request_ctx.get("values")
 
                     if decoded["type"] == "WRITE_RESPONSE":
                         reasons.append(
