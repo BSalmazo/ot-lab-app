@@ -55,7 +55,7 @@
     return values;
   }
 
-  function renderActionForm({ container, functionDef, values, onSubmit, onOpenHistory }) {
+  function renderActionForm({ container, functionDef, values, onSubmit, onOpenHistory, onOpenPreview }) {
     const fieldsHtml = (functionDef.fields || [])
       .map((field) => renderField(field, values[field.key]))
       .join("");
@@ -78,19 +78,17 @@
         <div class="action-form-actions">
           <button type="button" data-action-run>Execute</button>
           <button type="button" class="secondary" data-action-history>History</button>
+          <button type="button" class="secondary" data-action-preview-btn>Preview</button>
           <span class="action-inline-status" data-action-status></span>
         </div>
-        <details class="action-preview-wrap compact">
-          <summary>Preview</summary>
-          <pre class="action-preview" data-action-preview></pre>
-        </details>
       </div>
     `;
 
     const runBtn = container.querySelector("[data-action-run]");
     const historyBtn = container.querySelector("[data-action-history]");
+    const previewBtn = container.querySelector("[data-action-preview-btn]");
     const statusEl = container.querySelector("[data-action-status]");
-    const previewEl = container.querySelector("[data-action-preview]");
+    let lastPreview = {};
 
     function updatePreview() {
       const liveValues = {
@@ -99,8 +97,7 @@
         ...collectValues(container),
       };
 
-      const preview = builder.buildPreview(functionDef, liveValues);
-      previewEl.textContent = JSON.stringify(preview, null, 2);
+      lastPreview = builder.buildPreview(functionDef, liveValues);
     }
 
     container.querySelectorAll("input,select").forEach((el) => {
@@ -126,7 +123,7 @@
       statusEl.textContent = "Pending...";
 
       try {
-        await onSubmit(payload, statusEl, previewEl);
+        await onSubmit(payload, statusEl, lastPreview);
       } finally {
         runBtn.disabled = false;
       }
@@ -135,6 +132,12 @@
     historyBtn?.addEventListener("click", () => {
       if (typeof onOpenHistory === "function") {
         onOpenHistory();
+      }
+    });
+
+    previewBtn?.addEventListener("click", () => {
+      if (typeof onOpenPreview === "function") {
+        onOpenPreview(lastPreview);
       }
     });
 

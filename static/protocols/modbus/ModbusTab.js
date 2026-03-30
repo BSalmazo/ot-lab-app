@@ -73,8 +73,16 @@
     const formContainer = container.querySelector("[data-modbus-form]");
     const functionSelect = container.querySelector("[data-function-select]");
     const historyContainer = document.getElementById("actionsHistoryPanel");
+    const previewContainer = document.getElementById("actionsPreviewPanel");
     const openHistoryWindow = () => {
       const win = document.getElementById("actionsHistoryWindow");
+      if (win) win.classList.remove("hidden");
+    };
+    const openPreviewWindow = (preview) => {
+      const win = document.getElementById("actionsPreviewWindow");
+      if (previewContainer) {
+        previewContainer.textContent = JSON.stringify(preview || {}, null, 2);
+      }
       if (win) win.classList.remove("hidden");
     };
 
@@ -123,7 +131,7 @@
       return Array.isArray(data.commands) ? data.commands : [];
     }
 
-    async function submit(payload, statusEl, previewEl) {
+    async function submit(payload, statusEl, preview) {
       const response = await fetch("/api/actions/modbus/execute", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -140,8 +148,8 @@
 
       const commandId = data.command_id;
       statusEl.textContent = `Pending`;
-      if (data.preview) {
-        previewEl.textContent = JSON.stringify(data.preview, null, 2);
+      if (previewContainer && (data.preview || preview)) {
+        previewContainer.textContent = JSON.stringify(data.preview || preview, null, 2);
       }
 
       const startedAt = Date.now();
@@ -191,11 +199,12 @@
         container: formContainer,
         functionDef: selectedFunction,
         values,
-        onSubmit: async (payload, statusEl, previewEl) => {
+        onSubmit: async (payload, statusEl, preview) => {
           state.valuesByFunction[selectedFunction.id] = payload.values;
-          await submit(payload, statusEl, previewEl);
+          await submit(payload, statusEl, preview);
         },
         onOpenHistory: openHistoryWindow,
+        onOpenPreview: openPreviewWindow,
       });
     }
 

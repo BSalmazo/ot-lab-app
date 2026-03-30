@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OT Lab App</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260330f" />
+  <link rel="stylesheet" href="/static/style.css?v=20260330g" />
 </head>
 <body>
   <div class="page">
@@ -129,6 +129,16 @@
         </div>
         <div class="window-body">
           <div id="actionsHistoryPanel" class="log-panel floating-log"></div>
+        </div>
+      </div>
+
+      <div class="floating-window hidden" id="actionsPreviewWindow">
+        <div class="window-head">
+          <span>Request Preview</span>
+          <button class="window-close" type="button" data-close-window="actionsPreviewWindow">✕</button>
+        </div>
+        <div class="window-body">
+          <pre id="actionsPreviewPanel" class="log-panel floating-panel preview-panel"></pre>
         </div>
       </div>
 
@@ -267,13 +277,13 @@
     </div>
   </div>
 
-  <script src="/static/protocols/modbus/modbusDefinitions.js?v=20260330f"></script>
-  <script src="/static/protocols/modbus/modbusValidators.js?v=20260330f"></script>
-  <script src="/static/protocols/modbus/modbusBuilder.js?v=20260330f"></script>
-  <script src="/static/protocols/modbus/ModbusFunctionInfo.js?v=20260330f"></script>
-  <script src="/static/protocols/modbus/ModbusActionForm.js?v=20260330f"></script>
-  <script src="/static/protocols/modbus/ModbusTab.js?v=20260330f"></script>
-  <script src="/static/actions/ActionsWindow.js?v=20260330f"></script>
-  <script src="/static/app.js?v=20260330f"></script>
+  <script src="/static/protocols/modbus/modbusDefinitions.js?v=20260330g"></script>
+  <script src="/static/protocols/modbus/modbusValidators.js?v=20260330g"></script>
+  <script src="/static/protocols/modbus/modbusBuilder.js?v=20260330g"></script>
+  <script src="/static/protocols/modbus/ModbusFunctionInfo.js?v=20260330g"></script>
+  <script src="/static/protocols/modbus/ModbusActionForm.js?v=20260330g"></script>
+  <script src="/static/protocols/modbus/ModbusTab.js?v=20260330g"></script>
+  <script src="/static/actions/ActionsWindow.js?v=20260330g"></script>
+  <script src="/static/app.js?v=20260330g"></script>
 </body>
 </html>
