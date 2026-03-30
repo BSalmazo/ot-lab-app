@@ -82,7 +82,7 @@
         <div class="bottom-dock">
           <button class="dock-btn" id="openIdsWindowBtn" type="button">IDS State</button>
           <button class="dock-btn" id="openLogsWindowBtn" type="button">System Logs</button>
-          <button class="dock-btn" id="openActionsWindowBtn" type="button">Modbus Actions</button>
+          <button class="dock-btn" id="openActionsWindowBtn" type="button">Actions</button>
         </div>
       </section>
 
@@ -111,29 +111,11 @@
 
       <div class="floating-window hidden" id="actionsWindow">
         <div class="window-head">
-          <span>Modbus Actions</span>
+          <span>Actions</span>
           <button class="window-close" type="button" data-close-window="actionsWindow">✕</button>
         </div>
-        <div class="window-body">
-          <div class="action-block">
-            <div class="block-title">READ</div>
-            <div class="row">
-              <input id="readStart" type="number" value="0" placeholder="Start" />
-              <input id="readQty" type="number" value="4" placeholder="Qty" />
-              <button id="sendReadBtn" type="button">Send READ</button>
-            </div>
-          </div>
-
-          <div class="action-block">
-            <div class="block-title">WRITE</div>
-            <div class="row">
-              <input id="writeRegister" type="number" value="1" placeholder="Register" />
-              <input id="writeValue" type="number" value="1" placeholder="Value" />
-              <button id="sendWriteBtn" type="button">Send WRITE</button>
-            </div>
-          </div>
-
-          <div id="actionResult" class="status slim">Local READ/WRITE actions disabled in this version.</div>
+        <div class="window-body actions-window-body" id="actionsWindowBody">
+          <div class="status slim">Loading Actions modules...</div>
         </div>
       </div>
     </main>
@@ -258,6 +240,13 @@
     </div>
   </div>
 
+  <script src="/static/protocols/modbus/modbusDefinitions.js"></script>
+  <script src="/static/protocols/modbus/modbusValidators.js"></script>
+  <script src="/static/protocols/modbus/modbusBuilder.js"></script>
+  <script src="/static/protocols/modbus/ModbusFunctionInfo.js"></script>
+  <script src="/static/protocols/modbus/ModbusActionForm.js"></script>
+  <script src="/static/protocols/modbus/ModbusTab.js"></script>
+  <script src="/static/actions/ActionsWindow.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

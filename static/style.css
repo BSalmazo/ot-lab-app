@@ -296,6 +296,162 @@ button:disabled {
   margin-top: 14px;
 }
 
+.actions-window-body {
+  max-height: 72vh;
+  overflow: auto;
+}
+
+.actions-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.actions-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.actions-tab {
+  background: #334155;
+  border: 1px solid #475569;
+}
+
+.actions-tab.active {
+  background: var(--blue);
+  border-color: rgba(59, 130, 246, 0.75);
+}
+
+.actions-section {
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: linear-gradient(180deg, rgba(17, 24, 39, 0.9), rgba(15, 23, 42, 0.95));
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.actions-section-head h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.actions-section-sub {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.modbus-catalog {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modbus-fc-group h4 {
+  margin: 0 0 8px 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #93c5fd;
+}
+
+.modbus-fc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.modbus-fc-card {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(15, 23, 42, 0.72);
+  border-radius: 10px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.modbus-fc-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.modbus-fc-code {
+  font-size: 11px;
+  font-weight: 700;
+  color: #bfdbfe;
+}
+
+.modbus-fc-target {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.modbus-fc-name {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.modbus-fc-desc {
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.modbus-fc-note {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.action-selector {
+  margin-top: 12px;
+}
+
+.modbus-action-form {
+  margin-top: 12px;
+}
+
+.action-host-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.action-form-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.action-form-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.action-form-item span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.action-form-actions {
+  margin-top: 12px;
+}
+
+.action-preview {
+  margin-top: 10px;
+  background: var(--panel-3);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 10px;
+  padding: 10px;
+  font-size: 11px;
+  min-height: 72px;
+  max-height: 180px;
+  overflow: auto;
+}
+
 /* LOGS / PANELS */
 
 .panel,
@@ -406,6 +562,10 @@ button:disabled {
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
   z-index: 2000;
   overflow: hidden;
+}
+
+#actionsWindow {
+  width: 720px;
 }
 
 .floating-window.hidden {
@@ -592,6 +752,11 @@ button:disabled {
     top: 90px !important;
     width: calc(100vw - 32px);
   }
+
+  .action-host-row,
+  .action-form-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* EVENTS SUMMARY PANEL */
@@ -602,7 +767,7 @@ button:disabled {
   gap: 18px;
   padding: 22px;
   flex: 1;
-  overflow: visiblenear-gradient(180deg, rgba(2, 6, 23, 0.92) 0%, rgba(1, 10, 32, 0.96) 100%);
+  background: linear-gradient(180deg, rgba(2, 6, 23, 0.92) 0%, rgba(1, 10, 32, 0.96) 100%);
   border: 1px solid rgba(59, 130, 246, 0.18);
   min-height: 0;
   height: auto;
