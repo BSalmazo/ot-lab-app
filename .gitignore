@@ -1,0 +1,18 @@
+# Python caches
+__pycache__/
+*.pyc
+
+# Virtual environments
+.venv/
+venv/
+
+# Test/checkpoint artifacts
+artifacts/
+
+# PyInstaller build outputs
+build/
+dist/
+*.spec.bak
+
+# Local OS/editor files
+.DS_Store
