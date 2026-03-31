@@ -374,7 +374,8 @@ class SnifferMixin:
                         )
                         score = max(score, 6)
 
-                event["iface"] = self.iface
+                sniffed_iface = getattr(pkt, "sniffed_on", None)
+                event["iface"] = sniffed_iface or self.iface
                 event["avg_polling_s"] = self._get_avg_polling_for_event(decoded)
                 event["summary"] = self._build_event_summary(event)
 
