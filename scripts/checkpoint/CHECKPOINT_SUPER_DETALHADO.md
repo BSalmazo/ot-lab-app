@@ -242,7 +242,13 @@ Expected impact: reduced maintenance noise without changing active functionality
 
 ## 5. Produced Evidence
 
-Path: `artifacts/checkpoint_run/`
+Primary approved campaign path:
+
+- `artifacts/checkpoint_runs/checkpoint_20260331_182606/`
+
+Historical campaign path (intermediate):
+
+- `artifacts/checkpoint_run/`
 
 Generated files:
 
@@ -255,11 +261,11 @@ Generated files:
 - `checkpoint_result.json`
 - `REPORT.md`
 
-Key metadata (`metadata.json`):
+Key metadata (`metadata.json`) from approved campaign:
 
-- `duration_actual_s`: `2255.612`
-- `samples`: `1967`
+- `duration_actual_s`: `2158.912`
 - `events_http_ok_ratio`: `1.0`
+- `poll interval`: `0.5s`
 
 Additional metrics extracted from JSONL data:
 
@@ -267,7 +273,7 @@ Additional metrics extracted from JSONL data:
 - HTTP-OK snapshots: `2286`
 - max `events` window length: `300`
 - max exported `connection_history` length: `60`
-- interfaces observed in summary: `lo0`
+- interfaces observed in summary: `en0`, `lo0`
 - observed states:
   - `Active`: `348` snapshots
   - `Inactive`: `1140` snapshots
@@ -298,10 +304,9 @@ Additional metrics extracted from JSONL data:
 - Expected:
   - UI/API should show concrete capture interface, not only `ALL`.
 - Observed:
-  - `PASS` under evaluator mode `--single-interface-ok`
-  - observed interface: `lo0`.
-- Note:
-  - multi-interface scenario (`lo0` vs physical interface) was not completed in this run.
+  - `PASS` with strict multi-interface criterion.
+  - observed interfaces: `en0` (physical) and `lo0` (loopback).
+  - remote client endpoint observed (example): `192.168.18.41:<ephemeral_port>`.
 
 ## 6.3. CT3 - Write detection
 
@@ -327,11 +332,8 @@ Additional metrics extracted from JSONL data:
 - Expected:
   - transition to `Inactive` roughly after 2s without traffic.
 - Observed:
-  - evaluator marked `FAIL` (strict threshold)
-  - measured transition: `1.678s`.
-- Technical interpretation:
-  - behavior remains operationally consistent with a ~2s activity window under 1s polling cadence;
-  - failure is threshold strictness, not a critical functional break.
+  - `PASS`
+  - measured transition: `2.201s`.
 
 ## 6.6. CT6 - Remote actions lifecycle
 
@@ -393,45 +395,46 @@ Additional metrics extracted from JSONL data:
 - Resolution:
   - reconstruct `metadata.json` from `events.jsonl`.
 
+5. Remote connectivity constraints for Shadow PC
+- Symptom:
+  - direct remote Modbus connection attempts failed.
+- Cause:
+  - remote endpoint not on same LAN path to local Mac.
+- Resolution:
+  - executed multi-interface validation using iPhone on same network, confirming `en0` traffic attribution.
+
 ---
 
 ## 8. Final Checkpoint Interpretation
 
-## 8.1. Strict automated outcome
+## 8.1. Strict automated outcome (approved campaign)
 
 - `checkpoint_result.json`:
-  - `CHECKPOINT REPROVADO`
-  - single relevant fail: CT5 (`1.678s` vs strict `>=2.0s` lower bound).
+  - `CHECKPOINT APROVADO`
+  - all test cases CT1..CT7 marked `PASS`.
 
 ## 8.2. Engineering/operational outcome
 
-Based on observed behavior, robustness, sustained throughput, and critical-path coverage:
+Based on observed behavior, robustness, sustained throughput, and complete critical-path coverage:
 
-- **Checkpoint is functionally APPROVED WITH RESERVATION**.
-
-Reservations:
-
-1. CT5 threshold in evaluator is too rigid for current polling granularity; recommend configurable operational window (e.g., `1.5s` to `6.0s`).
-2. Complete one additional multi-interface remote run (Shadow PC -> host physical interface) to fully satisfy CT2 multi-interface criterion.
+- **Checkpoint is functionally APPROVED**.
+- Practical execution may now stop and transition to scientific writing/reporting.
 
 ---
 
-## 9. Recommended Next Iteration (Before Paper Finalization)
+## 9. Recommended Next Iteration (Paper-Focused)
 
-1. Improve evaluator for CT5:
-- parameterize inactivity window (`--inactive-min-s`, `--inactive-max-s`).
-
-2. Add formal CT2 multi-interface run:
-- dedicated remote traffic block from Shadow PC to confirm physical interface attribution (`en0`/`eth*`) versus loopback.
-
-3. Freeze experiment reproducibility package:
+1. Freeze experiment reproducibility package:
 - add `run_checkpoint.sh` to execute all steps in canonical order.
 - write commit hash + timestamp into final generated report.
 
-4. Add paper-ready "Threats to Validity" subsection:
+2. Add paper-ready "Threats to Validity" subsection:
 - environment dependency (macOS/libpcap),
-- loopback-heavy traffic in part of run,
+- mixed loopback + same-LAN traffic strategy,
 - sensitivity of timing criterion to polling period.
+
+3. (Optional) Add strict remote-host campaign:
+- repeat CT2 using a routable non-LAN remote source (VPN/tunnel) to complement same-network iPhone validation.
 
 ---
 
@@ -481,14 +484,8 @@ python scripts/checkpoint/evaluate_checkpoint.py \
 
 ## 11. Conclusion
 
-This checkpoint validates end-to-end OT Lab App operation for Modbus/TCP monitoring, including detection, event classification, write/exception handling, remote command lifecycle, and long-run stability under sustained load.
+This checkpoint validates end-to-end OT Lab App operation for Modbus/TCP monitoring, including detection, interface attribution across loopback and physical NIC (`lo0` + `en0`), write/exception handling, remote command lifecycle, and sustained-load stability.
 
-The only formal mismatch came from a strict CT5 timing threshold in the evaluator, while observed behavior remains operationally coherent with the intended ~2s window.
+Final automated result for the approved campaign is `CHECKPOINT APROVADO` with CT1..CT7 all passing.
 
-Therefore, from an engineering and research progression perspective, this state is suitable as:
-
-- **a validated functional baseline**, ready for:
-  - evaluator threshold refinement,
-  - one complementary remote multi-interface run,
-  - and scientific manuscript drafting for tool and validation sections.
-
+Therefore, this is a valid stopping point for practical execution and a solid baseline for scientific manuscript drafting (system description, methodology, and validation sections).
