@@ -104,7 +104,6 @@
       }
 
       historyContainer.innerHTML = `
-        <div class="action-command-history-head">Recent Executions</div>
         <div class="action-command-history-list">
           ${rows
             .map((row) => {
