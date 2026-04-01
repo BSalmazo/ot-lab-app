@@ -279,6 +279,8 @@ def ensure_session_state(session_id: str):
                 "pending_commands": [],
                 "action_commands": deque(maxlen=80),
                 "event_log_signatures": deque(maxlen=600),
+                "recent_event_signatures": {},
+                "recent_alert_signatures": {},
             }
         return agents_by_session[session_id]
 
@@ -306,13 +308,76 @@ def set_session_cookie_if_needed(request: Request, response: Response, session_i
         )
 
 
+def _cleanup_recent_signature_cache(cache: dict, now_ts: float, ttl_s: float, max_items: int):
+    if len(cache) <= max_items:
+        return
+    cutoff = now_ts - ttl_s
+    stale_keys = [k for k, v in cache.items() if float(v) < cutoff]
+    for key in stale_keys[: max_items]:
+        cache.pop(key, None)
+
+
+def _event_signature(event: dict):
+    return (
+        normalize_event_type(event.get("type")),
+        event.get("transaction_id"),
+        event.get("function_code"),
+        event.get("src_ip"),
+        event.get("src_port"),
+        event.get("dst_ip"),
+        event.get("dst_port"),
+        event.get("register"),
+        event.get("start_addr"),
+        event.get("quantity"),
+        event.get("value"),
+        tuple(event.get("values") or []),
+    )
+
+
+def _alert_signature(alert: dict):
+    return (
+        normalize_event_type(alert.get("event_type")),
+        alert.get("function_code"),
+        alert.get("src"),
+        alert.get("dst"),
+        alert.get("register"),
+        alert.get("start_addr"),
+        alert.get("quantity"),
+        alert.get("value"),
+        alert.get("exception_code"),
+        tuple(alert.get("reasons") or []),
+    )
+
+
 def push_event(state: dict, event: dict):
+    now_ts = time.time()
+    signature = _event_signature(event)
     with lock:
+        cache = state.get("recent_event_signatures")
+        if cache is None:
+            cache = {}
+            state["recent_event_signatures"] = cache
+        prev_ts = cache.get(signature)
+        if prev_ts is not None and (now_ts - float(prev_ts)) <= 4.0:
+            return
+        cache[signature] = now_ts
+        _cleanup_recent_signature_cache(cache, now_ts=now_ts, ttl_s=15.0, max_items=2000)
         state["events"].append(event)
 
 
 def push_alert(state: dict, alert: dict):
+    now_ts = time.time()
+    signature = _alert_signature(alert)
     with lock:
+        cache = state.get("recent_alert_signatures")
+        if cache is None:
+            cache = {}
+            state["recent_alert_signatures"] = cache
+        prev_ts = cache.get(signature)
+        if prev_ts is not None and (now_ts - float(prev_ts)) <= 30.0:
+            return
+        cache[signature] = now_ts
+        _cleanup_recent_signature_cache(cache, now_ts=now_ts, ttl_s=120.0, max_items=1200)
         state["alerts"].append(alert)
 
 
@@ -1214,6 +1279,10 @@ async def set_agent_config(request: Request):
         state["modbus_summary"] = default_modbus_summary()
         if "event_log_signatures" in state:
             state["event_log_signatures"].clear()
+        if "recent_event_signatures" in state:
+            state["recent_event_signatures"].clear()
+        if "recent_alert_signatures" in state:
+            state["recent_alert_signatures"].clear()
         push_log_for_session(session_id, f"Detection interface changed from {old_iface} to {iface} - resetting detection")
     else:
         push_log_for_session(session_id, f"Monitor configuration updated (interface={iface}, mode={mode})")
@@ -1461,6 +1530,10 @@ def reset_system(request: Request):
             state["connection_history"].clear()
         if "event_log_signatures" in state:
             state["event_log_signatures"].clear()
+        if "recent_event_signatures" in state:
+            state["recent_event_signatures"].clear()
+        if "recent_alert_signatures" in state:
+            state["recent_alert_signatures"].clear()
         state["pending_commands"].clear()
         if "action_commands" in state:
             state["action_commands"].clear()

@@ -713,6 +713,15 @@ function formatAlertCard(alert) {
       whatHappened = `SCADA/HMI issued FC${fc} write to PLC`;
     }
   }
+  if (!context.isException && Number.isFinite(fc) && String(alert.event_type || "").toUpperCase() === "WRITE_RESPONSE") {
+    if (valueText !== null && register !== "-") {
+      whatHappened = `SCADA/HMI requested value ${valueText} for PLC register ${register}, and PLC accepted it`;
+    } else if (register !== "-") {
+      whatHappened = `SCADA/HMI write to PLC register ${register} was accepted by PLC`;
+    } else {
+      whatHappened = `SCADA/HMI write request was accepted by PLC`;
+    }
+  }
   const likelyCause = context.isException
     ? (context.exceptionLabel || "Request not accepted by device")
     : (reasons[0] || `${functionName} observed in live traffic`);
