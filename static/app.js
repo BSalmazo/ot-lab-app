@@ -669,6 +669,20 @@ function inferModbusContext(alert) {
   };
 }
 
+function inferOutcome(alert, context) {
+  const eventType = String(alert.event_type || "").toUpperCase();
+  if (context?.isException || eventType === "EXCEPTION_RESPONSE") {
+    return { label: "Rejected", cls: "outcome-rejected" };
+  }
+  if (eventType === "WRITE_RESPONSE") {
+    return { label: "Accepted", cls: "outcome-accepted" };
+  }
+  if (eventType === "UNKNOWN_REQUEST") {
+    return { label: "Unknown", cls: "outcome-unknown" };
+  }
+  return { label: "Observed", cls: "outcome-observed" };
+}
+
 function formatAlertCard(alert) {
   const severity = alert.severity || "INFO";
   const summary = alert.summary || `${alert.event_type || "UNKNOWN"} from ${alert.src || "-"} to ${alert.dst || "-"}`;
@@ -677,6 +691,7 @@ function formatAlertCard(alert) {
   const severityClass = `alert-level-${escapeHtml(severity)}`;
   const severityBadgeClass = `sev-${escapeHtml(severity)}`;
   const context = inferModbusContext(alert);
+  const outcome = inferOutcome(alert, context);
   const alertKey = getAlertKey(alert);
   const detailsOpen = openAlertDetails.has(alertKey) ? "open" : "";
 
@@ -736,11 +751,13 @@ function formatAlertCard(alert) {
     <div class="alert-card ${severityClass}">
       <div class="alert-top">
         <span class="alert-severity ${severityBadgeClass}">${escapeHtml(severity)}</span>
+        <span class="alert-outcome ${escapeHtml(outcome.cls)}">${escapeHtml(outcome.label)}</span>
         <span class="alert-event">${escapeHtml(eventType)}</span>
       </div>
       <div class="alert-summary">${escapeHtml(compactTitle)}</div>
       <div class="alert-srcdst">${escapeHtml(alert.src || "-")} → ${escapeHtml(alert.dst || "-")}</div>
       <div class="alert-brief-grid">
+        <div class="alert-brief-row"><span class="alert-brief-k">Outcome</span><span class="alert-brief-v">${escapeHtml(outcome.label)}</span></div>
         <div class="alert-brief-row"><span class="alert-brief-k">What happened</span><span class="alert-brief-v">${escapeHtml(whatHappened)}</span></div>
         <div class="alert-brief-row"><span class="alert-brief-k">Value</span><span class="alert-brief-v">${escapeHtml(compactValue)}</span></div>
       </div>
@@ -768,12 +785,14 @@ function formatAlertCard(alert) {
 
 function formatAlertPlain(alert) {
   const severity = alert.severity || "INFO";
+  const context = inferModbusContext(alert);
+  const outcome = inferOutcome(alert, context);
   const eventType = String(alert.event_type || "UNKNOWN").replaceAll("_", " ");
   const summary = alert.summary || "-";
   const src = alert.src || "-";
   const dst = alert.dst || "-";
   const reasons = Array.isArray(alert.reasons) ? alert.reasons.join(" | ") : "-";
-  return `[${severity}] ${eventType}\n${summary}\n${src} -> ${dst}\nReasons: ${reasons}`;
+  return `[${severity}] ${eventType} | Outcome: ${outcome.label}\n${summary}\n${src} -> ${dst}\nReasons: ${reasons}`;
 }
 
 function formatConnectionHistoryRow(row) {
