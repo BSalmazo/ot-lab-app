@@ -1094,7 +1094,7 @@ async function loadAndRenderReleases() {
   container.innerHTML = '<div class="loading-spinner">Loading releases from GitHub...</div>';
 
   try {
-    const response = await apiGet("/api/releases/agent");
+    const response = await apiGet("/api/releases/agent?refresh=1");
 
     if (!response.ok && response.releases && response.releases.length === 0) {
       // No GitHub releases, show local fallback
