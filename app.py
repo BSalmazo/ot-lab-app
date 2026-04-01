@@ -52,7 +52,7 @@ lock = Lock()
 agents_by_session = {}
 
 
-def get_github_releases():
+def get_github_releases(force_refresh: bool = False):
     """
     Fetch agent releases from GitHub, with caching.
     Returns a list of releases with download information.
@@ -62,7 +62,11 @@ def get_github_releases():
     current_time = time.time()
     
     # Return cached data if still valid
-    if releases_cache["data"] is not None and (current_time - releases_cache["timestamp"]) < RELEASES_CACHE_TTL:
+    if (
+        not force_refresh
+        and releases_cache["data"] is not None
+        and (current_time - releases_cache["timestamp"]) < RELEASES_CACHE_TTL
+    ):
         return releases_cache["data"]
     
     try:
@@ -1011,7 +1015,9 @@ def get_agent_releases(request: Request):
     """
     session_id, state = get_session_state_from_request(request)
     
-    releases = get_github_releases()
+    refresh_param = str(request.query_params.get("refresh", "")).lower().strip()
+    force_refresh = refresh_param in {"1", "true", "yes", "y"}
+    releases = get_github_releases(force_refresh=force_refresh)
     
     if not releases:
         return JSONResponse({
