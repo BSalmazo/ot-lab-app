@@ -292,8 +292,6 @@ function formatFunctions(functionsSeen, exceptionFunctionsSeen = []) {
 
 function hasRealCommunication(summary, events) {
   if (!summary || !summary.detected) return false;
-  const stateLabel = String(summary.state || "").toLowerCase();
-  if (stateLabel === "inactive") return false;
   return Array.isArray(events) && events.length > 0;
 }
 

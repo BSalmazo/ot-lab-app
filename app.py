@@ -323,6 +323,7 @@ def push_log_for_session(session_id: str, message: str):
 
 MODBUS_WRITE_FUNCTIONS = get_modbus_write_function_codes()
 MODBUS_ACTIVE_WINDOW_SECONDS = 2.0
+MAX_EVENT_CLOCK_DRIFT_SECONDS = 30.0
 
 
 def normalize_event_type(event_type: str):
@@ -385,6 +386,24 @@ def extract_avg_polling_from_snapshot(snapshot: dict, server_ip: str):
     return None
 
 
+def resolve_event_time(payload: dict) -> float:
+    """
+    Resolve a safe event timestamp for state/liveness calculations.
+    Uses packet timestamp when it is reasonably close to backend wall-clock.
+    Falls back to current backend time when agent/system clocks are skewed.
+    """
+    now = time.time()
+    raw_ts = payload.get("timestamp")
+    try:
+        event_ts = float(raw_ts) if raw_ts is not None else now
+    except (TypeError, ValueError):
+        event_ts = now
+
+    if abs(event_ts - now) > MAX_EVENT_CLOCK_DRIFT_SECONDS:
+        return now
+    return event_ts
+
+
 def update_modbus_summary_from_event(state: dict, payload: dict):
     summary = state["modbus_summary"]
 
@@ -397,11 +416,7 @@ def update_modbus_summary_from_event(state: dict, payload: dict):
         or state["agent_info"].get("iface")
         or state["agent_config"].get("iface")
     )
-    event_ts = payload.get("timestamp")
-    try:
-        event_ts = float(event_ts) if event_ts is not None else time.time()
-    except (TypeError, ValueError):
-        event_ts = time.time()
+    event_ts = resolve_event_time(payload)
 
     if function_code is None:
         return
