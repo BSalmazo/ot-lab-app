@@ -397,6 +397,11 @@ def update_modbus_summary_from_event(state: dict, payload: dict):
         or state["agent_info"].get("iface")
         or state["agent_config"].get("iface")
     )
+    event_ts = payload.get("timestamp")
+    try:
+        event_ts = float(event_ts) if event_ts is not None else time.time()
+    except (TypeError, ValueError):
+        event_ts = time.time()
 
     if function_code is None:
         return
@@ -418,7 +423,8 @@ def update_modbus_summary_from_event(state: dict, payload: dict):
     summary["port"] = port
     summary["client_ip"] = client_ip
     summary["server_ip"] = server_ip
-    summary["last_seen"] = time.time()
+    # Use packet timestamp to avoid delayed-queue artifacts.
+    summary["last_seen"] = event_ts
     summary["state"] = "Active"
 
     existing_fc = set(summary.get("functions_seen") or [])
@@ -458,6 +464,7 @@ def update_modbus_summary_from_event(state: dict, payload: dict):
         function_code=base_fc,
         is_exception=is_exception,
         is_write=(base_fc in MODBUS_WRITE_FUNCTIONS or event_type in {"WRITE_REQUEST", "WRITE_RESPONSE"}),
+        event_ts=event_ts,
     )
 
 
@@ -470,6 +477,7 @@ def update_connection_history_from_event(
     function_code: int,
     is_exception: bool,
     is_write: bool,
+    event_ts: float,
 ):
     history = state.get("connection_history")
     if history is None:
@@ -477,7 +485,7 @@ def update_connection_history_from_event(
         state["connection_history"] = history
 
     key = f"{iface}|{client_ip}|{server_ip}|{port}"
-    now = time.time()
+    now = float(event_ts) if event_ts is not None else time.time()
     target = None
 
     for item in history:

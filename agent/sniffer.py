@@ -17,6 +17,49 @@ from .protocols.modbus.modbus_definitions import get_modbus_function_label
 
 
 class SnifferMixin:
+    def _is_duplicate_event(self, event: dict) -> bool:
+        # Windows ALL-mode may surface duplicate packet notifications across adapters.
+        # Keep a tiny temporal cache to suppress near-identical duplicates.
+        cache = getattr(self, "_recent_event_fingerprints", None)
+        if cache is None:
+            cache = {}
+            self._recent_event_fingerprints = cache
+
+        ts = event.get("timestamp")
+        try:
+            ts = float(ts)
+        except (TypeError, ValueError):
+            ts = time.time()
+
+        fp = (
+            event.get("type"),
+            event.get("transaction_id"),
+            event.get("function_code"),
+            event.get("src_ip"),
+            event.get("src_port"),
+            event.get("dst_ip"),
+            event.get("dst_port"),
+            event.get("register"),
+            event.get("start_addr"),
+            event.get("quantity"),
+            event.get("value"),
+        )
+
+        prev_ts = cache.get(fp)
+        cache[fp] = ts
+
+        # Cleanup old fingerprints opportunistically.
+        if len(cache) > 3000:
+            cutoff = ts - 8.0
+            keys = [k for k, v in cache.items() if v < cutoff]
+            for k in keys[:1500]:
+                cache.pop(k, None)
+
+        if prev_ts is None:
+            return False
+
+        return (ts - float(prev_ts)) <= 0.35
+
     def start(self):
         sniff_ifaces = self.get_sniff_interfaces()
 
@@ -421,6 +464,9 @@ class SnifferMixin:
                 event["iface"] = sniffed_iface or self.iface
                 event["avg_polling_s"] = self._get_avg_polling_for_event(decoded)
                 event["summary"] = self._build_event_summary(event)
+
+                if self._is_duplicate_event(event):
+                    continue
 
                 self.state["event_counts"][decoded["type"]] += 1
                 self.send_event(event)
