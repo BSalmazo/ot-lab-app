@@ -181,6 +181,27 @@ jobs:
         id: date
         run: echo "date=$(date +'%Y-%m-%d-%H%M%S')" >> $GITHUB_OUTPUT
 
+      - name: Clean previous dev-latest assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Remove all existing assets from dev-latest so only newest files remain.
+          # This prevents stale binaries (e.g., legacy file names) from persisting.
+          if gh release view dev-latest --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            mapfile -t ASSET_NAMES < <(gh release view dev-latest --repo "${{ github.repository }}" --json assets -q '.assets[].name')
+            if [ "${#ASSET_NAMES[@]}" -gt 0 ]; then
+              for asset in "${ASSET_NAMES[@]}"; do
+                echo "Deleting old asset: $asset"
+                gh release delete-asset dev-latest "$asset" --repo "${{ github.repository }}" --yes
+              done
+            else
+              echo "No previous assets found on dev-latest."
+            fi
+          else
+            echo "dev-latest release not found yet; nothing to clean."
+          fi
+
       - name: Create/Update Dev Release
         uses: softprops/action-gh-release@v1
         with:
