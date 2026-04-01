@@ -13,7 +13,8 @@ class HttpClientMixin:
         # Split telemetry queues so critical control-plane traffic (heartbeat, command result)
         # is never starved by high-rate event streams.
         self._critical_post_queue = Queue(maxsize=200)
-        self._normal_post_queue = Queue(maxsize=800)
+        # Keep normal telemetry queue intentionally small to avoid long stale backlogs.
+        self._normal_post_queue = Queue(maxsize=200)
         self._post_session = requests.Session()
 
         def worker():
