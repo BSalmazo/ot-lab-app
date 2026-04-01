@@ -1117,13 +1117,16 @@ async function loadAndRenderReleases() {
         ? '<span class="badge-dev">DEV</span>' 
         : '<span class="badge-stable">STABLE</span>';
       
-      const publishDate = new Date(release.published_at).toLocaleDateString();
+      const releaseDateRaw = release.updated_at || release.published_at;
+      const publishDate = releaseDateRaw
+        ? new Date(releaseDateRaw).toLocaleDateString()
+        : "-";
       
       html += `
         <div class="release-card">
           <div class="release-header">
             <h4>${release.tag} ${releaseType}</h4>
-            <div class="release-date">${publishDate}</div>
+            <div class="release-date">Updated: ${publishDate}</div>
           </div>
           <div class="release-downloads">
       `;
