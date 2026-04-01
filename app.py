@@ -685,6 +685,42 @@ def build_agent_config(request: Request, session_id: str, state: dict):
     }
 
 
+def should_log_agent_event(payload: dict) -> bool:
+    event_type = normalize_event_type(payload.get("type"))
+    # Keep high-value operational logs only to avoid log flood under heavy polling.
+    return event_type in {
+        "WRITE_REQUEST",
+        "WRITE_RESPONSE",
+        "EXCEPTION_RESPONSE",
+        "GENERIC_REQUEST",
+        "GENERIC_RESPONSE",
+        "UNKNOWN_REQUEST",
+    }
+
+
+def ingest_agent_event_payload(state: dict, session_id: str, payload: dict):
+    agent_info = state["agent_info"]
+    agent_info["connected"] = True
+    agent_info["last_seen"] = time.time()
+
+    push_event(state, payload)
+    update_modbus_summary_from_event(state, payload)
+
+    if not should_log_agent_event(payload):
+        return
+
+    summary = payload.get("summary")
+    if summary:
+        push_log_for_session(session_id, summary)
+    else:
+        push_log_for_session(
+            session_id,
+            f"Modbus event detected: {payload.get('type', 'UNKNOWN')} "
+            f"({payload.get('src_ip')}:{payload.get('src_port')} -> "
+            f"{payload.get('dst_ip')}:{payload.get('dst_port')})"
+        )
+
+
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     session_id, _state = get_session_state_from_request(request)
@@ -1500,24 +1536,32 @@ def agent_event_ingest(payload: dict = Body(...)):
         return JSONResponse({"ok": False, "error": "Missing session_id"}, status_code=400)
 
     state = ensure_session_state(session_id)
-    agent_info = state["agent_info"]
-    agent_info["connected"] = True
-    agent_info["last_seen"] = time.time()
-    push_event(state, payload)
-    update_modbus_summary_from_event(state, payload)
-
-    summary = payload.get("summary")
-    if summary:
-        push_log_for_session(session_id, summary)
-    else:
-        push_log_for_session(
-            session_id,
-            f"Modbus event detected: {payload.get('type', 'UNKNOWN')} "
-            f"({payload.get('src_ip')}:{payload.get('src_port')} -> "
-            f"{payload.get('dst_ip')}:{payload.get('dst_port')})"
-        )
+    ingest_agent_event_payload(state, session_id, payload)
 
     return {"ok": True}
+
+
+@app.post("/api/agent/events_batch")
+def agent_events_batch_ingest(payload: dict = Body(...)):
+    session_id = payload.get("session_id")
+    if not session_id:
+        return JSONResponse({"ok": False, "error": "Missing session_id"}, status_code=400)
+
+    events = payload.get("events")
+    if not isinstance(events, list):
+        return JSONResponse({"ok": False, "error": "events must be a list"}, status_code=400)
+
+    state = ensure_session_state(session_id)
+    accepted = 0
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        if not event.get("session_id"):
+            event["session_id"] = session_id
+        ingest_agent_event_payload(state, session_id, event)
+        accepted += 1
+
+    return {"ok": True, "accepted": accepted}
 
 
 @app.post("/api/agent/alert")
