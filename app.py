@@ -258,7 +258,10 @@ def default_modbus_summary():
         "avg_polling_s": None,
         "writes_detected": False,
         "state": "Inactive",
+        # Packet timestamp (may differ from backend wall-clock)
         "last_seen": None,
+        # Backend ingestion timestamp (authoritative for UI liveness)
+        "ingest_last_seen": None,
     }
 
 
@@ -506,6 +509,7 @@ def update_modbus_summary_from_event(state: dict, payload: dict):
     summary["server_ip"] = server_ip
     # Use packet timestamp to avoid delayed-queue artifacts.
     summary["last_seen"] = event_ts
+    summary["ingest_last_seen"] = time.time()
     summary["state"] = "Active"
 
     existing_fc = set(summary.get("functions_seen") or [])
@@ -613,7 +617,10 @@ def build_modbus_summary(state: dict):
     if not summary.get("detected"):
         return {"detected": False}
 
-    last_seen = summary.get("last_seen")
+    # Prefer backend ingestion time for liveness in UI to avoid packet-time skew effects.
+    last_seen = summary.get("ingest_last_seen")
+    if last_seen is None:
+        last_seen = summary.get("last_seen")
     if last_seen is not None and (time.time() - last_seen > MODBUS_ACTIVE_WINDOW_SECONDS):
         summary["state"] = "Inactive"
     else:
