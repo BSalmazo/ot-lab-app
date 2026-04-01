@@ -107,7 +107,8 @@ class HttpClientMixin:
             "available_ifaces": self.get_available_interfaces(),
             "capabilities": list(getattr(self, "capabilities", [])),
         }
-        self._post("/api/agent/heartbeat", payload, timeout=(0.8, 1.5))
+        # Heartbeat is critical for connection liveness in UI.
+        self._post("/api/agent/heartbeat", payload, timeout=(0.8, 1.5), critical=True)
         self.send_runtime_update()
 
     def send_snapshot(self):

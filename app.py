@@ -848,7 +848,7 @@ def api_status(request: Request):
     agent_info = state["agent_info"]
     connected = (
         agent_info["last_seen"] is not None and
-        (now - agent_info["last_seen"] <= 8)
+        (now - agent_info["last_seen"] <= 20)
     )
     agent_info["connected"] = connected
 
@@ -1477,6 +1477,9 @@ def agent_event_ingest(payload: dict = Body(...)):
         return JSONResponse({"ok": False, "error": "Missing session_id"}, status_code=400)
 
     state = ensure_session_state(session_id)
+    agent_info = state["agent_info"]
+    agent_info["connected"] = True
+    agent_info["last_seen"] = time.time()
     push_event(state, payload)
     update_modbus_summary_from_event(state, payload)
 
@@ -1501,6 +1504,9 @@ def agent_alert_ingest(payload: dict = Body(...)):
         return JSONResponse({"ok": False, "error": "Missing session_id"}, status_code=400)
 
     state = ensure_session_state(session_id)
+    agent_info = state["agent_info"]
+    agent_info["connected"] = True
+    agent_info["last_seen"] = time.time()
     push_alert(state, payload)
 
     summary = payload.get("summary")
