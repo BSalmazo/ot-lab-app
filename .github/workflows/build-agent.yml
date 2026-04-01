@@ -5,54 +5,54 @@ on:
   push:
     paths:
       - "agent.py"
+      - "agent/**"
+      - "agent-bundle.spec"
+      - "requirements.txt"
       - ".github/workflows/build-agent.yml"
 
 jobs:
   build:
+    name: Build ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-
+        include:
+          - os: ubuntu-latest
+            artifact-name: otlab-agent-linux
+            output-path: dist/otlab_agent
+          - os: windows-latest
+            artifact-name: otlab-agent-windows
+            output-path: dist/otlab_agent.exe
+          - os: macos-latest
+            artifact-name: otlab-agent-macos
+            output-path: dist/otlab_agent
     runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show current directory
-        run: |
-          python -c "import os; print(os.getcwd())"
-
-      - name: List repository files
-        run: |
-          python -c "import os; print('\n'.join(sorted(os.listdir('.'))))"
-
-      - name: Find agent.py
-        run: |
-          python -c "import pathlib; print('\n'.join(str(p) for p in pathlib.Path('.').rglob('agent.py')))"
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller requests scapy
+          pip install -r requirements.txt
+          pip install pyinstaller
 
-      - name: Build with PyInstaller
+      - name: Build with PyInstaller (spec)
         run: |
-          python -c "import pathlib, subprocess; p=list(pathlib.Path('.').rglob('agent.py')); subprocess.check_call(['pyinstaller','--onefile','--name','otlab-agent', str(p[0])])"
+          pyinstaller --noconfirm --clean agent-bundle.spec --distpath ./dist --workpath ./build
 
-      - name: List dist files
-        run: |
-          python -c "import os, pathlib; d=pathlib.Path('dist'); print('\n'.join(str(p) for p in d.iterdir()) if d.exists() else 'dist not found')"
+      - name: Make binary executable (macOS/Linux)
+        if: runner.os != 'Windows'
+        run: chmod +x ${{ matrix.output-path }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: otlab-agent-${{ runner.os }}
-          path: |
-            dist/otlab-agent
-            dist/otlab-agent.exe
+          name: ${{ matrix.artifact-name }}
+          path: ${{ matrix.output-path }}
+          if-no-files-found: error
