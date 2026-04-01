@@ -135,6 +135,7 @@ def get_github_releases():
                     "tag": release["tag_name"],
                     "name": release["name"],
                     "published_at": release["published_at"],
+                    "updated_at": release.get("updated_at") or release.get("published_at"),
                     "prerelease": release["prerelease"],
                     "assets": assets,
                 })
@@ -1019,15 +1020,20 @@ def get_agent_releases(request: Request):
             "releases": []
         }, status_code=503)
     
-    # Find the latest stable release and dev-latest
+    # Find the latest stable release and dev-latest using update time.
+    # This avoids showing old "published_at" dates for long-lived tags.
+    def _release_sort_key(rel: dict):
+        return str(rel.get("updated_at") or rel.get("published_at") or "")
+
     latest_stable = None
+    stable_releases = [r for r in releases if not r.get("prerelease")]
+    if stable_releases:
+        latest_stable = max(stable_releases, key=_release_sort_key)
+
     dev_latest = None
-    
-    for release in releases:
-        if release["tag"] == "dev-latest":
-            dev_latest = release
-        elif not release["prerelease"] and latest_stable is None:
-            latest_stable = release
+    dev_releases = [r for r in releases if r.get("tag") == "dev-latest"]
+    if dev_releases:
+        dev_latest = max(dev_releases, key=_release_sort_key)
     
     # Prepare response
     available_releases = []
