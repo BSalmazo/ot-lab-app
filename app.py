@@ -96,6 +96,14 @@ def get_github_releases(force_refresh: bool = False):
             if lowered.endswith(".zip"):
                 return 250
 
+            # Prefer canonical platform binary names over legacy artifact names.
+            if "otlab-agent-windows-amd64.exe" in lowered:
+                return 240
+            if "otlab-agent-macos-amd64" in lowered:
+                return 230
+            if "otlab-agent-linux-amd64" in lowered:
+                return 230
+
             # Native executable can still work as fallback.
             if lowered.endswith(".exe"):
                 return 180
@@ -115,7 +123,7 @@ def get_github_releases(force_refresh: bool = False):
                 continue  # Skip most prerelease builds, but keep dev-latest
             
             assets = {}
-            best_score_by_platform = {}
+            best_meta_by_platform = {}
             for asset in release.get("assets", []):
                 asset_name = asset["name"]
 
@@ -124,10 +132,24 @@ def get_github_releases(force_refresh: bool = False):
                     continue
 
                 score = asset_score(asset_name)
-                if score < best_score_by_platform.get(platform, -1):
+                updated_at = str(asset.get("updated_at") or "")
+                best_meta = best_meta_by_platform.get(platform)
+                if best_meta is not None:
+                    best_score = int(best_meta.get("score", -1))
+                    best_updated_at = str(best_meta.get("updated_at") or "")
+                    # Keep better score, or when tied keep the most recently updated asset.
+                    if score < best_score:
+                        continue
+                    if score == best_score and updated_at <= best_updated_at:
+                        continue
+
+                if score < 0:
                     continue
 
-                best_score_by_platform[platform] = score
+                best_meta_by_platform[platform] = {
+                    "score": score,
+                    "updated_at": updated_at,
+                }
                 assets[platform] = {
                     "name": asset_name,
                     "url": asset["browser_download_url"],
@@ -710,7 +732,7 @@ def download_agent_file(platform: str, request: Request):
     agent_source = "local"
 
     try:
-        releases = get_github_releases() or []
+        releases = get_github_releases(force_refresh=True) or []
         for release in releases:
             assets = release.get("assets") or {}
             asset = assets.get(platform)
