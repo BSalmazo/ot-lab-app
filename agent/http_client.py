@@ -7,16 +7,27 @@ import requests
 
 class HttpClientMixin:
     def _ensure_async_post_worker(self):
-        if getattr(self, "_post_queue", None) is not None:
+        if getattr(self, "_normal_post_queue", None) is not None:
             return
 
-        self._post_queue = Queue(maxsize=600)
+        # Split telemetry queues so critical control-plane traffic (heartbeat, command result)
+        # is never starved by high-rate event streams.
+        self._critical_post_queue = Queue(maxsize=200)
+        self._normal_post_queue = Queue(maxsize=800)
         self._post_session = requests.Session()
 
         def worker():
             while True:
+                item = None
                 try:
-                    item = self._post_queue.get()
+                    item = self._critical_post_queue.get_nowait()
+                except Empty:
+                    try:
+                        item = self._normal_post_queue.get(timeout=0.25)
+                    except Empty:
+                        continue
+                    except Exception:
+                        continue
                 except Exception:
                     continue
 
@@ -136,27 +147,21 @@ class HttpClientMixin:
     def _post(self, path: str, payload: dict, timeout=2, critical: bool = False):
         self._ensure_async_post_worker()
         item = (path, payload, timeout)
+        target_queue = self._critical_post_queue if critical else self._normal_post_queue
 
         try:
-            self._post_queue.put_nowait(item)
+            target_queue.put_nowait(item)
             return
         except Full:
             pass
 
-        if critical:
-            try:
-                self._post_queue.put(item, timeout=0.3)
-                return
-            except Full:
-                pass
-
         # Queue is full: drop one oldest queued item and keep the freshest telemetry.
         try:
-            _ = self._post_queue.get_nowait()
+            _ = target_queue.get_nowait()
         except Empty:
             pass
 
         try:
-            self._post_queue.put_nowait(item)
+            target_queue.put_nowait(item)
         except Exception:
             pass
