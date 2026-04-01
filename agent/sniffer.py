@@ -17,19 +17,60 @@ from .protocols.modbus.modbus_definitions import get_modbus_function_label
 
 
 class SnifferMixin:
+    def _event_identity(self, event: dict):
+        tx_id = event.get("transaction_id")
+        # For Modbus/TCP events transaction id is the best dedupe anchor.
+        # If absent, return None and fallback to temporal fingerprint logic.
+        if tx_id is None:
+            return None
+        return (
+            event.get("type"),
+            tx_id,
+            event.get("function_code"),
+            event.get("src_ip"),
+            event.get("src_port"),
+            event.get("dst_ip"),
+            event.get("dst_port"),
+            event.get("unit_id"),
+            event.get("register"),
+            event.get("start_addr"),
+            event.get("quantity"),
+            event.get("value"),
+        )
+
     def _is_duplicate_event(self, event: dict) -> bool:
         # Windows ALL-mode may surface duplicate packet notifications across adapters.
         # Keep a tiny temporal cache to suppress near-identical duplicates.
-        cache = getattr(self, "_recent_event_fingerprints", None)
-        if cache is None:
-            cache = {}
-            self._recent_event_fingerprints = cache
+        fp_cache = getattr(self, "_recent_event_fingerprints", None)
+        if fp_cache is None:
+            fp_cache = {}
+            self._recent_event_fingerprints = fp_cache
+
+        id_cache = getattr(self, "_recent_event_ids", None)
+        if id_cache is None:
+            id_cache = {}
+            self._recent_event_ids = id_cache
 
         ts = event.get("timestamp")
         try:
             ts = float(ts)
         except (TypeError, ValueError):
             ts = time.time()
+
+        # Primary dedupe path: if we already saw this event identity recently, drop it.
+        event_id = self._event_identity(event)
+        if event_id is not None:
+            prev_ts = id_cache.get(event_id)
+            id_cache[event_id] = ts
+
+            if len(id_cache) > 6000:
+                cutoff = ts - 90.0
+                old_keys = [k for k, v in id_cache.items() if v < cutoff]
+                for k in old_keys[:3000]:
+                    id_cache.pop(k, None)
+
+            if prev_ts is not None and (ts - float(prev_ts)) <= 90.0:
+                return True
 
         fp = (
             event.get("type"),
@@ -45,15 +86,15 @@ class SnifferMixin:
             event.get("value"),
         )
 
-        prev_ts = cache.get(fp)
-        cache[fp] = ts
+        prev_ts = fp_cache.get(fp)
+        fp_cache[fp] = ts
 
         # Cleanup old fingerprints opportunistically.
-        if len(cache) > 3000:
+        if len(fp_cache) > 3000:
             cutoff = ts - 8.0
-            keys = [k for k, v in cache.items() if v < cutoff]
+            keys = [k for k, v in fp_cache.items() if v < cutoff]
             for k in keys[:1500]:
-                cache.pop(k, None)
+                fp_cache.pop(k, None)
 
         if prev_ts is None:
             return False
