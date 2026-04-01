@@ -293,7 +293,14 @@ class SnifferMixin:
         event_type = event.get("type")
         function_code = event.get("function_code")
 
-        if event_type in ("WRITE_REQUEST", "WRITE_RESPONSE"):
+        # Consolidate HMI->PLC action into a single alert card:
+        # - accepted writes => WRITE_RESPONSE
+        # - rejected writes => EXCEPTION_RESPONSE (request context is carried over)
+        if event_type == "WRITE_RESPONSE":
+            return True
+        if event_type == "WRITE_REQUEST":
+            return False
+        if event_type == "EXCEPTION_RESPONSE":
             return True
 
         if function_code not in MODBUS_KNOWN_FUNCTION_CODES:
@@ -491,13 +498,13 @@ class SnifferMixin:
 
                     if decoded["type"] == "WRITE_RESPONSE":
                         reasons.append(
-                            f"Write confirmation received for register {decoded.get('register')} value {decoded.get('value')}"
+                            f"HMI request confirmed by PLC (register={decoded.get('register')}, value={decoded.get('value')})"
                         )
                         score = 4
 
                     if decoded["type"] == "EXCEPTION_RESPONSE":
                         reasons.append(
-                            f"Exception response detected with code {decoded.get('exception_code')}"
+                            f"HMI request rejected by PLC (exception_code={decoded.get('exception_code')})"
                         )
                         score = max(score, 6)
 
