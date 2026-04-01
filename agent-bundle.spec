@@ -5,16 +5,12 @@ PyInstaller spec file for OT Lab Agent
 Bundles the agent with all dependencies into a standalone executable
 """
 
-import sys
-import os
 from pathlib import Path
 
 block_cipher = None
 
-# Determine the root directory - use current working directory
-# PyInstaller runs from the project root directory
-root_dir = Path(os.getcwd())
-agent_dir = root_dir / "agent"
+# Resolve project root from this spec file location to avoid cwd-dependent builds
+root_dir = Path(__file__).resolve().parent
 
 # Data files to include
 datas = []
