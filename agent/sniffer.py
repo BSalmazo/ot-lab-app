@@ -17,6 +17,58 @@ from .protocols.modbus.modbus_definitions import get_modbus_function_label
 
 
 class SnifferMixin:
+    def _should_emit_event(self, event: dict) -> bool:
+        """
+        Throttle high-frequency read traffic to keep UI near real-time under fast polling
+        (e.g., 300ms), while preserving full fidelity for writes/exceptions.
+        """
+        event_type = str(event.get("type") or "").upper()
+
+        if event_type in {"WRITE_REQUEST", "WRITE_RESPONSE", "EXCEPTION_RESPONSE", "UNKNOWN_REQUEST"}:
+            return True
+
+        # READ_RESPONSE is usually redundant for liveness; keep only sampled READ_REQUEST.
+        if event_type == "READ_RESPONSE":
+            return False
+
+        if event_type != "READ_REQUEST":
+            return True
+
+        now_ts = event.get("timestamp")
+        try:
+            now_ts = float(now_ts)
+        except (TypeError, ValueError):
+            now_ts = time.time()
+
+        flow_key = (
+            event.get("server"),
+            event.get("function_code"),
+            event.get("start_addr"),
+            event.get("quantity"),
+            event.get("unit_id"),
+        )
+
+        cache = getattr(self, "_read_emit_last_ts", None)
+        if cache is None:
+            cache = {}
+            self._read_emit_last_ts = cache
+
+        prev = cache.get(flow_key)
+        cache[flow_key] = now_ts
+
+        # Keep at most one event every 0.4s per read flow.
+        if prev is not None and (now_ts - float(prev)) < 0.4:
+            return False
+
+        # Opportunistic cleanup
+        if len(cache) > 4000:
+            cutoff = now_ts - 60.0
+            old_keys = [k for k, v in cache.items() if float(v) < cutoff]
+            for k in old_keys[:2000]:
+                cache.pop(k, None)
+
+        return True
+
     def _event_identity(self, event: dict):
         tx_id = event.get("transaction_id")
         # For Modbus/TCP events transaction id is the best dedupe anchor.
@@ -514,6 +566,9 @@ class SnifferMixin:
                 event["summary"] = self._build_event_summary(event)
 
                 if self._is_duplicate_event(event):
+                    continue
+
+                if not self._should_emit_event(event):
                     continue
 
                 self.state["event_counts"][decoded["type"]] += 1
