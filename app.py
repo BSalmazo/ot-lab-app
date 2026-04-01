@@ -278,6 +278,7 @@ def ensure_session_state(session_id: str):
                 "connection_history": deque(maxlen=80),
                 "pending_commands": [],
                 "action_commands": deque(maxlen=80),
+                "event_log_signatures": deque(maxlen=600),
             }
         return agents_by_session[session_id]
 
@@ -685,17 +686,53 @@ def build_agent_config(request: Request, session_id: str, state: dict):
     }
 
 
-def should_log_agent_event(payload: dict) -> bool:
+def should_log_agent_event(state: dict, payload: dict) -> bool:
     event_type = normalize_event_type(payload.get("type"))
-    # Keep high-value operational logs only to avoid log flood under heavy polling.
-    return event_type in {
-        "WRITE_REQUEST",
-        "WRITE_RESPONSE",
-        "EXCEPTION_RESPONSE",
-        "GENERIC_REQUEST",
-        "GENERIC_RESPONSE",
-        "UNKNOWN_REQUEST",
-    }
+    function_code = payload.get("function_code")
+    try:
+        function_code = int(function_code) if function_code is not None else None
+    except (TypeError, ValueError):
+        function_code = None
+
+    # Always log high-value events.
+    if event_type in {"WRITE_REQUEST", "EXCEPTION_RESPONSE", "UNKNOWN_REQUEST"}:
+        return True
+
+    # Ignore routine traffic noise.
+    if event_type in {"WRITE_RESPONSE", "READ_RESPONSE", "GENERIC_RESPONSE"}:
+        return False
+
+    # For read requests, only log when pattern/function changes (new/different read).
+    if event_type == "READ_REQUEST":
+        signature = (
+            event_type,
+            function_code,
+            payload.get("server"),
+            payload.get("start_addr"),
+            payload.get("quantity"),
+        )
+        seen = state.get("event_log_signatures")
+        if seen is None:
+            seen = deque(maxlen=600)
+            state["event_log_signatures"] = seen
+        if signature in seen:
+            return False
+        seen.append(signature)
+        return True
+
+    # Keep generic/other requests only when function changes.
+    if event_type in {"GENERIC_REQUEST"}:
+        signature = (event_type, function_code, payload.get("server"))
+        seen = state.get("event_log_signatures")
+        if seen is None:
+            seen = deque(maxlen=600)
+            state["event_log_signatures"] = seen
+        if signature in seen:
+            return False
+        seen.append(signature)
+        return True
+
+    return False
 
 
 def ingest_agent_event_payload(state: dict, session_id: str, payload: dict):
@@ -706,7 +743,7 @@ def ingest_agent_event_payload(state: dict, session_id: str, payload: dict):
     push_event(state, payload)
     update_modbus_summary_from_event(state, payload)
 
-    if not should_log_agent_event(payload):
+    if not should_log_agent_event(state, payload):
         return
 
     summary = payload.get("summary")
@@ -1175,6 +1212,8 @@ async def set_agent_config(request: Request):
     # Se interface mudou, resetar o sumário de detecção
     if iface_changed:
         state["modbus_summary"] = default_modbus_summary()
+        if "event_log_signatures" in state:
+            state["event_log_signatures"].clear()
         push_log_for_session(session_id, f"Detection interface changed from {old_iface} to {iface} - resetting detection")
     else:
         push_log_for_session(session_id, f"Monitor configuration updated (interface={iface}, mode={mode})")
@@ -1420,6 +1459,8 @@ def reset_system(request: Request):
         state["modbus_summary"] = default_modbus_summary()
         if "connection_history" in state:
             state["connection_history"].clear()
+        if "event_log_signatures" in state:
+            state["event_log_signatures"].clear()
         state["pending_commands"].clear()
         if "action_commands" in state:
             state["action_commands"].clear()
