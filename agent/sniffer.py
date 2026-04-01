@@ -25,7 +25,8 @@ class SnifferMixin:
             self.sniffer = None
             return False
 
-        # Filter out loopback and virtual interfaces (macOS/Linux)
+        # Filter out loopback and virtual interfaces (macOS/Linux).
+        # On Windows we keep loopback aliases available because Npcap naming differs.
         blocked_prefixes = ("anpi", "ap", "awdl", "llw", "utun", "bridge", "gif", "stf")
         filtered_ifaces = [
             iface for iface in sniff_ifaces
@@ -41,9 +42,44 @@ class SnifferMixin:
             return False
 
         try:
+            os_name = platform.system()
+            # Windows stability: start one sniffer per interface when running in ALL mode.
+            # Multi-interface list capture on Windows can be flaky depending on Npcap/adapter mix.
+            if os_name == "Windows" and self.iface == DEFAULT_IFACE and len(sniff_ifaces) > 1:
+                started_sniffers = []
+                started_ifaces = []
+                failed_ifaces = []
+
+                print(f"[agent] attempting to start per-interface sniffers on Windows: {sniff_ifaces}")
+                for iface in sniff_ifaces:
+                    try:
+                        snf = AsyncSniffer(
+                            iface=iface,
+                            filter="tcp",
+                            prn=self._handle_packet,
+                            store=False,
+                            promisc=False,
+                        )
+                        snf.start()
+                        started_sniffers.append(snf)
+                        started_ifaces.append(iface)
+                    except Exception as ie:
+                        failed_ifaces.append((iface, f"{type(ie).__name__}: {ie}"))
+
+                if started_sniffers:
+                    self.sniffer = started_sniffers
+                    print(f"[agent] sniffing successfully started on interfaces: {started_ifaces}")
+                    if failed_ifaces:
+                        print(f"[agent] warning: failed interfaces: {failed_ifaces}")
+                    return True
+
+                self.sniffer = None
+                print(f"[agent] ERROR - failed to start sniffer on all candidate interfaces: {failed_ifaces}")
+                return False
+
             iface_arg = sniff_ifaces if len(sniff_ifaces) > 1 else sniff_ifaces[0]
             print(f"[agent] attempting to start sniffer on: {iface_arg}")
-            
+
             self.sniffer = AsyncSniffer(
                 iface=iface_arg,
                 filter="tcp",
@@ -88,7 +124,14 @@ class SnifferMixin:
     def stop(self):
         if self.sniffer is not None:
             try:
-                self.sniffer.stop()
+                if isinstance(self.sniffer, list):
+                    for snf in self.sniffer:
+                        try:
+                            snf.stop()
+                        except Exception as ie:
+                            print(f"[agent] warning while stopping one sniffer: {ie}")
+                else:
+                    self.sniffer.stop()
             except Exception as e:
                 print(f"[agent] warning while stopping sniffer: {e}")
             self.sniffer = None
