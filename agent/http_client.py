@@ -16,6 +16,12 @@ class HttpClientMixin:
         # Keep normal telemetry queue intentionally small to avoid long stale backlogs.
         self._normal_post_queue = Queue(maxsize=200)
         self._post_session = requests.Session()
+        self._event_batch_lock = threading.Lock()
+        self._event_batch = []
+        self._event_batch_max = 120
+        self._event_batch_hard_limit = 1200
+        self._event_flush_interval_s = 0.12
+        self._event_batch_last_flush = 0.0
 
         def worker():
             while True:
@@ -48,6 +54,18 @@ class HttpClientMixin:
         thread = threading.Thread(target=worker, name="agent-http-post-worker", daemon=True)
         thread.start()
         self._post_worker = thread
+
+        def event_flusher():
+            while True:
+                try:
+                    self._flush_event_batch(force=False)
+                except Exception:
+                    pass
+                time.sleep(0.05)
+
+        flush_thread = threading.Thread(target=event_flusher, name="agent-event-batch-flusher", daemon=True)
+        flush_thread.start()
+        self._event_flusher = flush_thread
 
     def fetch_remote_config(self):
         try:
@@ -130,7 +148,21 @@ class HttpClientMixin:
         self._post("/api/agent/alert", alert, timeout=(0.8, 1.5))
 
     def send_event(self, event):
-        self._post("/api/agent/event", event, timeout=(0.8, 1.5))
+        self._ensure_async_post_worker()
+
+        should_force_flush = False
+        with self._event_batch_lock:
+            self._event_batch.append(event)
+
+            if len(self._event_batch) > self._event_batch_hard_limit:
+                # Keep freshest events when producer outruns transport.
+                self._event_batch = self._event_batch[-self._event_batch_hard_limit:]
+
+            if len(self._event_batch) >= self._event_batch_max:
+                should_force_flush = True
+
+        if should_force_flush:
+            self._flush_event_batch(force=True)
 
     def send_command_result(self, command_id: str, status: str, message: str = ""):
         self._post(
@@ -166,3 +198,30 @@ class HttpClientMixin:
             target_queue.put_nowait(item)
         except Exception:
             pass
+
+    def _flush_event_batch(self, force: bool = False):
+        now = time.time()
+
+        with self._event_batch_lock:
+            batch = self._event_batch
+            if not batch:
+                return
+
+            age = now - float(self._event_batch_last_flush or 0.0)
+            if not force and len(batch) < self._event_batch_max and age < self._event_flush_interval_s:
+                return
+
+            take = min(len(batch), self._event_batch_max)
+            to_send = batch[:take]
+            del batch[:take]
+            self._event_batch_last_flush = now
+
+        self._post(
+            "/api/agent/events_batch",
+            {
+                "session_id": self.session_id,
+                "events": to_send,
+            },
+            timeout=(0.8, 2.0),
+            critical=False,
+        )
