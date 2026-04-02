@@ -818,6 +818,9 @@ function formatConnectionHistoryRow(row) {
   const ageText = row.age_s == null ? "-" : `${Number(row.age_s).toFixed(1)}s ago`;
   const durText = row.duration_s == null ? "-" : `${Number(row.duration_s).toFixed(3)}s`;
   const portText = row.port == null ? "-" : row.port;
+  const connId = row.connection_id ? String(row.connection_id).slice(0, 8) : "-";
+  const instance = row.instance_id == null ? 1 : Number(row.instance_id);
+  const reconnects = row.reconnect_count == null ? 0 : Number(row.reconnect_count);
   return `
     <div class="conn-row">
       <div class="conn-top">
@@ -826,9 +829,37 @@ function formatConnectionHistoryRow(row) {
       </div>
       <div class="conn-path">${escapeHtml(row.client_ip || "-")} → ${escapeHtml(row.server_ip || "-")}</div>
       <div class="conn-fcs">${escapeHtml(fcText)}${escapeHtml(excText)}</div>
-      <div class="conn-extra">events=${escapeHtml(row.event_count || 0)} | duration=${escapeHtml(durText)} | last=${escapeHtml(ageText)}</div>
+      <div class="conn-extra">id=${escapeHtml(connId)} | instance=${escapeHtml(instance)} | reconnects=${escapeHtml(reconnects)} | events=${escapeHtml(row.event_count || 0)} | duration=${escapeHtml(durText)} | last=${escapeHtml(ageText)}</div>
     </div>
   `;
+}
+
+function getAlertSemanticKey(alert) {
+  return [
+    String(alert.event_type || "").toUpperCase(),
+    alert.function_code ?? "-",
+    alert.src ?? "-",
+    alert.dst ?? "-",
+    alert.register ?? "-",
+    alert.start_addr ?? "-",
+    alert.quantity ?? "-",
+    alert.value ?? "-",
+    alert.exception_code ?? "-",
+    alert.transaction_id ?? "-",
+  ].join("|");
+}
+
+function dedupeAlerts(alerts) {
+  const out = [];
+  const seen = new Set();
+  for (let i = 0; i < alerts.length; i += 1) {
+    const alert = alerts[i];
+    const key = getAlertSemanticKey(alert);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(alert);
+  }
+  return out;
 }
 
 function buildExceptionInfoByFc(alerts) {
@@ -901,7 +932,8 @@ function simplifyLogLine(log) {
 
 async function refreshEvents() {
   const data = await apiGet("/api/events");
-  const alerts = Array.isArray(data.alerts) ? data.alerts : [];
+  const rawAlerts = Array.isArray(data.alerts) ? data.alerts : [];
+  const alerts = dedupeAlerts(rawAlerts);
   const logs = Array.isArray(data.logs) ? data.logs : [];
   const connections = Array.isArray(data.connection_history) ? data.connection_history : [];
   exceptionInfoByFc = buildExceptionInfoByFc(alerts);
@@ -1168,7 +1200,7 @@ async function scanInterfaces() {
 
   populateIfaceSelect(data.interfaces || [], data.current || "ALL");
   renderIfaceSummary(data);
-  setText("monitorConfigStatus", "Interface scan completed.");
+  setText("monitorConfigStatus", "");
 }
 
 async function openAgentDownloadModal() {

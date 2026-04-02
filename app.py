@@ -1,5 +1,6 @@
 import io
 import json
+import re
 import time
 import uuid
 import zipfile
@@ -384,6 +385,8 @@ def _event_signature(event: dict):
 
 
 def _alert_signature(alert: dict):
+    summary = str(alert.get("summary") or "")
+    summary = re.sub(r"\s*\|\s*rtt=[0-9.]+", "", summary, flags=re.IGNORECASE).strip()
     return (
         normalize_event_type(alert.get("event_type")),
         alert.get("function_code"),
@@ -394,7 +397,7 @@ def _alert_signature(alert: dict):
         alert.get("quantity"),
         alert.get("value"),
         alert.get("exception_code"),
-        tuple(alert.get("reasons") or []),
+        summary,
     )
 
 
@@ -615,7 +618,17 @@ def update_connection_history_from_event(
         history = deque(maxlen=80)
         state["connection_history"] = history
 
-    key = f"{iface}|{client_ip}|{server_ip}|{port}"
+    def endpoint_host(endpoint: str):
+        value = str(endpoint or "").strip()
+        if not value:
+            return value
+        if value.count(":") == 1 and "." in value:
+            return value.rsplit(":", 1)[0]
+        return value
+
+    client_host = endpoint_host(client_ip)
+    server_host = endpoint_host(server_ip)
+    key = f"{iface}|{client_host}|{server_host}|{port}"
     now = float(event_ts) if event_ts is not None else time.time()
     target = None
 
@@ -625,13 +638,17 @@ def update_connection_history_from_event(
             break
 
     if target is None:
+        stable_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"modbus|{key}"))
         target = {
             "id": str(uuid.uuid4()),
+            "connection_id": stable_id,
             "key": key,
             "protocol": "Modbus/TCP",
             "interface": iface,
             "client_ip": client_ip,
+            "client_host": client_host,
             "server_ip": server_ip,
+            "server_host": server_host,
             "port": port,
             "first_seen": now,
             "last_seen": now,
@@ -639,10 +656,25 @@ def update_connection_history_from_event(
             "functions_seen": [],
             "exception_functions_seen": [],
             "writes_detected": False,
+            "reconnect_count": 0,
+            "instance_id": 1,
         }
         history.appendleft(target)
     else:
+        last_seen_prev = target.get("last_seen")
+        if last_seen_prev is not None and (now - float(last_seen_prev)) > (MODBUS_ACTIVE_WINDOW_SECONDS * 1.5):
+            target["reconnect_count"] = int(target.get("reconnect_count") or 0) + 1
+            target["instance_id"] = int(target.get("instance_id") or 1) + 1
+            target["first_seen"] = now
+            target["event_count"] = 0
+            target["functions_seen"] = []
+            target["exception_functions_seen"] = []
+            target["writes_detected"] = False
         target["last_seen"] = now
+        target["client_ip"] = client_ip
+        target["server_ip"] = server_ip
+        target["client_host"] = client_host
+        target["server_host"] = server_host
 
     target["event_count"] = int(target.get("event_count") or 0) + 1
     fc = set(target.get("functions_seen") or [])
@@ -700,10 +732,13 @@ def build_connection_history(state: dict):
 
         rows.append({
             "id": item.get("id"),
+            "connection_id": item.get("connection_id"),
             "protocol": item.get("protocol") or "Modbus/TCP",
             "interface": item.get("interface"),
             "client_ip": item.get("client_ip"),
+            "client_host": item.get("client_host"),
             "server_ip": item.get("server_ip"),
+            "server_host": item.get("server_host"),
             "port": item.get("port"),
             "first_seen": first_seen,
             "last_seen": last_seen,
@@ -714,6 +749,8 @@ def build_connection_history(state: dict):
             "functions_seen": item.get("functions_seen") or [],
             "exception_functions_seen": item.get("exception_functions_seen") or [],
             "writes_detected": bool(item.get("writes_detected")),
+            "reconnect_count": int(item.get("reconnect_count") or 0),
+            "instance_id": int(item.get("instance_id") or 1),
         })
     return list(reversed(rows[:60]))
 
