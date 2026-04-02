@@ -161,11 +161,11 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding-top: 8px;
+  padding-top: 12px;
 }
 
 .alerts-card .card-head {
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 /* HEADERS */
@@ -663,14 +663,28 @@ button:disabled {
   padding: 2px 6px 4px;
 }
 
-/* Keep top spacing in connections popup minimal, while preserving lateral breathing room. */
+/* Keep top spacing between header and first card minimal. */
 #connectionsHistoryPanel.log-panel {
-  padding-top: 1px;
+  padding-top: 0;
   margin-top: 0;
 }
 
 #alertsPanel.log-panel {
-  padding-top: 1px;
+  padding-top: 0;
+  margin-top: 0;
+}
+
+#alertsWindowPanel.log-panel {
+  padding-top: 0;
+  margin-top: 0;
+}
+
+#connectionsWindow .window-body {
+  padding-top: 0;
+}
+
+#alertsWindow .window-body {
+  padding-top: 0;
 }
 
 #connectionsHistoryPanel .conn-row,
