@@ -636,7 +636,7 @@ button:disabled {
 #alertsPanel .log-item,
 #alertsWindowPanel .log-item,
 #connectionsHistoryPanel .log-item {
-  padding: 0;
+  padding: 1px 0;
   margin: 0;
   border-bottom: none;
 }
@@ -644,18 +644,23 @@ button:disabled {
 #alertsPanel .log-item + .log-item,
 #alertsWindowPanel .log-item + .log-item,
 #connectionsHistoryPanel .log-item + .log-item {
-  margin-top: 1px;
+  margin-top: 2px;
 }
 
 #alertsPanel.log-panel,
 #alertsWindowPanel.log-panel,
 #connectionsHistoryPanel.log-panel {
-  padding: 0;
+  padding: 4px 8px 6px;
 }
 
 #alertsWindow .window-body,
 #connectionsWindow .window-body {
-  padding: 2px;
+  padding: 4px;
+}
+
+/* Keep top spacing in connections popup minimal, while preserving lateral breathing room. */
+#connectionsHistoryPanel.log-panel {
+  padding-top: 2px;
 }
 
 .alert-INFO {
