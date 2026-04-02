@@ -636,14 +636,26 @@ button:disabled {
 #alertsPanel .log-item,
 #alertsWindowPanel .log-item,
 #connectionsHistoryPanel .log-item {
-  padding: 1px 0;
+  padding: 0;
+  margin: 0;
   border-bottom: none;
 }
 
 #alertsPanel .log-item + .log-item,
 #alertsWindowPanel .log-item + .log-item,
 #connectionsHistoryPanel .log-item + .log-item {
-  margin-top: 3px;
+  margin-top: 1px;
+}
+
+#alertsPanel.log-panel,
+#alertsWindowPanel.log-panel,
+#connectionsHistoryPanel.log-panel {
+  padding: 0;
+}
+
+#alertsWindow .window-body,
+#connectionsWindow .window-body {
+  padding: 2px;
 }
 
 .alert-INFO {
