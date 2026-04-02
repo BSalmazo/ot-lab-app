@@ -9,6 +9,8 @@ DEFAULT_SERVER_URL = "https://web-production-56599.up.railway.app/"
 DEFAULT_SESSION_ID = "dev-local-session"
 DEFAULT_MODE = "MONITORING"
 DEFAULT_IFACE = "ALL"
+DEFAULT_PORT_MODE = "MODBUS_PORTS"
+DEFAULT_CUSTOM_PORTS = []
 
 CONFIG_DIR = Path.home() / ".ot_lab_agent"
 INSTALLED_CONFIG_FILE = CONFIG_DIR / "agent_config.json"
@@ -52,6 +54,16 @@ def build_arg_parser(bundled_config):
     parser.add_argument("--server", default=bundled_config.get("server_url") or DEFAULT_SERVER_URL)
     parser.add_argument("--session-id", default=bundled_config.get("session_id") or DEFAULT_SESSION_ID)
     parser.add_argument("--iface", default=bundled_config.get("iface") or DEFAULT_IFACE)
+    parser.add_argument(
+        "--port-mode",
+        default=bundled_config.get("port_mode") or DEFAULT_PORT_MODE,
+        choices=["ALL_PORTS", "MODBUS_PORTS", "CUSTOM"],
+    )
+    parser.add_argument(
+        "--custom-ports",
+        default=",".join(str(p) for p in (bundled_config.get("custom_ports") or DEFAULT_CUSTOM_PORTS)),
+        help="Comma-separated custom ports (used only when --port-mode CUSTOM)",
+    )
     parser.add_argument(
         "--mode",
         default=bundled_config.get("mode") or DEFAULT_MODE,

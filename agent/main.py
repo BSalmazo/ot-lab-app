@@ -5,7 +5,17 @@ from collections import defaultdict, deque
 
 from scapy.all import get_if_list
 
-from .config import DEFAULT_MODE, DEFAULT_SERVER_URL, DEFAULT_SESSION_ID, DEFAULT_IFACE, build_arg_parser, load_agent_config, ensure_npcap_installed
+from .config import (
+    DEFAULT_CUSTOM_PORTS,
+    DEFAULT_IFACE,
+    DEFAULT_MODE,
+    DEFAULT_PORT_MODE,
+    DEFAULT_SERVER_URL,
+    DEFAULT_SESSION_ID,
+    build_arg_parser,
+    load_agent_config,
+    ensure_npcap_installed,
+)
 from .http_client import HttpClientMixin
 from .identity import load_or_create_local_identity
 from .protocols.modbus.modbus_builder import build_modbus_tcp_request
@@ -23,6 +33,8 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
         self,
         iface=DEFAULT_IFACE,
         mode=DEFAULT_MODE,
+        port_mode=DEFAULT_PORT_MODE,
+        custom_ports=None,
         server_url=DEFAULT_SERVER_URL,
         session_id=DEFAULT_SESSION_ID,
     ):
@@ -31,6 +43,8 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
         
         self.iface = iface
         self.mode = mode
+        self.port_mode = port_mode
+        self.custom_ports = self.parse_custom_ports(custom_ports)
         self.server_url = server_url.rstrip("/")
         self.session_id = session_id
         self.sniffer = None
@@ -68,11 +82,43 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
         self.last_applied_config = {
             "iface": iface,
             "mode": mode,
+            "port_mode": self.port_mode,
+            "custom_ports": list(self.custom_ports),
         }
         self.capabilities = [
             "modbus_actions_v1",
             "run_modbus_action_command",
         ]
+
+    @staticmethod
+    def parse_custom_ports(value):
+        if value is None:
+            return list(DEFAULT_CUSTOM_PORTS)
+
+        if isinstance(value, str):
+            items = value.replace(";", ",").split(",")
+        elif isinstance(value, list):
+            items = value
+        else:
+            items = [value]
+
+        ports = []
+        seen = set()
+        for raw in items:
+            token = str(raw).strip()
+            if not token:
+                continue
+            try:
+                port = int(token)
+            except (TypeError, ValueError):
+                continue
+            if port < 1 or port > 65535:
+                continue
+            if port in seen:
+                continue
+            seen.add(port)
+            ports.append(port)
+        return ports
 
     def make_timestamps_deque(self):
         return deque(maxlen=self.max_timestamps)
@@ -247,10 +293,21 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
 
         new_iface = config.get("iface", self.iface)
         new_mode = config.get("mode", self.mode)
+        new_port_mode = config.get("port_mode", self.port_mode)
+        new_custom_ports = self.parse_custom_ports(config.get("custom_ports", self.custom_ports))
+
+        if new_port_mode not in {"ALL_PORTS", "MODBUS_PORTS", "CUSTOM"}:
+            print(f"[agent] ignoring invalid remote port_mode '{new_port_mode}'")
+            return
+        if new_port_mode == "CUSTOM" and not new_custom_ports:
+            print("[agent] ignoring remote CUSTOM port_mode without custom_ports")
+            return
 
         changed = (
             new_iface != self.iface or
-            new_mode != self.mode
+            new_mode != self.mode or
+            new_port_mode != self.port_mode or
+            new_custom_ports != self.custom_ports
         )
 
         if not changed:
@@ -268,9 +325,13 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
 
         self.iface = new_iface
         self.mode = new_mode
+        self.port_mode = new_port_mode
+        self.custom_ports = new_custom_ports
         self.last_applied_config = {
             "iface": self.iface,
             "mode": self.mode,
+            "port_mode": self.port_mode,
+            "custom_ports": list(self.custom_ports),
         }
 
         self.reset_state()
@@ -280,7 +341,11 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
             if not started:
                 print(f"[agent] could not restart sniffer on iface={self.iface}")
 
-        print(f"[agent] applied remote config iface={self.iface} mode={self.mode}")
+        print(
+            "[agent] applied remote config "
+            f"iface={self.iface} mode={self.mode} "
+            f"port_mode={self.port_mode} custom_ports={self.custom_ports}"
+        )
 
     def reset_state(self):
         self.state = self._empty_state()
@@ -310,6 +375,8 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
             "agent_id": self.agent_id,
             "mode": self.mode,
             "iface": self.iface,
+            "port_mode": self.port_mode,
+            "custom_ports": list(self.custom_ports),
             "hostname": self.hostname,
             "function_codes_seen": sorted(self.state["function_codes_seen"]),
             "initiators_seen": sorted(self.state["initiators_seen"]),
@@ -388,6 +455,8 @@ def main():
     print("\n=== OT LAB AGENT ===")
     print("Interfaces disponíveis:", ", ".join(sorted(set(get_if_list()))))
     print(f"Interface pedida: {args.iface}")
+    print(f"Port mode pedido: {args.port_mode}")
+    print(f"Custom ports pedidos: {args.custom_ports}")
 
     if bundled_config:
         print("[agent] config carregada de ficheiro")
@@ -395,11 +464,16 @@ def main():
     agent = AgentMonitor(
         iface=args.iface,
         mode=args.mode,
+        port_mode=args.port_mode,
+        custom_ports=args.custom_ports,
         server_url=args.server,
         session_id=args.session_id,
     )
 
-    print(f"[agent] using iface: {agent.iface}")
+    print(
+        f"[agent] using iface: {agent.iface} "
+        f"port_mode={agent.port_mode} custom_ports={agent.custom_ports}"
+    )
 
     agent.register()
     started = agent.start()
@@ -411,7 +485,8 @@ def main():
 
     print(
         f"[agent] session={agent.session_id} id={agent.agent_id} "
-        f"iface={agent.iface} mode={agent.mode} -> {args.server}"
+        f"iface={agent.iface} mode={agent.mode} "
+        f"port_mode={agent.port_mode} custom_ports={agent.custom_ports} -> {args.server}"
     )
 
     last_config_poll = 0.0

@@ -214,11 +214,16 @@ function formatAgentStatus(data) {
   const connected = !!data.agent?.connected;
   const iface = data.agent_config?.iface || data.agent?.iface || "-";
   const mode = data.agent_config?.mode || data.agent?.mode || "-";
+  const portMode = data.agent_config?.port_mode || data.agent?.port_mode || "-";
+  const customPorts = data.agent_config?.custom_ports || data.agent?.custom_ports || [];
+  const customPortText = Array.isArray(customPorts) && customPorts.length ? customPorts.join(",") : "-";
 
   return [
     `STATUS: ${connected ? "CONNECTED" : "DISCONNECTED"}`,
     `INTERFACE: ${iface}`,
-    `MODE: ${mode}`
+    `MODE: ${mode}`,
+    `PORT FILTER: ${portMode}`,
+    `CUSTOM PORTS: ${customPortText}`
   ].join("\n");
 }
 
@@ -412,6 +417,12 @@ function buildReadableSnapshot(snapshot) {
     `Host: ${snapshot.hostname || "-"}`,
     `Interface: ${snapshot.iface || "-"}`,
     `Mode: ${snapshot.mode || "-"}`,
+    `Port Filter: ${snapshot.port_mode || "-"}`,
+    `Custom Ports: ${
+      Array.isArray(snapshot.custom_ports) && snapshot.custom_ports.length
+        ? snapshot.custom_ports.join(", ")
+        : "-"
+    }`,
     ``,
     `Traffic Overview`,
     `Clients Identified: ${overview.clients_identified ?? 0}`,
@@ -1022,8 +1033,14 @@ async function resetSystem() {
 async function saveMonitorConfig() {
   const iface = byId("ifaceSelect")?.value || "ALL";
   const mode = byId("monitorMode")?.value || "MONITORING";
+  const port_mode = byId("portModeSelect")?.value || "MODBUS_PORTS";
+  const custom_ports_raw = byId("customPortsInput")?.value || "";
+  const custom_ports = custom_ports_raw
+    .split(",")
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0);
 
-  const result = await apiPost("/api/agent/config", { iface, mode });
+  const result = await apiPost("/api/agent/config", { iface, mode, port_mode, custom_ports });
 
   if (result.ok) {
     setText("monitorConfigStatus", "Configuration saved successfully.");
@@ -1077,6 +1094,14 @@ async function openMonitorConfig() {
   if (byId("monitorMode")) {
     byId("monitorMode").value = status.agent_config?.mode || "MONITORING";
   }
+  if (byId("portModeSelect")) {
+    byId("portModeSelect").value = status.agent_config?.port_mode || "MODBUS_PORTS";
+  }
+  if (byId("customPortsInput")) {
+    const ports = status.agent_config?.custom_ports || [];
+    byId("customPortsInput").value = Array.isArray(ports) ? ports.join(",") : "";
+  }
+  updateCustomPortsVisibility();
 
   openModal("monitorModal");
   await scanInterfaces();
@@ -1085,6 +1110,17 @@ async function openMonitorConfig() {
     status.agent?.available_ifaces || [],
     status.agent_config?.iface || "ALL"
   );
+}
+
+function updateCustomPortsVisibility() {
+  const mode = byId("portModeSelect")?.value || "MODBUS_PORTS";
+  const row = byId("customPortsRow");
+  if (!row) return;
+  if (mode === "CUSTOM") {
+    row.classList.remove("hidden");
+  } else {
+    row.classList.add("hidden");
+  }
 }
 
 async function scanInterfaces() {
@@ -1318,6 +1354,7 @@ window.addEventListener("DOMContentLoaded", () => {
   byId("openMonitorConfigBtn")?.addEventListener("click", openMonitorConfig);
   byId("saveMonitorConfigBtn")?.addEventListener("click", saveMonitorConfig);
   byId("scanIfacesBtn")?.addEventListener("click", scanInterfaces);
+  byId("portModeSelect")?.addEventListener("change", updateCustomPortsVisibility);
 
   byId("saveServerBtn")?.addEventListener("click", saveServerConfig);
   byId("closeServerBtn")?.addEventListener("click", () => closeModal("serverModal"));

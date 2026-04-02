@@ -192,6 +192,20 @@
           </select>
         </div>
 
+        <div class="row">
+          <label>Port Filter</label>
+          <select id="portModeSelect">
+            <option value="MODBUS_PORTS">MODBUS_PORTS (recommended)</option>
+            <option value="ALL_PORTS">ALL_PORTS (heavier)</option>
+            <option value="CUSTOM">CUSTOM</option>
+          </select>
+        </div>
+
+        <div class="row hidden" id="customPortsRow">
+          <label>Custom Ports</label>
+          <input id="customPortsInput" placeholder="e.g. 502,1502,15020" />
+        </div>
+
         <div id="monitorConfigStatus" class="status slim">-</div>
 
         <div class="actions tight">
@@ -295,6 +309,6 @@
   <script src="/static/protocols/modbus/ModbusActionForm.js?v=20260330p"></script>
   <script src="/static/protocols/modbus/ModbusTab.js?v=20260331a"></script>
   <script src="/static/actions/ActionsWindow.js?v=20260330p"></script>
-  <script src="/static/app.js?v=20260401e"></script>
+  <script src="/static/app.js?v=20260402a"></script>
 </body>
 </html>
