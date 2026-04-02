@@ -1605,14 +1605,11 @@ def reset_system(request: Request):
     session_id, state = get_session_state_from_request(request)
 
     with lock:
+        # Visual clean only: keep monitor/server/client configuration as-is.
         state["events"].clear()
         state["alerts"].clear()
         state["logs"].clear()
-        state["agent_info"] = default_agent_info()
         state["agent_snapshot"] = default_agent_snapshot()
-        state["agent_config"] = default_agent_config()
-        state["remote_server"] = default_remote_server()
-        state["remote_client"] = default_remote_client()
         state["modbus_summary"] = default_modbus_summary()
         if "connection_history" in state:
             state["connection_history"].clear()

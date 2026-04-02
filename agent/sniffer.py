@@ -17,6 +17,20 @@ from .protocols.modbus.modbus_definitions import get_modbus_function_label
 
 
 class SnifferMixin:
+    def _build_capture_filter(self):
+        port_mode = str(getattr(self, "port_mode", "MODBUS_PORTS") or "MODBUS_PORTS").upper()
+        ports = []
+        if port_mode == "CUSTOM":
+            ports = sorted(self._custom_port_set())
+        elif port_mode == "MODBUS_PORTS":
+            ports = sorted(self._monitored_modbus_ports())
+
+        if ports:
+            ports_expr = " or ".join(f"port {int(p)}" for p in ports)
+            return f"tcp and ({ports_expr})"
+
+        return "tcp"
+
     def _needs_loopback_capture(self):
         server = getattr(self, "server_runtime", {}) or {}
         client = getattr(self, "client_runtime", {}) or {}
@@ -272,6 +286,7 @@ class SnifferMixin:
 
     def start(self):
         sniff_ifaces = self.get_sniff_interfaces()
+        capture_filter = self._build_capture_filter()
 
         if not sniff_ifaces:
             print(f"[agent] invalid iface '{self.iface}'. available={self.get_available_interfaces()}")
@@ -286,22 +301,21 @@ class SnifferMixin:
                 f"monitored={len(classification.get('monitored', []))} "
                 f"skipped={len(classification.get('skipped', []))}"
             )
+        print(f"[agent] capture filter: {capture_filter}")
 
         try:
-            os_name = platform.system()
-            # Windows stability: start one sniffer per interface when running in ALL mode.
-            # Multi-interface list capture on Windows can be flaky depending on Npcap/adapter mix.
-            if os_name == "Windows" and self.iface == DEFAULT_IFACE and len(sniff_ifaces) > 1:
+            # Running one sniffer per interface keeps ingestion more stable under ALL mode.
+            if self.iface == DEFAULT_IFACE and len(sniff_ifaces) > 1:
                 started_sniffers = []
                 started_ifaces = []
                 failed_ifaces = []
 
-                print(f"[agent] attempting to start per-interface sniffers on Windows: {sniff_ifaces}")
+                print(f"[agent] attempting to start per-interface sniffers: {sniff_ifaces}")
                 for iface in sniff_ifaces:
                     try:
                         snf = AsyncSniffer(
                             iface=iface,
-                            filter="tcp",
+                            filter=capture_filter,
                             prn=self._handle_packet,
                             store=False,
                             promisc=False,
@@ -328,7 +342,7 @@ class SnifferMixin:
 
             self.sniffer = AsyncSniffer(
                 iface=iface_arg,
-                filter="tcp",
+                filter=capture_filter,
                 prn=self._handle_packet,
                 store=False,
                 promisc=False,

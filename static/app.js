@@ -1126,25 +1126,49 @@ function updateCustomPortsVisibility() {
   }
 }
 
+function renderIfaceSummary(data) {
+  const container = byId("monitorIfaceSummary");
+  if (!container) return;
+
+  const available = Array.isArray(data?.interfaces) ? data.interfaces : [];
+  const monitored = Array.isArray(data?.monitored_interfaces) ? data.monitored_interfaces : [];
+  const unmonitored = Array.isArray(data?.unmonitored_interfaces) ? data.unmonitored_interfaces : [];
+
+  const renderList = (title, items, toneClass) => {
+    const tags = items.length
+      ? items.map((item) => `<span class="iface-tag ${toneClass}">${escapeHtml(item)}</span>`).join("")
+      : `<span class="iface-none">-</span>`;
+    return `
+      <div class="iface-summary-group">
+        <div class="iface-summary-head">
+          <span class="iface-summary-title">${escapeHtml(title)}</span>
+          <span class="iface-summary-count">${items.length}</span>
+        </div>
+        <div class="iface-summary-tags">${tags}</div>
+      </div>
+    `;
+  };
+
+  container.innerHTML = `
+    ${renderList("Available", available, "tone-available")}
+    ${renderList("Monitored In ALL", monitored, "tone-monitored")}
+    ${renderList("Available But Not Monitored", unmonitored, "tone-skipped")}
+  `;
+}
+
 async function scanInterfaces() {
   const data = await apiGet("/api/agent/interfaces");
 
   if (!data.connected) {
     setText("monitorConfigStatus", "Agent disconnected.");
+    renderIfaceSummary({ interfaces: [], monitored_interfaces: [], unmonitored_interfaces: [] });
     populateIfaceSelect([], "");
     return;
   }
 
   populateIfaceSelect(data.interfaces || [], data.current || "ALL");
-  const available = data.interfaces || [];
-  const monitored = data.monitored_interfaces || [];
-  const skipped = data.unmonitored_interfaces || [];
-  const summary = [
-    `Interfaces available (${available.length}): ${available.join(", ") || "-"}`,
-    `Interfaces monitored in ALL mode (${monitored.length}): ${monitored.join(", ") || "-"}`,
-    `Interfaces available but not monitored (${skipped.length}): ${skipped.join(", ") || "-"}`,
-  ].join("\n");
-  setText("monitorConfigStatus", summary);
+  renderIfaceSummary(data);
+  setText("monitorConfigStatus", "Interface scan completed.");
 }
 
 async function openAgentDownloadModal() {
