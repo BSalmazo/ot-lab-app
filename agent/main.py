@@ -351,6 +351,7 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
         self.state = self._empty_state()
 
     def snapshot(self):
+        iface_classification = self.get_interface_classification_snapshot()
         read_patterns = []
         for (server_ip, server_port, start, qty), profile in self.state["read_patterns"].items():
             read_patterns.append({
@@ -393,6 +394,8 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
             },
             "timestamp": time.time(),
             "available_ifaces": self.get_available_interfaces(),
+            "available_monitored_ifaces": iface_classification.get("monitored", []),
+            "available_unmonitored_ifaces": iface_classification.get("skipped", []),
         }
 
     def _build_event_summary(self, event: dict) -> str:

@@ -2,7 +2,7 @@ import platform
 import time
 from statistics import mean
 
-from scapy.all import AsyncSniffer, IP, TCP, get_if_list
+from scapy.all import AsyncSniffer, IP, TCP, get_if_addr, get_if_list
 
 from .config import DEFAULT_IFACE
 from .modbus_parser import (
@@ -17,6 +17,83 @@ from .protocols.modbus.modbus_definitions import get_modbus_function_label
 
 
 class SnifferMixin:
+    def _needs_loopback_capture(self):
+        server = getattr(self, "server_runtime", {}) or {}
+        client = getattr(self, "client_runtime", {}) or {}
+        hosts = [server.get("host"), client.get("host")]
+        for host in hosts:
+            h = str(host or "").strip().lower()
+            if h in {"127.0.0.1", "localhost", "::1"}:
+                return True
+        return False
+
+    def _blocked_iface_prefixes(self):
+        # Prefixes that are typically virtual/tunnel/non-data-plane interfaces for OT traffic.
+        return ("anpi", "ap", "awdl", "llw", "utun", "bridge", "gif", "stf")
+
+    def classify_available_interfaces(self):
+        available = self.get_available_interfaces()
+        monitored = []
+        skipped = []
+        blocked_prefixes = self._blocked_iface_prefixes()
+
+        for iface in available:
+            iface_l = (iface or "").lower()
+            if iface_l == "lo":
+                skipped.append(iface)
+                continue
+            if iface_l.startswith(blocked_prefixes):
+                skipped.append(iface)
+                continue
+
+            # Keep loopback aliases like lo0 only when local traffic is expected.
+            if iface_l.startswith("lo"):
+                if self._needs_loopback_capture():
+                    monitored.append(iface)
+                else:
+                    skipped.append(iface)
+                continue
+
+            ip_addr = None
+            try:
+                ip_addr = str(get_if_addr(iface) or "")
+            except Exception:
+                ip_addr = ""
+
+            # Prefer interfaces with valid IPv4 assigned.
+            if ip_addr and ip_addr != "0.0.0.0":
+                monitored.append(iface)
+                continue
+
+            # Keep common physical interface patterns as fallback candidates.
+            likely_tcp_iface = iface_l.startswith(
+                ("en", "eth", "wlan", "wifi", "wi-fi", "ethernet", "local area", "usb")
+            )
+            if likely_tcp_iface:
+                monitored.append(iface)
+            else:
+                skipped.append(iface)
+
+        if not monitored:
+            # If heuristic filters everything, fail safe by monitoring all available.
+            monitored = list(available)
+            skipped = []
+
+        return {
+            "available": available,
+            "monitored": monitored,
+            "skipped": skipped,
+        }
+
+    def get_interface_classification_snapshot(self):
+        if self.iface != DEFAULT_IFACE:
+            return {
+                "available": self.get_available_interfaces(),
+                "monitored": [self.iface],
+                "skipped": [],
+            }
+        return self.classify_available_interfaces()
+
     def _custom_port_set(self):
         custom = getattr(self, "custom_ports", []) or []
         ports = set()
@@ -201,21 +278,14 @@ class SnifferMixin:
             self.sniffer = None
             return False
 
-        # Filter out loopback and virtual interfaces (macOS/Linux).
-        # On Windows we keep loopback aliases available because Npcap naming differs.
-        blocked_prefixes = ("anpi", "ap", "awdl", "llw", "utun", "bridge", "gif", "stf")
-        filtered_ifaces = [
-            iface for iface in sniff_ifaces
-            if not iface.startswith(blocked_prefixes) and iface.lower() != "lo"
-        ]
-        
-        # On Windows, loopback is usually "lo" or similar, but use what's available
-        sniff_ifaces = filtered_ifaces if filtered_ifaces else sniff_ifaces
-
-        if not sniff_ifaces:
-            print("[agent] no usable interfaces after filtering")
-            self.sniffer = None
-            return False
+        classification = self.get_interface_classification_snapshot()
+        if self.iface == DEFAULT_IFACE:
+            print(
+                "[agent] interface classification "
+                f"available={len(classification.get('available', []))} "
+                f"monitored={len(classification.get('monitored', []))} "
+                f"skipped={len(classification.get('skipped', []))}"
+            )
 
         try:
             os_name = platform.system()
@@ -332,7 +402,7 @@ class SnifferMixin:
         available = self.get_available_interfaces()
 
         if self.iface == DEFAULT_IFACE:
-            return available
+            return self.classify_available_interfaces().get("monitored", available)
 
         if self.iface in available:
             return [self.iface]

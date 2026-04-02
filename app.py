@@ -217,6 +217,8 @@ def default_agent_info():
         "running": False,
         "last_seen": None,
         "available_ifaces": [],
+        "available_monitored_ifaces": [],
+        "available_unmonitored_ifaces": [],
         "capabilities": [],
     }
 
@@ -1207,6 +1209,8 @@ def get_agent_interfaces(request: Request):
         "ok": True,
         "connected": agent_info["connected"],
         "interfaces": agent_info.get("available_ifaces", []),
+        "monitored_interfaces": agent_info.get("available_monitored_ifaces", []),
+        "unmonitored_interfaces": agent_info.get("available_unmonitored_ifaces", []),
         "current": agent_info.get("iface"),
         "session_id": session_id,
     })
@@ -1646,6 +1650,8 @@ def agent_register(payload: dict = Body(...)):
     agent_info["running"] = payload.get("running", False)
     agent_info["last_seen"] = payload.get("timestamp", time.time())
     agent_info["available_ifaces"] = payload.get("available_ifaces", [])
+    agent_info["available_monitored_ifaces"] = payload.get("available_monitored_ifaces", [])
+    agent_info["available_unmonitored_ifaces"] = payload.get("available_unmonitored_ifaces", [])
     agent_info["capabilities"] = payload.get("capabilities", agent_info.get("capabilities", []))
 
     push_log_for_session(
@@ -1687,6 +1693,14 @@ def agent_heartbeat(payload: dict = Body(...)):
         "available_ifaces",
         agent_info.get("available_ifaces", [])
     )
+    agent_info["available_monitored_ifaces"] = payload.get(
+        "available_monitored_ifaces",
+        agent_info.get("available_monitored_ifaces", []),
+    )
+    agent_info["available_unmonitored_ifaces"] = payload.get(
+        "available_unmonitored_ifaces",
+        agent_info.get("available_unmonitored_ifaces", []),
+    )
     agent_info["capabilities"] = payload.get(
         "capabilities",
         agent_info.get("capabilities", [])
@@ -1722,6 +1736,14 @@ def agent_snapshot_ingest(payload: dict = Body(...)):
     agent_info["available_ifaces"] = payload.get(
         "available_ifaces",
         agent_info.get("available_ifaces", [])
+    )
+    agent_info["available_monitored_ifaces"] = payload.get(
+        "available_monitored_ifaces",
+        agent_info.get("available_monitored_ifaces", []),
+    )
+    agent_info["available_unmonitored_ifaces"] = payload.get(
+        "available_unmonitored_ifaces",
+        agent_info.get("available_unmonitored_ifaces", []),
     )
     agent_info["capabilities"] = payload.get(
         "capabilities",

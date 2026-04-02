@@ -1115,11 +1115,14 @@ async function openMonitorConfig() {
 function updateCustomPortsVisibility() {
   const mode = byId("portModeSelect")?.value || "MODBUS_PORTS";
   const row = byId("customPortsRow");
+  const input = byId("customPortsInput");
   if (!row) return;
   if (mode === "CUSTOM") {
     row.classList.remove("hidden");
+    if (input) input.disabled = false;
   } else {
     row.classList.add("hidden");
+    if (input) input.disabled = true;
   }
 }
 
@@ -1133,7 +1136,15 @@ async function scanInterfaces() {
   }
 
   populateIfaceSelect(data.interfaces || [], data.current || "ALL");
-  setText("monitorConfigStatus", `Interfaces found: ${(data.interfaces || []).join(", ") || "-"}`);
+  const available = data.interfaces || [];
+  const monitored = data.monitored_interfaces || [];
+  const skipped = data.unmonitored_interfaces || [];
+  const summary = [
+    `Interfaces available (${available.length}): ${available.join(", ") || "-"}`,
+    `Interfaces monitored in ALL mode (${monitored.length}): ${monitored.join(", ") || "-"}`,
+    `Interfaces available but not monitored (${skipped.length}): ${skipped.join(", ") || "-"}`,
+  ].join("\n");
+  setText("monitorConfigStatus", summary);
 }
 
 async function openAgentDownloadModal() {
