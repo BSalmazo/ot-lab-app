@@ -17,6 +17,18 @@ from .protocols.modbus.modbus_definitions import get_modbus_function_label
 
 
 class SnifferMixin:
+    def _custom_port_set(self):
+        custom = getattr(self, "custom_ports", []) or []
+        ports = set()
+        for raw in custom:
+            try:
+                port = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= port <= 65535:
+                ports.add(port)
+        return ports
+
     def _monitored_modbus_ports(self):
         ports = {502, 5020, 15020}
         try:
@@ -34,6 +46,14 @@ class SnifferMixin:
         return ports
 
     def _is_likely_monitored_modbus_traffic(self, sport: int, dport: int):
+        port_mode = str(getattr(self, "port_mode", "MODBUS_PORTS") or "MODBUS_PORTS").upper()
+        if port_mode == "ALL_PORTS":
+            return True
+        if port_mode == "CUSTOM":
+            ports = self._custom_port_set()
+            if not ports:
+                return False
+            return sport in ports or dport in ports
         ports = self._monitored_modbus_ports()
         return sport in ports or dport in ports
 

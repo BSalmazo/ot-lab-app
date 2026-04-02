@@ -185,6 +185,8 @@ def default_agent_snapshot():
         "agent_id": None,
         "mode": None,
         "iface": None,
+        "port_mode": None,
+        "custom_ports": [],
         "hostname": None,
         "function_codes_seen": [],
         "initiators_seen": [],
@@ -210,6 +212,8 @@ def default_agent_info():
         "hostname": None,
         "iface": None,
         "mode": None,
+        "port_mode": None,
+        "custom_ports": [],
         "running": False,
         "last_seen": None,
         "available_ifaces": [],
@@ -221,8 +225,48 @@ def default_agent_config():
     return {
         "iface": "ALL",
         "mode": "MONITORING",
+        "port_mode": "MODBUS_PORTS",
+        "custom_ports": [],
         "updated_at": None,
     }
+
+
+def normalize_custom_ports(value):
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        items = value.replace(";", ",").split(",")
+    elif isinstance(value, list):
+        items = value
+    else:
+        items = [value]
+
+    ports = []
+    seen = set()
+    for raw in items:
+        token = str(raw).strip()
+        if not token:
+            continue
+        try:
+            port = int(token)
+        except (TypeError, ValueError):
+            raise ValueError(f"Invalid port '{token}'")
+        if port < 1 or port > 65535:
+            raise ValueError(f"Port out of range: {port}")
+        if port in seen:
+            continue
+        seen.add(port)
+        ports.append(port)
+
+    return ports
+
+
+def safe_normalize_custom_ports(value):
+    try:
+        return normalize_custom_ports(value)
+    except Exception:
+        return []
 
 
 def default_remote_server():
@@ -755,6 +799,8 @@ def build_agent_config(request: Request, session_id: str, state: dict):
         "session_id": session_id,
         "iface": state["agent_config"].get("iface") or "ALL",
         "mode": state["agent_config"].get("mode") or "MONITORING",
+        "port_mode": state["agent_config"].get("port_mode") or "MODBUS_PORTS",
+        "custom_ports": safe_normalize_custom_ports(state["agent_config"].get("custom_ports")),
     }
 
 
@@ -1269,20 +1315,39 @@ async def set_agent_config(request: Request):
 
     iface = data.get("iface", state["agent_config"]["iface"])
     mode = data.get("mode", state["agent_config"]["mode"])
+    port_mode = data.get("port_mode", state["agent_config"].get("port_mode", "MODBUS_PORTS"))
 
     if mode not in ["LEARNING", "MONITORING"]:
         return JSONResponse({"ok": False, "error": "Invalid mode"}, status_code=400)
+    if port_mode not in ["ALL_PORTS", "MODBUS_PORTS", "CUSTOM"]:
+        return JSONResponse({"ok": False, "error": "Invalid port_mode"}, status_code=400)
 
-    # Detectar mudança de interface
+    try:
+        custom_ports = normalize_custom_ports(data.get("custom_ports", state["agent_config"].get("custom_ports", [])))
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+    if port_mode == "CUSTOM" and not custom_ports:
+        return JSONResponse({"ok": False, "error": "CUSTOM port_mode requires at least one custom port"}, status_code=400)
+
     old_iface = state["agent_config"]["iface"]
-    iface_changed = (old_iface != iface)
+    old_mode = state["agent_config"]["mode"]
+    old_port_mode = state["agent_config"].get("port_mode", "MODBUS_PORTS")
+    old_custom_ports = safe_normalize_custom_ports(state["agent_config"].get("custom_ports", []))
+    iface_changed = old_iface != iface
+    mode_changed = old_mode != mode
+    port_mode_changed = old_port_mode != port_mode
+    custom_ports_changed = old_custom_ports != custom_ports
 
     state["agent_config"]["iface"] = iface
     state["agent_config"]["mode"] = mode
+    state["agent_config"]["port_mode"] = port_mode
+    state["agent_config"]["custom_ports"] = custom_ports
     state["agent_config"]["updated_at"] = time.time()
 
-    # Se interface mudou, resetar o sumário de detecção
-    if iface_changed:
+    detection_scope_changed = iface_changed or port_mode_changed or custom_ports_changed
+
+    if detection_scope_changed:
         state["modbus_summary"] = default_modbus_summary()
         if "event_log_signatures" in state:
             state["event_log_signatures"].clear()
@@ -1290,9 +1355,21 @@ async def set_agent_config(request: Request):
             state["recent_event_signatures"].clear()
         if "recent_alert_signatures" in state:
             state["recent_alert_signatures"].clear()
-        push_log_for_session(session_id, f"Detection interface changed from {old_iface} to {iface} - resetting detection")
+        push_log_for_session(
+            session_id,
+            (
+                f"Detection scope changed (iface: {old_iface}->{iface}, "
+                f"port_mode: {old_port_mode}->{port_mode}, "
+                f"custom_ports: {old_custom_ports}->{custom_ports}) - resetting detection"
+            ),
+        )
     else:
-        push_log_for_session(session_id, f"Monitor configuration updated (interface={iface}, mode={mode})")
+        changed_keys = []
+        if mode_changed:
+            changed_keys.append(f"mode={mode}")
+        if not changed_keys:
+            changed_keys.append("no-op")
+        push_log_for_session(session_id, f"Monitor configuration updated ({', '.join(changed_keys)})")
 
     response = JSONResponse({
         "ok": True,
@@ -1564,6 +1641,8 @@ def agent_register(payload: dict = Body(...)):
     agent_info["hostname"] = payload.get("hostname")
     agent_info["iface"] = payload.get("iface")
     agent_info["mode"] = payload.get("mode")
+    agent_info["port_mode"] = payload.get("port_mode")
+    agent_info["custom_ports"] = safe_normalize_custom_ports(payload.get("custom_ports"))
     agent_info["running"] = payload.get("running", False)
     agent_info["last_seen"] = payload.get("timestamp", time.time())
     agent_info["available_ifaces"] = payload.get("available_ifaces", [])
@@ -1571,7 +1650,11 @@ def agent_register(payload: dict = Body(...)):
 
     push_log_for_session(
         session_id,
-        f"Agent connected ({payload.get('hostname', '-')}, interface={payload.get('iface', '-')}, mode={payload.get('mode', '-')})"
+        (
+            "Agent connected "
+            f"({payload.get('hostname', '-')}, interface={payload.get('iface', '-')}, "
+            f"mode={payload.get('mode', '-')}, port_mode={payload.get('port_mode', '-')})"
+        )
     )
 
     return {
@@ -1596,6 +1679,8 @@ def agent_heartbeat(payload: dict = Body(...)):
     agent_info["hostname"] = payload.get("hostname")
     agent_info["iface"] = payload.get("iface")
     agent_info["mode"] = payload.get("mode")
+    agent_info["port_mode"] = payload.get("port_mode")
+    agent_info["custom_ports"] = safe_normalize_custom_ports(payload.get("custom_ports"))
     agent_info["running"] = payload.get("running", False)
     agent_info["last_seen"] = payload.get("timestamp", time.time())
     agent_info["available_ifaces"] = payload.get(
@@ -1630,6 +1715,8 @@ def agent_snapshot_ingest(payload: dict = Body(...)):
     agent_info["hostname"] = payload.get("hostname")
     agent_info["iface"] = payload.get("iface")
     agent_info["mode"] = payload.get("mode")
+    agent_info["port_mode"] = payload.get("port_mode")
+    agent_info["custom_ports"] = safe_normalize_custom_ports(payload.get("custom_ports"))
     agent_info["running"] = True
     agent_info["last_seen"] = time.time()
     agent_info["available_ifaces"] = payload.get(
