@@ -700,8 +700,6 @@ function inferOutcome(alert, context) {
 
 function formatAlertCard(alert) {
   const severity = alert.severity || "INFO";
-  const summary = alert.summary || `${alert.event_type || "UNKNOWN"} from ${alert.src || "-"} to ${alert.dst || "-"}`;
-  const reasons = Array.isArray(alert.reasons) ? alert.reasons : [];
   const eventType = String(alert.event_type || "UNKNOWN").replaceAll("_", " ");
   const severityClass = `alert-level-${escapeHtml(severity)}`;
   const severityBadgeClass = `sev-${escapeHtml(severity)}`;
@@ -715,84 +713,55 @@ function formatAlertCard(alert) {
   const clientEndpoint = alert.client || alert.src || "-";
   const serverEndpoint = alert.server || alert.dst || "-";
   const register = alert.register ?? alert.address ?? alert.start_addr ?? "-";
-  const quantity = alert.quantity ?? alert.read_quantity ?? null;
   const scalarValue = alert.value;
   const listValues = Array.isArray(alert.values) ? alert.values : [];
   const valueText = scalarValue != null ? String(scalarValue) : (listValues.length ? listValues.slice(0, 8).join(", ") : null);
-
-  let readableTitle = summary;
-  if (context.isException) {
-    readableTitle = context.fc || Number.isFinite(fc)
-      ? `FC${context.fc || fc} exception response`
-      : "Server returned an exception response";
-  } else if (Number.isFinite(fc)) {
-    readableTitle = `FC${fc} detected (${functionName})`;
-  }
-  const readableReason = context.isException
-    ? `Reason: ${context.exceptionLabel || "not identified"}`
-    : reasons.join(" | ");
-  let whatHappened = context.isException
-    ? `Server rejected ${context.fc ? `FC${context.fc}` : "the request"}`
-    : (eventType || "Modbus event");
-  if (!context.isException && Number.isFinite(fc) && String(alert.event_type || "").toUpperCase() === "WRITE_REQUEST") {
-    if (valueText !== null && register !== "-") {
-      whatHappened = `SCADA/HMI sent value ${valueText} to PLC register ${register}`;
-    } else if (register !== "-") {
-      whatHappened = `SCADA/HMI issued FC${fc} write to PLC register ${register}`;
-    } else {
-      whatHappened = `SCADA/HMI issued FC${fc} write to PLC`;
-    }
-  }
-  if (!context.isException && Number.isFinite(fc) && String(alert.event_type || "").toUpperCase() === "WRITE_RESPONSE") {
-    if (valueText !== null && register !== "-") {
-      whatHappened = `SCADA/HMI requested value ${valueText} for PLC register ${register}, and PLC accepted it`;
-    } else if (register !== "-") {
-      whatHappened = `SCADA/HMI write to PLC register ${register} was accepted by PLC`;
-    } else {
-      whatHappened = `SCADA/HMI write request was accepted by PLC`;
-    }
-  }
-  const likelyCause = context.isException
-    ? (context.exceptionLabel || "Request not accepted by device")
-    : (reasons[0] || `${functionName} observed in live traffic`);
-  const operatorAction = context.isException
-    ? getExceptionActionHint(context.exceptionCode)
-    : "Validate whether this behavior is expected for the process state.";
-
-  const compactTitle = Number.isFinite(fc) ? `FC${fc} detected` : "Modbus event detected";
+  const eventTypeUpper = String(alert.event_type || "").toUpperCase();
+  const fcBadge = Number.isFinite(fc) ? `FC${fc}` : "FC?";
+  const registerText = register !== "-" ? String(register) : "-";
   const compactValue = valueText != null ? valueText : "-";
+  const serverLabel = "PLC";
+  const clientLabel = "HMI/SCADA";
+
+  let jobText = `${functionName} observed`;
+  if (context.isException) {
+    jobText = `PLC returned exception on ${fcBadge}`;
+  } else if (eventTypeUpper === "WRITE_REQUEST") {
+    jobText = registerText !== "-" && compactValue !== "-"
+      ? `HMI/SCADA requested write ${compactValue} to register ${registerText}`
+      : "HMI/SCADA requested a write operation";
+  } else if (eventTypeUpper === "WRITE_RESPONSE") {
+    jobText = registerText !== "-" && compactValue !== "-"
+      ? `PLC responded to write ${compactValue} on register ${registerText}`
+      : "PLC responded to write request";
+  } else if (eventTypeUpper === "READ_REQUEST") {
+    jobText = registerText !== "-"
+      ? `HMI/SCADA requested read from register ${registerText}`
+      : "HMI/SCADA requested a read operation";
+  } else if (eventTypeUpper === "READ_RESPONSE") {
+    jobText = registerText !== "-"
+      ? `PLC responded to read from register ${registerText}`
+      : "PLC responded to read request";
+  }
 
   return `
     <div class="alert-card ${severityClass}">
       <div class="alert-top">
         <span class="alert-severity ${severityBadgeClass}">${escapeHtml(severity)}</span>
         <span class="alert-outcome ${escapeHtml(outcome.cls)}">${escapeHtml(outcome.label)}</span>
+        <span class="alert-fc">${escapeHtml(fcBadge)}</span>
         <span class="alert-event">${escapeHtml(eventType)}</span>
       </div>
-      <div class="alert-summary">${escapeHtml(compactTitle)}</div>
-      <div class="alert-srcdst">${escapeHtml(alert.src || "-")} → ${escapeHtml(alert.dst || "-")}</div>
       <div class="alert-brief-grid">
-        <div class="alert-brief-row"><span class="alert-brief-k">Outcome</span><span class="alert-brief-v">${escapeHtml(outcome.label)}</span></div>
-        <div class="alert-brief-row"><span class="alert-brief-k">What happened</span><span class="alert-brief-v">${escapeHtml(whatHappened)}</span></div>
+        <div class="alert-brief-row"><span class="alert-brief-k">Server</span><span class="alert-brief-v">${escapeHtml(serverLabel)}: ${escapeHtml(serverEndpoint)}</span></div>
+        <div class="alert-brief-row"><span class="alert-brief-k">Client</span><span class="alert-brief-v">${escapeHtml(clientLabel)}: ${escapeHtml(clientEndpoint)}</span></div>
+        <div class="alert-brief-row"><span class="alert-brief-k">Job</span><span class="alert-brief-v">${escapeHtml(jobText)}</span></div>
         <div class="alert-brief-row"><span class="alert-brief-k">Value</span><span class="alert-brief-v">${escapeHtml(compactValue)}</span></div>
+        <div class="alert-brief-row"><span class="alert-brief-k">Register</span><span class="alert-brief-v">${escapeHtml(registerText)}</span></div>
       </div>
       <details class="alert-detail" data-alert-key="${escapeHtml(alertKey)}" ${detailsOpen}>
         <summary>Technical details</summary>
-        <div class="alert-technical-line"><strong>Function:</strong> ${Number.isFinite(fc) ? `FC${escapeHtml(fc)} - ${escapeHtml(functionName)}` : "-"}</div>
-        <div class="alert-technical-line"><strong>Client:</strong> ${escapeHtml(clientEndpoint)}</div>
-        <div class="alert-technical-line"><strong>Server:</strong> ${escapeHtml(serverEndpoint)}</div>
-        ${register !== "-" ? `<div class="alert-technical-line"><strong>Register:</strong> ${escapeHtml(register)}</div>` : ""}
-        ${quantity != null ? `<div class="alert-technical-line"><strong>Quantity:</strong> ${escapeHtml(quantity)}</div>` : ""}
-        ${valueText != null ? `<div class="alert-technical-line"><strong>Value:</strong> ${escapeHtml(valueText)}</div>` : ""}
-        <div class="alert-technical-line"><strong>Likely cause:</strong> ${escapeHtml(likelyCause)}</div>
-        <div class="alert-technical-line"><strong>Operator action:</strong> ${escapeHtml(operatorAction)}</div>
-        ${readableReason ? `<div class="alert-technical-line"><strong>Reason:</strong> ${escapeHtml(readableReason)}</div>` : ""}
-        <div class="alert-technical-line"><strong>Summary:</strong> ${escapeHtml(summary)}</div>
-        ${context.exceptionLabel ? `<div class="alert-technical-line"><strong>Exception:</strong> ${escapeHtml(context.exceptionLabel)}</div>` : ""}
-        ${reasons.length ? `<div class="alert-technical-line"><strong>Reasons:</strong> ${escapeHtml(reasons.join(" | "))}</div>` : ""}
-        ${alert.unit_id != null ? `<div class="alert-technical-line"><strong>Unit ID:</strong> ${escapeHtml(alert.unit_id)}</div>` : ""}
-        ${alert.transaction_id != null ? `<div class="alert-technical-line"><strong>Transaction ID:</strong> ${escapeHtml(alert.transaction_id)}</div>` : ""}
-        ${alert.rtt != null ? `<div class="alert-technical-line"><strong>RTT:</strong> ${escapeHtml(alert.rtt)} s</div>` : ""}
+        <div class="alert-technical-line">No additional details yet.</div>
       </details>
     </div>
   `;
