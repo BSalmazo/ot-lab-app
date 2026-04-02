@@ -108,6 +108,7 @@ class HttpClientMixin:
         self._post("/api/agent/runtime", payload, timeout=(0.8, 1.5))
 
     def register(self):
+        iface_classification = self.get_interface_classification_snapshot()
         payload = {
             "session_id": self.session_id,
             "agent_id": self.agent_id,
@@ -119,6 +120,8 @@ class HttpClientMixin:
             "running": False,
             "timestamp": time.time(),
             "available_ifaces": self.get_available_interfaces(),
+            "available_monitored_ifaces": iface_classification.get("monitored", []),
+            "available_unmonitored_ifaces": iface_classification.get("skipped", []),
             "capabilities": list(getattr(self, "capabilities", [])),
         }
         self._post("/api/agent/register", payload, timeout=(1.0, 2.0), critical=True)
@@ -128,6 +131,7 @@ class HttpClientMixin:
             self.server_runtime["running"] = bool(self.modbus_server and self.modbus_server.running)
             self.client_runtime["running"] = bool(self.modbus_client and self.modbus_client.running)
 
+        iface_classification = self.get_interface_classification_snapshot()
         payload = {
             "session_id": self.session_id,
             "agent_id": self.agent_id,
@@ -139,6 +143,8 @@ class HttpClientMixin:
             "running": self.sniffer is not None,
             "timestamp": time.time(),
             "available_ifaces": self.get_available_interfaces(),
+            "available_monitored_ifaces": iface_classification.get("monitored", []),
+            "available_unmonitored_ifaces": iface_classification.get("skipped", []),
             "capabilities": list(getattr(self, "capabilities", [])),
         }
         # Heartbeat is critical for connection liveness in UI.
