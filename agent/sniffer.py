@@ -17,6 +17,26 @@ from .protocols.modbus.modbus_definitions import get_modbus_function_label
 
 
 class SnifferMixin:
+    def _monitored_modbus_ports(self):
+        ports = {502, 5020, 15020}
+        try:
+            server_port = int((getattr(self, "server_runtime", {}) or {}).get("port", 0))
+            if 1 <= server_port <= 65535:
+                ports.add(server_port)
+        except Exception:
+            pass
+        try:
+            client_port = int((getattr(self, "client_runtime", {}) or {}).get("port", 0))
+            if 1 <= client_port <= 65535:
+                ports.add(client_port)
+        except Exception:
+            pass
+        return ports
+
+    def _is_likely_monitored_modbus_traffic(self, sport: int, dport: int):
+        ports = self._monitored_modbus_ports()
+        return sport in ports or dport in ports
+
     def _should_emit_event(self, event: dict) -> bool:
         """
         Throttle high-frequency read traffic to keep UI near real-time under fast polling
@@ -414,6 +434,8 @@ class SnifferMixin:
 
             ip = pkt[IP]
             tcp = pkt[TCP]
+            if not self._is_likely_monitored_modbus_traffic(int(tcp.sport), int(tcp.dport)):
+                return
             payload = bytes(tcp.payload)
 
             if not payload:
@@ -572,7 +594,15 @@ class SnifferMixin:
                     continue
 
                 self.state["event_counts"][decoded["type"]] += 1
-                self.send_event(event)
+                event_type = str(event.get("type") or "").upper()
+                critical_event = event_type in {
+                    "WRITE_REQUEST",
+                    "WRITE_RESPONSE",
+                    "EXCEPTION_RESPONSE",
+                    "UNKNOWN_REQUEST",
+                    "GENERIC_REQUEST",
+                }
+                self.send_event(event, critical=critical_event)
 
                 if self.mode == "MONITORING":
                     self._emit_alert(event, reasons, score)

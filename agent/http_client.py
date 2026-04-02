@@ -147,8 +147,13 @@ class HttpClientMixin:
     def send_alert(self, alert):
         self._post("/api/agent/alert", alert, timeout=(0.8, 1.5))
 
-    def send_event(self, event):
+    def send_event(self, event, critical: bool = False):
         self._ensure_async_post_worker()
+
+        if critical:
+            # High-value events should bypass batching for lowest possible latency.
+            self._post("/api/agent/event", event, timeout=(0.8, 1.5), critical=True)
+            return
 
         should_force_flush = False
         with self._event_batch_lock:
