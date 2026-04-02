@@ -649,13 +649,13 @@ button:disabled {
 #alertsPanel .log-item + .log-item,
 #alertsWindowPanel .log-item + .log-item,
 #connectionsHistoryPanel .log-item + .log-item {
-  margin-top: 4px;
+  margin-top: 8px;
 }
 
 #alertsPanel.log-panel,
 #alertsWindowPanel.log-panel,
 #connectionsHistoryPanel.log-panel {
-  padding: 4px 8px;
+  padding: 8px;
 }
 
 #alertsWindow .window-body,
@@ -725,8 +725,9 @@ button:disabled {
 .alert-top {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 4px;
+  justify-content: flex-start;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .alert-severity {
@@ -764,6 +765,28 @@ button:disabled {
   color: #cbd5e1;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: rgba(100, 116, 139, 0.2);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+}
+
+.alert-fc {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #bfdbfe;
+  background: rgba(59, 130, 246, 0.18);
+  border: 1px solid rgba(59, 130, 246, 0.28);
 }
 
 .alert-outcome {
