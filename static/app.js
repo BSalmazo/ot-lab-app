@@ -71,7 +71,9 @@ function renderList(containerId, items, formatter) {
   [...items].reverse().forEach((item) => {
     const div = document.createElement("div");
     div.className = "log-item";
-    div.innerHTML = formatter(item);
+    // Avoid leading/trailing whitespace text nodes that add extra vertical gaps
+    // inside log containers (especially alerts/connections cards).
+    div.innerHTML = String(formatter(item) ?? "").trim();
     container.appendChild(div);
   });
 }
