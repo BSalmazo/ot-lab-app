@@ -1178,9 +1178,11 @@ button:disabled {
   .floating-window {
     left: 16px !important;
     top: 90px !important;
-    width: calc(100vw - 32px);
-    height: min(72vh, 640px);
-    resize: none;
+    width: min(92vw, 620px);
+    height: min(72vh, 500px);
+    min-width: 260px;
+    min-height: 200px;
+    resize: both;
   }
 
   .action-host-row,
