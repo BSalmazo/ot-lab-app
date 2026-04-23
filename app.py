@@ -1,6 +1,7 @@
 import io
 import json
 import re
+import socket
 import time
 import uuid
 import zipfile
@@ -25,6 +26,7 @@ from agent.protocols.modbus.modbus_validators import (
     ValidationError as ModbusValidationError,
     validate_modbus_action_payload,
 )
+from agent.runtime import SimpleModbusClient, SimpleModbusServer
 
 app = FastAPI(title="OT Lab App")
 
@@ -51,6 +53,205 @@ RELEASES_CACHE_TTL = 3600  # 1 hour
 
 lock = Lock()
 agents_by_session = {}
+
+
+def recv_exact(sock: socket.socket, size: int) -> bytes:
+    data = b""
+    while len(data) < size:
+        chunk = sock.recv(size - len(data))
+        if not chunk:
+            raise ConnectionError("socket closed while receiving")
+        data += chunk
+    return data
+
+
+def modbus_write_single_register(host: str, port: int, register: int, value: int, unit_id: int = 1, timeout_s: float = 2.0):
+    tx_id = int(time.time() * 1000) & 0xFFFF
+    function_code = 6
+    pdu = bytes([function_code]) + int(register).to_bytes(2, "big") + int(value).to_bytes(2, "big")
+    mbap = (
+        tx_id.to_bytes(2, "big")
+        + (0).to_bytes(2, "big")
+        + (len(pdu) + 1).to_bytes(2, "big")
+        + int(unit_id).to_bytes(1, "big")
+    )
+
+    with socket.create_connection((host, int(port)), timeout=timeout_s) as conn:
+        conn.settimeout(timeout_s)
+        conn.sendall(mbap + pdu)
+
+        resp_header = recv_exact(conn, 7)
+        resp_tx_id = int.from_bytes(resp_header[0:2], "big")
+        resp_proto_id = int.from_bytes(resp_header[2:4], "big")
+        resp_len = int.from_bytes(resp_header[4:6], "big")
+        if resp_tx_id != tx_id or resp_proto_id != 0:
+            raise RuntimeError("invalid Modbus response header")
+
+        resp_pdu = recv_exact(conn, resp_len - 1)
+        if len(resp_pdu) < 2:
+            raise RuntimeError("short Modbus response")
+
+        fc = resp_pdu[0]
+        if fc & 0x80:
+            exc_code = resp_pdu[1]
+            raise RuntimeError(f"modbus exception code={exc_code}")
+        if fc != function_code:
+            raise RuntimeError(f"unexpected function code in response: {fc}")
+
+    return {"ok": True, "transaction_id": tx_id}
+
+
+class ProcessSimulationManager:
+    def __init__(self):
+        self._lock = Lock()
+        self._server = None
+        self._client = None
+        self._config = {
+            "host": "127.0.0.1",
+            "port": 15020,
+            "poll_interval": 0.5,
+            "poll_start": 0,
+            "poll_quantity": 8,
+        }
+
+    def _snapshot_locked(self):
+        server = self._server
+        client = self._client
+        server_running = bool(server and server.running)
+        client_running = bool(client and client.running)
+
+        server_preview = {"start": 0, "quantity": 0, "values": []}
+        if server_running:
+            try:
+                server_preview = server.get_registers_preview(start=0, quantity=16)
+            except Exception:
+                pass
+
+        client_snapshot = {
+            "last_values": [],
+            "last_error": None,
+            "last_poll_at": None,
+            "last_success_at": None,
+        }
+        if client_running:
+            try:
+                client_snapshot = client.get_snapshot()
+            except Exception:
+                pass
+
+        return {
+            "running": server_running and client_running,
+            "server": {
+                "running": server_running,
+                "host": self._config["host"],
+                "port": self._config["port"],
+                "registers_preview": server_preview,
+            },
+            "client": {
+                "running": client_running,
+                "host": self._config["host"],
+                "port": self._config["port"],
+                "poll_interval": self._config["poll_interval"],
+                "poll_start": self._config["poll_start"],
+                "poll_quantity": self._config["poll_quantity"],
+                "last_values": list(client_snapshot.get("last_values") or []),
+                "last_error": client_snapshot.get("last_error"),
+                "last_poll_at": client_snapshot.get("last_poll_at"),
+                "last_success_at": client_snapshot.get("last_success_at"),
+            },
+        }
+
+    def snapshot(self):
+        with self._lock:
+            return self._snapshot_locked()
+
+    def stop(self):
+        with self._lock:
+            server = self._server
+            client = self._client
+            self._server = None
+            self._client = None
+
+        if client:
+            try:
+                client.stop()
+            except Exception:
+                pass
+        if server:
+            try:
+                server.stop()
+            except Exception:
+                pass
+
+        return self.snapshot()
+
+    def start(self, host=None, port=None, poll_interval=None, poll_start=None, poll_quantity=None):
+        host = str(host or self._config["host"]).strip() or "127.0.0.1"
+        port = int(port if port is not None else self._config["port"])
+        poll_interval = float(poll_interval if poll_interval is not None else self._config["poll_interval"])
+        poll_start = int(poll_start if poll_start is not None else self._config["poll_start"])
+        poll_quantity = int(poll_quantity if poll_quantity is not None else self._config["poll_quantity"])
+
+        if port < 1 or port > 65535:
+            raise ValueError("Port must be between 1 and 65535")
+        if poll_interval <= 0:
+            raise ValueError("poll_interval must be > 0")
+        if poll_start < 0:
+            raise ValueError("poll_start must be >= 0")
+        if poll_quantity < 1 or poll_quantity > 125:
+            raise ValueError("poll_quantity must be between 1 and 125")
+
+        self.stop()
+
+        server = SimpleModbusServer(host=host, port=port)
+        server_started = server.start()
+        if not server_started:
+            try:
+                server.stop()
+            except Exception:
+                pass
+            raise RuntimeError("failed to start process simulation server")
+
+        client = SimpleModbusClient(
+            host=host,
+            port=port,
+            poll_interval=poll_interval,
+            poll_start=poll_start,
+            poll_quantity=poll_quantity,
+        )
+        client_started = client.start()
+
+        with self._lock:
+            self._config["host"] = host
+            self._config["port"] = port
+            self._config["poll_interval"] = poll_interval
+            self._config["poll_start"] = poll_start
+            self._config["poll_quantity"] = poll_quantity
+            self._server = server if server_started else None
+            self._client = client if client_started else None
+            return self._snapshot_locked()
+
+    def write_register(self, address: int, value: int, unit_id: int = 1):
+        with self._lock:
+            host = self._config["host"]
+            port = self._config["port"]
+            running = bool(self._server and self._server.running)
+
+        if not running:
+            raise RuntimeError("process simulation is not running")
+
+        if address < 0 or address > 65535:
+            raise ValueError("address must be between 0 and 65535")
+        if value < 0 or value > 65535:
+            raise ValueError("value must be between 0 and 65535")
+        if unit_id < 0 or unit_id > 255:
+            raise ValueError("unit_id must be between 0 and 255")
+
+        modbus_write_single_register(host=host, port=port, register=address, value=value, unit_id=unit_id)
+        return self.snapshot()
+
+
+process_sim = ProcessSimulationManager()
 
 
 def get_github_releases(force_refresh: bool = False):
@@ -1124,6 +1325,7 @@ def api_status(request: Request):
         },
         "server": state["remote_server"],
         "client": state["remote_client"],
+        "process_sim": process_sim.snapshot(),
         "agent_config": state["agent_config"],
         "session_id": session_id,
     })
@@ -1143,6 +1345,90 @@ def api_events(request: Request):
         "connection_history": build_connection_history(state),
         "session_id": session_id,
     })
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.get("/api/process-sim/status")
+def api_process_sim_status(request: Request):
+    session_id, _state = get_session_state_from_request(request)
+    response = JSONResponse({"ok": True, "process_sim": process_sim.snapshot(), "session_id": session_id})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.post("/api/process-sim/start")
+async def api_process_sim_start(request: Request):
+    session_id, _state = get_session_state_from_request(request)
+    try:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            payload = {}
+    except Exception:
+        payload = {}
+
+    try:
+        snapshot = process_sim.start(
+            host=payload.get("host"),
+            port=payload.get("port"),
+            poll_interval=payload.get("poll_interval"),
+            poll_start=payload.get("poll_start"),
+            poll_quantity=payload.get("poll_quantity"),
+        )
+    except Exception as exc:
+        response = JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+
+    push_log_for_session(
+        session_id,
+        (
+            "Process simulation started "
+            f"(host={snapshot['server']['host']}, port={snapshot['server']['port']}, "
+            f"poll={snapshot['client']['poll_interval']}s)"
+        ),
+    )
+    response = JSONResponse({"ok": True, "process_sim": snapshot})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.post("/api/process-sim/stop")
+def api_process_sim_stop(request: Request):
+    session_id, _state = get_session_state_from_request(request)
+    snapshot = process_sim.stop()
+    push_log_for_session(session_id, "Process simulation stopped")
+    response = JSONResponse({"ok": True, "process_sim": snapshot})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.post("/api/process-sim/write")
+async def api_process_sim_write(request: Request):
+    session_id, _state = get_session_state_from_request(request)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    try:
+        address = int(payload.get("address"))
+        value = int(payload.get("value"))
+        unit_id = int(payload.get("unit_id", 1))
+    except Exception:
+        response = JSONResponse({"ok": False, "error": "Invalid address/value"}, status_code=400)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+
+    try:
+        snapshot = process_sim.write_register(address=address, value=value, unit_id=unit_id)
+    except Exception as exc:
+        response = JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+
+    push_log_for_session(session_id, f"Process write: HR{address}={value}")
+    response = JSONResponse({"ok": True, "process_sim": snapshot})
     set_session_cookie_if_needed(request, response, session_id)
     return response
 
@@ -1896,3 +2182,11 @@ def agent_alert_ingest(payload: dict = Body(...)):
         )
 
     return {"ok": True}
+
+
+@app.on_event("shutdown")
+def stop_process_sim_on_shutdown():
+    try:
+        process_sim.stop()
+    except Exception:
+        pass
