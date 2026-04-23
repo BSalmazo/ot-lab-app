@@ -100,11 +100,26 @@ class HttpClientMixin:
 
     def send_runtime_update(self):
         with self.runtime_lock:
+            server_ref = self.modbus_server
+            client_ref = self.modbus_client
             payload = {
                 "session_id": self.session_id,
                 "server": dict(self.server_runtime),
                 "client": dict(self.client_runtime),
             }
+
+        if server_ref and server_ref.running:
+            try:
+                payload["server"]["registers_preview"] = server_ref.get_registers_preview(start=0, quantity=16)
+            except Exception:
+                pass
+
+        if client_ref and client_ref.running:
+            try:
+                payload["client"].update(client_ref.get_snapshot())
+            except Exception:
+                pass
+
         self._post("/api/agent/runtime", payload, timeout=(0.8, 1.5))
 
     def register(self):

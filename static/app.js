@@ -248,6 +248,135 @@ function formatClientStatus(client) {
   ].join("\n");
 }
 
+const PROCESS_REG_MAP = {
+  level: 0,
+  setpoint: 1,
+  pump: 2,
+  valve: 3,
+  auto: 4,
+  alarmHi: 5,
+  alarmLo: 6,
+  tick: 7,
+};
+
+function toSafeInt(value, fallback = 0) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.trunc(parsed);
+}
+
+function getProcessRegistersFromStatus(data) {
+  const clientValues = Array.isArray(data?.client?.last_values) ? data.client.last_values : [];
+  const serverValues = Array.isArray(data?.server?.registers_preview?.values)
+    ? data.server.registers_preview.values
+    : [];
+  const values = clientValues.length ? clientValues : serverValues;
+
+  return {
+    raw: values,
+    level: toSafeInt(values[PROCESS_REG_MAP.level], 0),
+    setpoint: toSafeInt(values[PROCESS_REG_MAP.setpoint], 0),
+    pump: toSafeInt(values[PROCESS_REG_MAP.pump], 0),
+    valve: toSafeInt(values[PROCESS_REG_MAP.valve], 0),
+    auto: toSafeInt(values[PROCESS_REG_MAP.auto], 0),
+    alarmHi: toSafeInt(values[PROCESS_REG_MAP.alarmHi], 0),
+    alarmLo: toSafeInt(values[PROCESS_REG_MAP.alarmLo], 0),
+    tick: toSafeInt(values[PROCESS_REG_MAP.tick], 0),
+  };
+}
+
+function formatRelativeTimestamp(ts) {
+  if (!ts) return "-";
+  const delta = Date.now() / 1000 - Number(ts);
+  if (!Number.isFinite(delta)) return "-";
+  if (delta < 1) return "now";
+  return `${delta.toFixed(1)}s ago`;
+}
+
+function setLampState(id, on) {
+  const el = byId(id);
+  if (!el) return;
+  el.classList.toggle("lamp-on", !!on);
+}
+
+function renderProcessHmi(data) {
+  const regs = getProcessRegistersFromStatus(data);
+  const fill = byId("tankLevelFill");
+  const levelText = byId("tankLevelText");
+  const statusText = byId("hmiProcessStatus");
+
+  const pct = Math.max(0, Math.min(100, regs.level / 10));
+  if (fill) fill.style.height = `${pct}%`;
+  if (levelText) levelText.textContent = `Level: ${regs.level} / 1000 (${pct.toFixed(1)}%)`;
+
+  setLampState("hmiPumpLamp", regs.pump > 0);
+  setLampState("hmiValveLamp", regs.valve > 0);
+
+  const err = data?.client?.last_error;
+  if (statusText) {
+    const modeLabel = regs.auto > 0 ? "AUTO" : "MANUAL";
+    const alarms = [
+      regs.alarmHi > 0 ? "HI" : null,
+      regs.alarmLo > 0 ? "LO" : null,
+    ].filter(Boolean).join(", ");
+    const alarmText = alarms ? ` | ALARM=${alarms}` : "";
+    const errText = err ? ` | client_error=${err}` : "";
+    statusText.textContent = `Mode=${modeLabel} | SP=${regs.setpoint}${alarmText}${errText}`;
+  }
+
+  const setpointInput = byId("hmiSetpointInput");
+  if (setpointInput && document.activeElement !== setpointInput && regs.setpoint > 0) {
+    setpointInput.value = String(regs.setpoint);
+  }
+}
+
+function renderProcessPlc(data) {
+  const regs = getProcessRegistersFromStatus(data);
+  const rows = [
+    { addr: 0, name: "Tank Level", value: regs.level },
+    { addr: 1, name: "Setpoint", value: regs.setpoint },
+    { addr: 2, name: "Pump Cmd", value: regs.pump },
+    { addr: 3, name: "Valve Cmd", value: regs.valve },
+    { addr: 4, name: "Auto Mode", value: regs.auto },
+    { addr: 5, name: "Alarm HI", value: regs.alarmHi },
+    { addr: 6, name: "Alarm LO", value: regs.alarmLo },
+    { addr: 7, name: "Tick", value: regs.tick },
+  ];
+
+  const grid = byId("plcRegisterGrid");
+  if (grid) {
+    grid.innerHTML = rows
+      .map((r) => {
+        const on = Number(r.value) > 0;
+        return `
+          <div class="plc-cell">
+            <div class="plc-addr">HR${r.addr}</div>
+            <div class="plc-name">${escapeHtml(r.name)}</div>
+            <div class="plc-value ${on ? "plc-value-on" : ""}">${escapeHtml(r.value)}</div>
+          </div>
+        `;
+      })
+      .join("");
+  }
+
+  const raw = byId("plcRawSnapshot");
+  if (raw) {
+    raw.textContent = [
+      `server_running=${!!data?.server?.running}`,
+      `client_running=${!!data?.client?.running}`,
+      `client_last_poll=${formatRelativeTimestamp(data?.client?.last_poll_at)}`,
+      `client_last_success=${formatRelativeTimestamp(data?.client?.last_success_at)}`,
+      `client_last_error=${data?.client?.last_error || "-"}`,
+      `raw_values=[${(regs.raw || []).join(", ")}]`,
+    ].join("\n");
+  }
+}
+
+function renderProcessSimulation(data) {
+  renderProcessHmi(data);
+  renderProcessPlc(data);
+}
+
 function formatPolling(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
   return `${Number(value).toFixed(1)} s`;
@@ -466,6 +595,8 @@ async function refreshStatus() {
   setDisabled("openMonitorConfigBtn", !agentConnected);
   setDisabled("openServerConfigBtn", !agentConnected);
   setDisabled("openClientConfigBtn", !agentConnected);
+  setDisabled("startProcessSimBtn", !agentConnected);
+  setDisabled("stopProcessSimBtn", !agentConnected);
 
   // Só atualizar inputs se NÃO estão em um modal aberto
   const serverModal = byId("serverModal");
@@ -485,6 +616,7 @@ async function refreshStatus() {
   }
 
   setText("monitorSnapshot", buildReadableSnapshot(data.monitor?.snapshot || {}));
+  renderProcessSimulation(data);
 }
 
 function formatSummaryBlock(summary) {
@@ -1028,6 +1160,112 @@ async function toggleClient() {
   await refreshAll();
 }
 
+async function sendProcessWrite(address, value, note = "") {
+  const status = await apiGet("/api/status");
+  if (!status.agent?.connected) {
+    setText("hmiProcessStatus", "Agent disconnected. Connect local agent first.");
+    return { ok: false };
+  }
+
+  const host = status.server?.host || "127.0.0.1";
+  const port = Number(status.server?.port || 15020);
+
+  const payload = {
+    function_id: "fc06_write_single_register",
+    host,
+    port,
+    values: {
+      unit_id: 1,
+      address: Number(address),
+      value: Number(value),
+    },
+  };
+
+  const result = await apiPost("/api/actions/modbus/execute", payload);
+  if (!result.ok) {
+    setText("hmiProcessStatus", `Write failed (${note || `HR${address}`})`);
+    return result;
+  }
+
+  setText("hmiProcessStatus", `Write queued: HR${address}=${value}${note ? ` (${note})` : ""}`);
+  return result;
+}
+
+async function startProcessSimulation() {
+  const status = await apiGet("/api/status");
+  if (!status.agent?.connected) {
+    setText("hmiProcessStatus", "Agent disconnected. Connect local agent first.");
+    return;
+  }
+
+  const host = "127.0.0.1";
+  const port = 15020;
+
+  await apiPost("/api/agent/server/configure", { host, port });
+  await apiPost("/api/agent/client/configure", {
+    host,
+    port,
+    poll_interval: 0.5,
+    poll_start: 0,
+    poll_quantity: 8,
+  });
+  await apiPost("/api/agent/server/start", { host, port });
+  await apiPost("/api/agent/client/start", {
+    host,
+    port,
+    poll_interval: 0.5,
+    poll_start: 0,
+    poll_quantity: 8,
+  });
+
+  openWindow("processHmiWindow");
+  openWindow("processPlcWindow");
+  setText("hmiProcessStatus", "Simulation started. PLC server + HMI polling active.");
+  await refreshAll();
+}
+
+async function stopProcessSimulation() {
+  await apiPost("/api/agent/client/stop");
+  await apiPost("/api/agent/server/stop");
+  setText("hmiProcessStatus", "Simulation stopped.");
+  await refreshAll();
+}
+
+function openProcessSimulationWindows() {
+  openWindow("processHmiWindow");
+  openWindow("processPlcWindow");
+}
+
+function bindProcessSimulationControls() {
+  byId("startProcessSimBtn")?.addEventListener("click", startProcessSimulation);
+  byId("stopProcessSimBtn")?.addEventListener("click", stopProcessSimulation);
+  byId("openProcessSimulationBtn")?.addEventListener("click", openProcessSimulationWindows);
+
+  byId("hmiSetSetpointBtn")?.addEventListener("click", async () => {
+    const setpoint = toSafeInt(byId("hmiSetpointInput")?.value, 600);
+    await sendProcessWrite(PROCESS_REG_MAP.setpoint, Math.max(0, Math.min(1000, setpoint)), "setpoint");
+  });
+
+  byId("hmiAutoOnBtn")?.addEventListener("click", async () => {
+    await sendProcessWrite(PROCESS_REG_MAP.auto, 1, "auto on");
+  });
+  byId("hmiAutoOffBtn")?.addEventListener("click", async () => {
+    await sendProcessWrite(PROCESS_REG_MAP.auto, 0, "auto off");
+  });
+  byId("hmiPumpOnBtn")?.addEventListener("click", async () => {
+    await sendProcessWrite(PROCESS_REG_MAP.pump, 1, "pump on");
+  });
+  byId("hmiPumpOffBtn")?.addEventListener("click", async () => {
+    await sendProcessWrite(PROCESS_REG_MAP.pump, 0, "pump off");
+  });
+  byId("hmiValveOnBtn")?.addEventListener("click", async () => {
+    await sendProcessWrite(PROCESS_REG_MAP.valve, 1, "valve open");
+  });
+  byId("hmiValveOffBtn")?.addEventListener("click", async () => {
+    await sendProcessWrite(PROCESS_REG_MAP.valve, 0, "valve close");
+  });
+}
+
 async function resetSystem() {
   await apiPost("/api/reset");
   await refreshAll();
@@ -1266,7 +1504,17 @@ function initFloatingWindows() {
     btn.addEventListener("click", () => closeWindow(btn.dataset.closeWindow));
   });
 
-  ["idsWindow", "logsWindow", "connectionsWindow", "actionsWindow", "actionsHistoryWindow", "actionsPreviewWindow", "alertsWindow"].forEach((id, index) => {
+  [
+    "idsWindow",
+    "logsWindow",
+    "connectionsWindow",
+    "actionsWindow",
+    "actionsHistoryWindow",
+    "actionsPreviewWindow",
+    "alertsWindow",
+    "processHmiWindow",
+    "processPlcWindow",
+  ].forEach((id, index) => {
     const el = byId(id);
     if (!el) return;
 
@@ -1391,6 +1639,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   initFloatingWindows();
+  bindProcessSimulationControls();
   if (window.OTLabActions?.mountActionsWindow) {
     window.OTLabActions.mountActionsWindow("actionsWindowBody").catch((err) => {
       console.error(err);

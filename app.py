@@ -277,6 +277,11 @@ def default_remote_server():
         "running": False,
         "host": "127.0.0.1",
         "port": 5020,
+        "registers_preview": {
+            "start": 0,
+            "quantity": 0,
+            "values": [],
+        },
         "updated_at": None,
     }
 
@@ -289,6 +294,10 @@ def default_remote_client():
         "poll_interval": 1.0,
         "poll_start": 0,
         "poll_quantity": 4,
+        "last_values": [],
+        "last_error": None,
+        "last_poll_at": None,
+        "last_success_at": None,
         "updated_at": None,
     }
 
@@ -1607,12 +1616,48 @@ def agent_runtime_update(payload: dict = Body(...)):
             "running": bool(server_data.get("running", state["remote_server"]["running"])),
             "updated_at": time.time(),
         })
+        registers_preview = server_data.get("registers_preview")
+        if isinstance(registers_preview, dict):
+            values = registers_preview.get("values") or []
+            if isinstance(values, list):
+                safe_values = []
+                for raw in values[:64]:
+                    try:
+                        safe_values.append(int(raw))
+                    except Exception:
+                        continue
+                state["remote_server"]["registers_preview"] = {
+                    "start": int(registers_preview.get("start", 0) or 0),
+                    "quantity": int(registers_preview.get("quantity", len(safe_values)) or len(safe_values)),
+                    "values": safe_values,
+                }
 
     if client_data:
         state["remote_client"].update({
             "running": bool(client_data.get("running", state["remote_client"]["running"])),
             "updated_at": time.time(),
         })
+        values = client_data.get("last_values")
+        if isinstance(values, list):
+            safe_values = []
+            for raw in values[:64]:
+                try:
+                    safe_values.append(int(raw))
+                except Exception:
+                    continue
+            state["remote_client"]["last_values"] = safe_values
+        if "last_error" in client_data:
+            state["remote_client"]["last_error"] = client_data.get("last_error")
+        if "last_poll_at" in client_data:
+            try:
+                state["remote_client"]["last_poll_at"] = float(client_data.get("last_poll_at"))
+            except Exception:
+                pass
+        if "last_success_at" in client_data:
+            try:
+                state["remote_client"]["last_success_at"] = float(client_data.get("last_success_at"))
+            except Exception:
+                pass
 
     current_server_running = state["remote_server"]["running"]
     current_client_running = state["remote_client"]["running"]

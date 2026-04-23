@@ -1537,7 +1537,179 @@ button:disabled {
   display: none;
 }
 
+/* PROCESS SIMULATION */
+
+.hmi-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 14px;
+}
+
+.hmi-process-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.hmi-process-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+
+.tank-wrapper {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.tank-body {
+  width: 120px;
+  height: 220px;
+  border: 2px solid rgba(148, 163, 184, 0.6);
+  border-radius: 8px;
+  background: rgba(30, 41, 59, 0.65);
+  position: relative;
+  overflow: hidden;
+}
+
+.tank-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 0%;
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.9) 0%, rgba(14, 116, 144, 0.95) 100%);
+  transition: height 0.4s ease;
+}
+
+.tank-value {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  right: 8px;
+  font-size: 11px;
+  color: #f8fafc;
+  text-shadow: 0 1px 2px rgba(2, 6, 23, 0.75);
+}
+
+.tank-pipes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pipe {
+  min-width: 88px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  background: rgba(15, 23, 42, 0.5);
+  font-size: 11px;
+  color: #cbd5e1;
+}
+
+.lamp {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(71, 85, 105, 0.35);
+  color: #cbd5e1;
+}
+
+.lamp.lamp-on {
+  color: #052e16;
+  border-color: rgba(34, 197, 94, 0.75);
+  background: rgba(74, 222, 128, 0.92);
+}
+
+.hmi-controls {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(15, 23, 42, 0.72);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hmi-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hmi-row label {
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.hmi-row-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.hmi-row-inline input {
+  width: 130px;
+}
+
+.plc-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(170px, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.plc-cell {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.72);
+  padding: 8px;
+}
+
+.plc-addr {
+  font-size: 11px;
+  color: #93c5fd;
+  margin-bottom: 4px;
+}
+
+.plc-name {
+  font-size: 12px;
+  color: #e2e8f0;
+  margin-bottom: 6px;
+}
+
+.plc-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.plc-value-on {
+  color: #86efac;
+}
+
 @media (max-width: 900px) {
+  .hmi-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .plc-grid {
+    grid-template-columns: 1fr;
+  }
+
   .event-title-row {
     flex-direction: column;
     align-items: flex-start;
