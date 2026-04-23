@@ -374,27 +374,34 @@ function renderProcessPlc(data) {
   const pollFresh = Number.isFinite(pollAgeS) && pollAgeS <= 2.5;
   const plcOnline = !!processSim?.running;
 
-  const inputs = [
-    { code: "I0.0", label: "AL_LO", on: regs.alarmLo > 0 },
-    { code: "I0.1", label: "AL_HI", on: regs.alarmHi > 0 },
-    { code: "I0.2", label: "LIM_LO", on: regs.limitLoActive > 0 },
-    { code: "I0.3", label: "NET_OK", on: pollFresh },
-    { code: "I0.4", label: "LIM_HI", on: regs.limitHiActive > 0 },
-    { code: "I0.5", label: "TANK_OK", on: regs.level > 50 },
-    { code: "I0.6", label: "SRV_ON", on: serverRunning },
-    { code: "I0.7", label: "CLI_ON", on: clientRunning },
+  const inputSignalsInUse = [
+    { label: "LEVEL_AI", on: plcOnline },
+    ...(regs.alarmLoThreshold > 0 ? [{ label: "AL_LO_SP", on: regs.alarmLo > 0 }] : []),
+    ...(regs.alarmHiThreshold > 0 ? [{ label: "AL_HI_SP", on: regs.alarmHi > 0 }] : []),
+    ...(regs.limitLoThreshold > 0 ? [{ label: "LIM_LO_SP", on: regs.limitLoActive > 0 }] : []),
+    ...(regs.limitHiThreshold > 0 ? [{ label: "LIM_HI_SP", on: regs.limitHiActive > 0 }] : []),
   ];
+  const inputs = Array.from({ length: 8 }, (_, idx) => {
+    const signal = inputSignalsInUse[idx] || null;
+    return {
+      code: `I0.${idx}`,
+      label: signal ? signal.label : "",
+      on: signal ? !!signal.on : false,
+    };
+  });
 
-  const outputs = [
-    { code: "Q0.0", label: "PUMP", on: regs.pump > 0 },
-    { code: "Q0.1", label: "VALVE", on: regs.valve > 0 },
-    { code: "Q0.2", label: "ALARM", on: regs.alarmHi > 0 || regs.alarmLo > 0 },
-    { code: "Q0.3", label: "LIMIT", on: regs.limitHiActive > 0 || regs.limitLoActive > 0 },
-    { code: "Q0.4", label: "RUN", on: plcOnline },
-    { code: "Q0.5", label: "HEART", on: (regs.tick % 2) === 0 },
-    { code: "Q0.6", label: "RES6", on: false },
-    { code: "Q0.7", label: "RES7", on: false },
+  const outputSignalsInUse = [
+    { label: "PUMP", on: regs.pump > 0 },
+    { label: "VALVE", on: regs.valve > 0 },
   ];
+  const outputs = Array.from({ length: 8 }, (_, idx) => {
+    const signal = outputSignalsInUse[idx] || null;
+    return {
+      code: `Q0.${idx}`,
+      label: signal ? signal.label : "",
+      on: signal ? !!signal.on : false,
+    };
+  });
 
   const buildIoRow = (items, kind) =>
     items
@@ -834,8 +841,8 @@ const WINDOW_SIZE_RULES = {
   actionsHistoryWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   actionsPreviewWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   alertsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
-  processHmiWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240, resizable: true },
-  processPlcWindow: { width: 470, height: 320, minWidth: 470, minHeight: 320, fixed: true },
+  processHmiWindow: { width: 980, height: 700, minWidth: 640, minHeight: 460, resizable: true },
+  processPlcWindow: { width: 430, height: 285, minWidth: 430, minHeight: 285, fixed: true },
 };
 const openAlertDetails = new Set();
 let lastAlertsFingerprint = "";
