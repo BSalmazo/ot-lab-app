@@ -941,10 +941,10 @@ button:disabled {
 }
 
 #processHmiWindow {
-  width: 980px;
-  height: 700px;
-  min-width: 640px;
-  min-height: 460px;
+  width: 960px;
+  height: 680px;
+  min-width: 320px;
+  min-height: 240px;
 }
 
 #processPlcWindow {
@@ -957,14 +957,14 @@ button:disabled {
 }
 
 #processPlcWindow .window-body {
-  padding: 1px 2px;
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 #processPlcWindow .window-head {
-  padding: 7px 9px;
+  padding: 6px 8px;
 }
 
 .floating-window.hidden {
@@ -1777,21 +1777,23 @@ button:disabled {
 }
 
 .plc-visual-shell {
-  width: auto;
+  width: 100%;
   margin: 0;
 }
 
 .plc-faceplate {
+  width: 100%;
+  box-sizing: border-box;
   border: 2px solid rgba(15, 23, 42, 0.95);
   border-radius: 12px;
   background: linear-gradient(180deg, #f8fafc 0%, #dbe2ea 100%);
   color: #0f172a;
-  padding: 4px;
+  padding: 5px;
 }
 
 .plc-pin-row {
   display: grid;
-  grid-template-columns: repeat(8, minmax(36px, 1fr));
+  grid-template-columns: repeat(8, minmax(37px, 1fr));
   gap: 2px;
 }
 
@@ -1804,8 +1806,8 @@ button:disabled {
 }
 
 .plc-pin-terminal {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
   border: 1px solid #1f2937;
   background: #cbd5e1;
@@ -1822,13 +1824,13 @@ button:disabled {
 }
 
 .plc-io-label {
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 700;
   color: #1e293b;
 }
 
 .plc-io-name {
-  font-size: 8px;
+  font-size: 9px;
   color: #475569;
   max-width: 100%;
   overflow: hidden;
@@ -1841,9 +1843,9 @@ button:disabled {
   border: 2px solid #1f2937;
   border-radius: 8px;
   background: #f1f5f9;
-  padding: 4px;
+  padding: 5px;
   display: grid;
-  grid-template-columns: 98px 1fr;
+  grid-template-columns: 102px 1fr;
   gap: 4px;
   align-items: center;
 }
@@ -1861,7 +1863,7 @@ button:disabled {
 }
 
 .plc-brand-title {
-  font-size: 18px;
+  font-size: 19px;
   font-weight: 900;
   letter-spacing: 0.05em;
   color: #0f172a;
@@ -1901,7 +1903,7 @@ button:disabled {
   border-radius: 7px;
   background: #ffffff;
   padding: 4px 6px;
-  font-size: 8px;
+  font-size: 9px;
   line-height: 1.25;
 }
 
