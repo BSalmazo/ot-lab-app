@@ -287,10 +287,10 @@ function getProcessRegistersFromStatus(data) {
     alarmHi: toSafeInt(values[PROCESS_REG_MAP.alarmHi], 0),
     alarmLo: toSafeInt(values[PROCESS_REG_MAP.alarmLo], 0),
     tick: toSafeInt(values[PROCESS_REG_MAP.tick], 0),
-    alarmHiThreshold: toSafeInt(values[PROCESS_REG_MAP.alarmHiThreshold], 90),
-    alarmLoThreshold: toSafeInt(values[PROCESS_REG_MAP.alarmLoThreshold], 10),
-    limitHiThreshold: toSafeInt(values[PROCESS_REG_MAP.limitHiThreshold], 95),
-    limitLoThreshold: toSafeInt(values[PROCESS_REG_MAP.limitLoThreshold], 5),
+    alarmHiThreshold: toSafeInt(values[PROCESS_REG_MAP.alarmHiThreshold], 0),
+    alarmLoThreshold: toSafeInt(values[PROCESS_REG_MAP.alarmLoThreshold], 0),
+    limitHiThreshold: toSafeInt(values[PROCESS_REG_MAP.limitHiThreshold], 0),
+    limitLoThreshold: toSafeInt(values[PROCESS_REG_MAP.limitLoThreshold], 0),
     limitHiActive: toSafeInt(values[PROCESS_REG_MAP.limitHiActive], 0),
     limitLoActive: toSafeInt(values[PROCESS_REG_MAP.limitLoActive], 0),
   };
@@ -318,9 +318,9 @@ function renderProcessHmi(data) {
   const levelText = byId("tankLevelText");
   const statusText = byId("hmiProcessStatus");
 
-  const pct = Math.max(0, Math.min(100, regs.level / 10));
+  const pct = Math.max(0, Math.min(100, regs.level));
   if (fill) fill.style.height = `${pct}%`;
-  if (levelText) levelText.textContent = `Level: ${regs.level} / 1000 (${pct.toFixed(1)}%)`;
+  if (levelText) levelText.textContent = `Level: ${regs.level} / 100 (${pct.toFixed(1)}%)`;
 
   const err = processSim?.client?.last_error;
   const simRunning = !!processSim?.running;
@@ -379,7 +379,7 @@ function renderProcessHmi(data) {
     const alarmText = alarmActive ? " | ALARM=ACTIVE" : "";
     const limitText = limitActive ? " | LIMIT=ACTIVE" : "";
     const errText = err ? ` | client_error=${err}` : "";
-    statusText.textContent = `Sim=${simRunning ? "ON" : "OFF"} | Level=${regs.level}${alarmText}${limitText}${errText}`;
+    statusText.textContent = `Sim=${simRunning ? "ON" : "OFF"} | Level=${regs.level}/100${alarmText}${limitText}${errText}`;
   }
 }
 
@@ -445,8 +445,8 @@ function renderProcessPlc(data) {
           </div>
           <div class="plc-center-values">
             <div><strong>Level:</strong> ${escapeHtml(regs.level)}</div>
-            <div><strong>Alarm:</strong> ${regs.alarmLoThreshold}..${regs.alarmHiThreshold}</div>
-            <div><strong>Limit:</strong> ${regs.limitLoThreshold}..${regs.limitHiThreshold}</div>
+            <div><strong>Alarm L/H:</strong> ${regs.alarmLoThreshold} / ${regs.alarmHiThreshold}</div>
+            <div><strong>Limit L/H:</strong> ${regs.limitLoThreshold} / ${regs.limitHiThreshold}</div>
             <div><strong>Tick:</strong> ${escapeHtml(regs.tick)}</div>
           </div>
         </div>
@@ -854,7 +854,7 @@ const WINDOW_SIZE_RULES = {
   actionsPreviewWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   alertsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
   processHmiWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240, resizable: true },
-  processPlcWindow: { width: 660, height: 480, minWidth: 660, minHeight: 480, fixed: true },
+  processPlcWindow: { width: 520, height: 360, minWidth: 520, minHeight: 360, fixed: true },
 };
 const openAlertDetails = new Set();
 let lastAlertsFingerprint = "";
@@ -1351,10 +1351,10 @@ function parseProcessInput(id, fallback) {
 }
 
 async function applyAlarmLimitConfig() {
-  const alarmLow = Math.max(0, Math.min(1000, parseProcessInput("alarmLowInput", 10)));
-  const alarmHigh = Math.max(alarmLow, Math.min(1000, parseProcessInput("alarmHighInput", 90)));
-  const limitLow = Math.max(0, Math.min(1000, parseProcessInput("limitLowInput", 5)));
-  const limitHigh = Math.max(limitLow, Math.min(1000, parseProcessInput("limitHighInput", 95)));
+  const alarmLow = Math.max(0, Math.min(100, parseProcessInput("alarmLowInput", 0)));
+  const alarmHigh = Math.max(0, Math.min(100, parseProcessInput("alarmHighInput", 0)));
+  const limitLow = Math.max(0, Math.min(100, parseProcessInput("limitLowInput", 0)));
+  const limitHigh = Math.max(0, Math.min(100, parseProcessInput("limitHighInput", 0)));
 
   const writes = [
     [PROCESS_REG_MAP.alarmLoThreshold, alarmLow, "alarm low"],

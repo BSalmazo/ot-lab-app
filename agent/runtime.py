@@ -53,10 +53,11 @@ class SimpleModbusServer:
             self.holding_registers[REG_ALARM_HI] = 0
             self.holding_registers[REG_ALARM_LO] = 0
             self.holding_registers[REG_TICK] = 0
-            self.holding_registers[REG_ALARM_HI_TH] = 90
-            self.holding_registers[REG_ALARM_LO_TH] = 10
-            self.holding_registers[REG_LIMIT_HI_TH] = 95
-            self.holding_registers[REG_LIMIT_LO_TH] = 5
+            # 0 means "disabled" for alarms/limits.
+            self.holding_registers[REG_ALARM_HI_TH] = 0
+            self.holding_registers[REG_ALARM_LO_TH] = 0
+            self.holding_registers[REG_LIMIT_HI_TH] = 0
+            self.holding_registers[REG_LIMIT_LO_TH] = 0
             self.holding_registers[REG_LIMIT_HI_ACTIVE] = 0
             self.holding_registers[REG_LIMIT_LO_ACTIVE] = 0
 
@@ -128,13 +129,13 @@ class SimpleModbusServer:
             limit_hi_th = float(self.holding_registers[REG_LIMIT_HI_TH])
             limit_lo_th = float(self.holding_registers[REG_LIMIT_LO_TH])
 
-            if alarm_lo_th > alarm_hi_th:
+            if alarm_hi_th > 0 and alarm_lo_th > alarm_hi_th:
                 alarm_lo_th = alarm_hi_th
-            if limit_lo_th > limit_hi_th:
+            if limit_hi_th > 0 and limit_lo_th > limit_hi_th:
                 limit_lo_th = limit_hi_th
 
-            limit_hi_active = level >= limit_hi_th
-            limit_lo_active = level <= limit_lo_th
+            limit_hi_active = limit_hi_th > 0 and level >= limit_hi_th
+            limit_lo_active = limit_lo_th > 0 and level <= limit_lo_th
 
             if limit_hi_active:
                 pump_cmd = 0
@@ -146,19 +147,19 @@ class SimpleModbusServer:
             self.holding_registers[REG_LIMIT_HI_ACTIVE] = 1 if limit_hi_active else 0
             self.holding_registers[REG_LIMIT_LO_ACTIVE] = 1 if limit_lo_active else 0
 
-            flow_rate = 60.0
+            flow_rate = 6.0
             inflow = flow_rate if pump_cmd else 0.0
             outflow = flow_rate if valve_cmd else 0.0
             level += (inflow - outflow) * dt
 
             if level < 0:
                 level = 0.0
-            if level > 1000:
-                level = 1000.0
+            if level > 100:
+                level = 100.0
 
             self.holding_registers[REG_LEVEL] = int(level)
-            self.holding_registers[REG_ALARM_HI] = 1 if level >= alarm_hi_th else 0
-            self.holding_registers[REG_ALARM_LO] = 1 if level <= alarm_lo_th else 0
+            self.holding_registers[REG_ALARM_HI] = 1 if (alarm_hi_th > 0 and level >= alarm_hi_th) else 0
+            self.holding_registers[REG_ALARM_LO] = 1 if (alarm_lo_th > 0 and level <= alarm_lo_th) else 0
             self.holding_registers[REG_TICK] = (int(self.holding_registers[REG_TICK]) + 1) % 65536
 
     def _serve_loop(self):
@@ -289,7 +290,7 @@ class SimpleModbusServer:
                     REG_LIMIT_HI_TH,
                     REG_LIMIT_LO_TH,
                 }:
-                    self.holding_registers[register] = max(0, min(1000, int(value)))
+                    self.holding_registers[register] = max(0, min(100, int(value)))
                 elif register in {REG_PUMP_CMD, REG_VALVE_CMD, REG_AUTO_MODE}:
                     self.holding_registers[register] = 1 if int(value) > 0 else 0
                 else:
