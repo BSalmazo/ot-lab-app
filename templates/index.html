@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OT Lab App</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260423e" />
+  <link rel="stylesheet" href="/static/style.css?v=20260424a" />
 </head>
 <body>
   <div class="page">
@@ -171,57 +171,57 @@
       <div class="floating-window hidden" id="processHmiWindow">
         <div class="window-head">
           <span>Process HMI</span>
-          <div class="window-tools">
-            <button id="startProcessSimBtn" class="small" type="button">Start Simulation</button>
-            <button id="stopProcessSimBtn" class="secondary small" type="button">Stop</button>
-            <button class="window-close" type="button" data-close-window="processHmiWindow">✕</button>
-          </div>
+          <button class="window-close" type="button" data-close-window="processHmiWindow">✕</button>
         </div>
         <div class="window-body">
           <div class="hmi-layout">
-            <div class="hmi-process-panel">
-              <div class="hmi-process-title">Tank Process</div>
-              <div class="tank-wrapper">
-                <div class="tank-body">
-                  <div class="tank-fill" id="tankLevelFill"></div>
-                  <div class="tank-value" id="tankLevelText">Level: -</div>
+            <div class="hmi-process-panel hmi-process-panel-centered">
+              <div class="hmi-process-topbar">
+                <button id="simRunSwitchBtn" class="small hmi-switch" type="button">START / STOP</button>
+                <select id="processTypeSelect">
+                  <option value="tank_v1">Tank</option>
+                </select>
+              </div>
+
+              <div class="tank-stage">
+                <div class="stage-left-top">
+                  <button id="hmiPumpSwitchBtn" class="small hmi-switch" type="button">PUMP</button>
                 </div>
-                <div class="tank-pipes">
-                  <div class="pipe pipe-in">
-                    <span>IN</span>
-                    <span id="hmiPumpLamp" class="lamp">PUMP</span>
+                <div class="stage-center">
+                  <div class="tank-body">
+                    <div class="tank-fill" id="tankLevelFill"></div>
+                    <div class="tank-value" id="tankLevelText">Level: -</div>
                   </div>
-                  <div class="pipe pipe-out">
-                    <span>OUT</span>
-                    <span id="hmiValveLamp" class="lamp">VALVE</span>
-                  </div>
+                </div>
+                <div class="stage-right-bottom">
+                  <button id="hmiValveSwitchBtn" class="small hmi-switch" type="button">VALVE</button>
                 </div>
               </div>
             </div>
+
             <div class="hmi-controls">
               <div class="hmi-row">
-                <label for="hmiSetpointInput">Setpoint (0-1000)</label>
+                <label>Alarms</label>
                 <div class="hmi-row-inline">
-                  <input id="hmiSetpointInput" type="number" min="0" max="1000" value="600" />
-                  <button id="hmiSetSetpointBtn" class="small" type="button">Write</button>
+                  <input id="alarmLowInput" type="number" min="0" max="1000" value="10" />
+                  <input id="alarmHighInput" type="number" min="0" max="1000" value="90" />
                 </div>
               </div>
               <div class="hmi-row">
-                <label>Mode</label>
+                <label>Limits</label>
                 <div class="hmi-row-inline">
-                  <button id="hmiAutoOnBtn" class="small" type="button">AUTO ON</button>
-                  <button id="hmiAutoOffBtn" class="small" type="button">AUTO OFF</button>
+                  <input id="limitLowInput" type="number" min="0" max="1000" value="5" />
+                  <input id="limitHighInput" type="number" min="0" max="1000" value="95" />
                 </div>
               </div>
               <div class="hmi-row">
-                <label>Manual Actuators</label>
+                <label>Configuration</label>
                 <div class="hmi-row-inline">
-                  <button id="hmiPumpOnBtn" class="small" type="button">Pump ON</button>
-                  <button id="hmiPumpOffBtn" class="small" type="button">Pump OFF</button>
-                  <button id="hmiValveOnBtn" class="small" type="button">Valve OPEN</button>
-                  <button id="hmiValveOffBtn" class="small" type="button">Valve CLOSE</button>
+                  <button id="applyAlarmLimitBtn" class="small" type="button">Apply Alarm/Limit</button>
                 </div>
               </div>
+              <div id="hmiAlarmBanner" class="hmi-banner warning hidden">ALARM ACTIVE</div>
+              <div id="hmiLimitBanner" class="hmi-banner danger hidden">PROCESS STOPPED BY LIMIT</div>
               <div id="hmiProcessStatus" class="status slim">Simulation idle.</div>
             </div>
           </div>
@@ -380,6 +380,6 @@
   <script src="/static/protocols/modbus/ModbusActionForm.js?v=20260330p"></script>
   <script src="/static/protocols/modbus/ModbusTab.js?v=20260331a"></script>
   <script src="/static/actions/ActionsWindow.js?v=20260330p"></script>
-  <script src="/static/app.js?v=20260423e"></script>
+  <script src="/static/app.js?v=20260424a"></script>
 </body>
 </html>
