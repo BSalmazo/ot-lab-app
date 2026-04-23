@@ -840,7 +840,7 @@ const WINDOW_SIZE_RULES = {
   actionsHistoryWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   actionsPreviewWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   alertsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
-  processHmiWindow: { width: 980, height: 700, minWidth: 640, minHeight: 460, resizable: true },
+  processHmiWindow: { width: 960, height: 680, minWidth: 320, minHeight: 240, resizable: true },
   processPlcWindow: { width: 392, height: 248, minWidth: 392, minHeight: 248, fixed: true },
 };
 const openAlertDetails = new Set();
@@ -1736,7 +1736,8 @@ function bindAlertDetails(containerId) {
 }
 
 function windowStateStorageKey(id) {
-  return `${WINDOW_STATE_KEY_PREFIX}${id}`;
+  const variant = id === "processHmiWindow" ? "hmi_v2_" : "";
+  return `${WINDOW_STATE_KEY_PREFIX}${variant}${id}`;
 }
 
 function applyWindowState(el, id, index) {
