@@ -266,9 +266,10 @@ function toSafeInt(value, fallback = 0) {
 }
 
 function getProcessRegistersFromStatus(data) {
-  const clientValues = Array.isArray(data?.client?.last_values) ? data.client.last_values : [];
-  const serverValues = Array.isArray(data?.server?.registers_preview?.values)
-    ? data.server.registers_preview.values
+  const processSim = data?.process_sim || {};
+  const clientValues = Array.isArray(processSim?.client?.last_values) ? processSim.client.last_values : [];
+  const serverValues = Array.isArray(processSim?.server?.registers_preview?.values)
+    ? processSim.server.registers_preview.values
     : [];
   const values = clientValues.length ? clientValues : serverValues;
 
@@ -301,6 +302,7 @@ function setLampState(id, on) {
 
 function renderProcessHmi(data) {
   const regs = getProcessRegistersFromStatus(data);
+  const processSim = data?.process_sim || {};
   const fill = byId("tankLevelFill");
   const levelText = byId("tankLevelText");
   const statusText = byId("hmiProcessStatus");
@@ -312,7 +314,8 @@ function renderProcessHmi(data) {
   setLampState("hmiPumpLamp", regs.pump > 0);
   setLampState("hmiValveLamp", regs.valve > 0);
 
-  const err = data?.client?.last_error;
+  const err = processSim?.client?.last_error;
+  const simRunning = !!processSim?.running;
   if (statusText) {
     const modeLabel = regs.auto > 0 ? "AUTO" : "MANUAL";
     const alarms = [
@@ -321,7 +324,7 @@ function renderProcessHmi(data) {
     ].filter(Boolean).join(", ");
     const alarmText = alarms ? ` | ALARM=${alarms}` : "";
     const errText = err ? ` | client_error=${err}` : "";
-    statusText.textContent = `Mode=${modeLabel} | SP=${regs.setpoint}${alarmText}${errText}`;
+    statusText.textContent = `Sim=${simRunning ? "ON" : "OFF"} | Mode=${modeLabel} | SP=${regs.setpoint}${alarmText}${errText}`;
   }
 
   const setpointInput = byId("hmiSetpointInput");
@@ -332,13 +335,13 @@ function renderProcessHmi(data) {
 
 function renderProcessPlc(data) {
   const regs = getProcessRegistersFromStatus(data);
-  const serverRunning = !!data?.server?.running;
-  const clientRunning = !!data?.client?.running;
-  const agentConnected = !!data?.agent?.connected;
-  const lastSuccessTs = Number(data?.client?.last_success_at || 0);
+  const processSim = data?.process_sim || {};
+  const serverRunning = !!processSim?.server?.running;
+  const clientRunning = !!processSim?.client?.running;
+  const lastSuccessTs = Number(processSim?.client?.last_success_at || 0);
   const pollAgeS = lastSuccessTs > 0 ? (Date.now() / 1000 - lastSuccessTs) : Infinity;
   const pollFresh = Number.isFinite(pollAgeS) && pollAgeS <= 2.5;
-  const plcOnline = agentConnected && serverRunning;
+  const plcOnline = !!processSim?.running;
 
   const inputs = [
     { code: "I0.0", label: "AL_LO", on: regs.alarmLo > 0 },
@@ -379,7 +382,6 @@ function renderProcessPlc(data) {
     shell.innerHTML = `
       <div class="plc-faceplate">
         <div class="plc-top-row">
-          <div class="plc-section-title">INPUTS</div>
           <div class="plc-pin-row plc-pin-row-top">${buildIoRow(inputs, "in")}</div>
         </div>
 
@@ -400,24 +402,10 @@ function renderProcessPlc(data) {
         </div>
 
         <div class="plc-bottom-row">
-          <div class="plc-section-title">OUTPUTS</div>
           <div class="plc-pin-row plc-pin-row-bottom">${buildIoRow(outputs, "out")}</div>
         </div>
       </div>
     `;
-  }
-
-  const raw = byId("plcRawSnapshot");
-  if (raw) {
-    raw.textContent = [
-      `plc_online=${plcOnline}`,
-      `server_running=${serverRunning}`,
-      `client_running=${clientRunning}`,
-      `client_last_poll=${formatRelativeTimestamp(data?.client?.last_poll_at)}`,
-      `client_last_success=${formatRelativeTimestamp(data?.client?.last_success_at)}`,
-      `client_last_error=${data?.client?.last_error || "-"}`,
-      `raw_values=[${(regs.raw || []).join(", ")}]`,
-    ].join("\n");
   }
 }
 
@@ -644,8 +632,8 @@ async function refreshStatus() {
   setDisabled("openMonitorConfigBtn", !agentConnected);
   setDisabled("openServerConfigBtn", !agentConnected);
   setDisabled("openClientConfigBtn", !agentConnected);
-  setDisabled("startProcessSimBtn", !agentConnected);
-  setDisabled("stopProcessSimBtn", !agentConnected);
+  setDisabled("startProcessSimBtn", false);
+  setDisabled("stopProcessSimBtn", false);
 
   // Só atualizar inputs se NÃO estão em um modal aberto
   const serverModal = byId("serverModal");
@@ -802,16 +790,16 @@ const MODBUS_FUNCTION_NAME_MAP = {
 
 const WINDOW_STATE_KEY_PREFIX = "otlab_window_state_v1_";
 const WINDOW_SIZE_RULES = {
-  default: { width: 620, height: 500, minWidth: 460, minHeight: 340 },
-  idsWindow: { width: 700, height: 560, minWidth: 520, minHeight: 380 },
-  logsWindow: { width: 860, height: 620, minWidth: 620, minHeight: 420 },
-  connectionsWindow: { width: 860, height: 620, minWidth: 620, minHeight: 420 },
-  actionsWindow: { width: 980, height: 720, minWidth: 760, minHeight: 520 },
-  actionsHistoryWindow: { width: 760, height: 560, minWidth: 560, minHeight: 400 },
-  actionsPreviewWindow: { width: 760, height: 560, minWidth: 560, minHeight: 400 },
-  alertsWindow: { width: 860, height: 620, minWidth: 620, minHeight: 420 },
-  processHmiWindow: { width: 980, height: 700, minWidth: 760, minHeight: 520 },
-  processPlcWindow: { width: 760, height: 600, minWidth: 560, minHeight: 420 },
+  default: { width: 620, height: 500, minWidth: 280, minHeight: 220 },
+  idsWindow: { width: 700, height: 560, minWidth: 280, minHeight: 220 },
+  logsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
+  connectionsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
+  actionsWindow: { width: 980, height: 720, minWidth: 360, minHeight: 260 },
+  actionsHistoryWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
+  actionsPreviewWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
+  alertsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
+  processHmiWindow: { width: 860, height: 620, minWidth: 300, minHeight: 220 },
+  processPlcWindow: { width: 660, height: 480, minWidth: 300, minHeight: 220 },
 };
 const openAlertDetails = new Set();
 let lastAlertsFingerprint = "";
@@ -1232,72 +1220,48 @@ async function toggleClient() {
 }
 
 async function sendProcessWrite(address, value, note = "") {
-  const status = await apiGet("/api/status");
-  if (!status.agent?.connected) {
-    setText("hmiProcessStatus", "Agent disconnected. Connect local agent first.");
-    return { ok: false };
-  }
-
-  const host = status.server?.host || "127.0.0.1";
-  const port = Number(status.server?.port || 15020);
-
   const payload = {
-    function_id: "fc06_write_single_register",
-    host,
-    port,
-    values: {
-      unit_id: 1,
-      address: Number(address),
-      value: Number(value),
-    },
+    address: Number(address),
+    value: Number(value),
+    unit_id: 1,
   };
 
-  const result = await apiPost("/api/actions/modbus/execute", payload);
+  const result = await apiPost("/api/process-sim/write", payload);
   if (!result.ok) {
     setText("hmiProcessStatus", `Write failed (${note || `HR${address}`})`);
     return result;
   }
 
-  setText("hmiProcessStatus", `Write queued: HR${address}=${value}${note ? ` (${note})` : ""}`);
+  setText("hmiProcessStatus", `Write applied: HR${address}=${value}${note ? ` (${note})` : ""}`);
   return result;
 }
 
 async function startProcessSimulation() {
-  const status = await apiGet("/api/status");
-  if (!status.agent?.connected) {
-    setText("hmiProcessStatus", "Agent disconnected. Connect local agent first.");
+  const result = await apiPost("/api/process-sim/start", {
+    host: "127.0.0.1",
+    port: 15020,
+    poll_interval: 0.5,
+    poll_start: 0,
+    poll_quantity: 8,
+  });
+
+  if (!result.ok) {
+    setText("hmiProcessStatus", `Failed to start simulation: ${result.error || "unknown error"}`);
     return;
   }
 
-  const host = "127.0.0.1";
-  const port = 15020;
-
-  await apiPost("/api/agent/server/configure", { host, port });
-  await apiPost("/api/agent/client/configure", {
-    host,
-    port,
-    poll_interval: 0.5,
-    poll_start: 0,
-    poll_quantity: 8,
-  });
-  await apiPost("/api/agent/server/start", { host, port });
-  await apiPost("/api/agent/client/start", {
-    host,
-    port,
-    poll_interval: 0.5,
-    poll_start: 0,
-    poll_quantity: 8,
-  });
-
   openWindow("processHmiWindow");
   openWindow("processPlcWindow");
-  setText("hmiProcessStatus", "Simulation started. PLC server + HMI polling active.");
+  setText("hmiProcessStatus", "Simulation started.");
   await refreshAll();
 }
 
 async function stopProcessSimulation() {
-  await apiPost("/api/agent/client/stop");
-  await apiPost("/api/agent/server/stop");
+  const result = await apiPost("/api/process-sim/stop");
+  if (!result.ok) {
+    setText("hmiProcessStatus", `Failed to stop simulation: ${result.error || "unknown error"}`);
+    return;
+  }
   setText("hmiProcessStatus", "Simulation stopped.");
   await refreshAll();
 }
