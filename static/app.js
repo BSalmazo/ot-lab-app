@@ -316,13 +316,11 @@ function renderProcessHmi(data) {
   const processSim = data?.process_sim || {};
   const fill = byId("tankLevelFill");
   const levelText = byId("tankLevelText");
-  const statusText = byId("hmiProcessStatus");
 
   const pct = Math.max(0, Math.min(100, regs.level));
   if (fill) fill.style.height = `${pct}%`;
   if (levelText) levelText.textContent = `Level: ${regs.level} / 100 (${pct.toFixed(1)}%)`;
 
-  const err = processSim?.client?.last_error;
   const simRunning = !!processSim?.running;
   const alarmActive = regs.alarmHi > 0 || regs.alarmLo > 0;
   const limitActive = regs.limitHiActive > 0 || regs.limitLoActive > 0;
@@ -339,17 +337,6 @@ function renderProcessHmi(data) {
   ) {
     processTypeSelect.value = processSim.process_type;
   }
-
-  const syncInput = (id, value) => {
-    const input = byId(id);
-    if (!input) return;
-    if (document.activeElement === input) return;
-    input.value = String(value);
-  };
-  syncInput("alarmLowInput", regs.alarmLoThreshold);
-  syncInput("alarmHighInput", regs.alarmHiThreshold);
-  syncInput("limitLowInput", regs.limitLoThreshold);
-  syncInput("limitHighInput", regs.limitHiThreshold);
 
   const alarmBanner = byId("hmiAlarmBanner");
   if (alarmBanner) {
@@ -375,12 +362,6 @@ function renderProcessHmi(data) {
     }
   }
 
-  if (statusText) {
-    const alarmText = alarmActive ? " | ALARM=ACTIVE" : "";
-    const limitText = limitActive ? " | LIMIT=ACTIVE" : "";
-    const errText = err ? ` | client_error=${err}` : "";
-    statusText.textContent = `Sim=${simRunning ? "ON" : "OFF"} | Level=${regs.level}/100${alarmText}${limitText}${errText}`;
-  }
 }
 
 function renderProcessPlc(data) {
@@ -854,7 +835,7 @@ const WINDOW_SIZE_RULES = {
   actionsPreviewWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   alertsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
   processHmiWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240, resizable: true },
-  processPlcWindow: { width: 520, height: 360, minWidth: 520, minHeight: 360, fixed: true },
+  processPlcWindow: { width: 470, height: 320, minWidth: 470, minHeight: 320, fixed: true },
 };
 const openAlertDetails = new Set();
 let lastAlertsFingerprint = "";
