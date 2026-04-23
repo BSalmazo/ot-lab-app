@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OT Lab App</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260402l" />
+  <link rel="stylesheet" href="/static/style.css?v=20260423a" />
 </head>
 <body>
   <div class="page">
@@ -87,6 +87,7 @@
           <button class="dock-btn" id="openLogsWindowBtn" type="button">System Logs</button>
           <button class="dock-btn" id="openConnectionsWindowBtn" type="button">Connections</button>
           <button class="dock-btn" id="openActionsWindowBtn" type="button">Actions</button>
+          <button class="dock-btn" id="openProcessSimulationBtn" type="button">Process</button>
         </div>
       </section>
 
@@ -164,6 +165,77 @@
         </div>
         <div class="window-body">
           <div id="connectionsHistoryPanel" class="log-panel floating-log"></div>
+        </div>
+      </div>
+
+      <div class="floating-window hidden" id="processHmiWindow">
+        <div class="window-head">
+          <span>Process HMI</span>
+          <div class="window-tools">
+            <button id="startProcessSimBtn" class="small" type="button">Start Simulation</button>
+            <button id="stopProcessSimBtn" class="secondary small" type="button">Stop</button>
+            <button class="window-close" type="button" data-close-window="processHmiWindow">✕</button>
+          </div>
+        </div>
+        <div class="window-body">
+          <div class="hmi-layout">
+            <div class="hmi-process-panel">
+              <div class="hmi-process-title">Tank Process</div>
+              <div class="tank-wrapper">
+                <div class="tank-body">
+                  <div class="tank-fill" id="tankLevelFill"></div>
+                  <div class="tank-value" id="tankLevelText">Level: -</div>
+                </div>
+                <div class="tank-pipes">
+                  <div class="pipe pipe-in">
+                    <span>IN</span>
+                    <span id="hmiPumpLamp" class="lamp">PUMP</span>
+                  </div>
+                  <div class="pipe pipe-out">
+                    <span>OUT</span>
+                    <span id="hmiValveLamp" class="lamp">VALVE</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="hmi-controls">
+              <div class="hmi-row">
+                <label for="hmiSetpointInput">Setpoint (0-1000)</label>
+                <div class="hmi-row-inline">
+                  <input id="hmiSetpointInput" type="number" min="0" max="1000" value="600" />
+                  <button id="hmiSetSetpointBtn" class="small" type="button">Write</button>
+                </div>
+              </div>
+              <div class="hmi-row">
+                <label>Mode</label>
+                <div class="hmi-row-inline">
+                  <button id="hmiAutoOnBtn" class="small" type="button">AUTO ON</button>
+                  <button id="hmiAutoOffBtn" class="small" type="button">AUTO OFF</button>
+                </div>
+              </div>
+              <div class="hmi-row">
+                <label>Manual Actuators</label>
+                <div class="hmi-row-inline">
+                  <button id="hmiPumpOnBtn" class="small" type="button">Pump ON</button>
+                  <button id="hmiPumpOffBtn" class="small" type="button">Pump OFF</button>
+                  <button id="hmiValveOnBtn" class="small" type="button">Valve OPEN</button>
+                  <button id="hmiValveOffBtn" class="small" type="button">Valve CLOSE</button>
+                </div>
+              </div>
+              <div id="hmiProcessStatus" class="status slim">Simulation idle.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="floating-window hidden" id="processPlcWindow">
+        <div class="window-head">
+          <span>PLC State</span>
+          <button class="window-close" type="button" data-close-window="processPlcWindow">✕</button>
+        </div>
+        <div class="window-body">
+          <div class="plc-grid" id="plcRegisterGrid"></div>
+          <pre id="plcRawSnapshot" class="log-panel floating-panel"></pre>
         </div>
       </div>
     </main>
@@ -309,6 +381,6 @@
   <script src="/static/protocols/modbus/ModbusActionForm.js?v=20260330p"></script>
   <script src="/static/protocols/modbus/ModbusTab.js?v=20260331a"></script>
   <script src="/static/actions/ActionsWindow.js?v=20260330p"></script>
-  <script src="/static/app.js?v=20260402g"></script>
+  <script src="/static/app.js?v=20260423a"></script>
 </body>
 </html>

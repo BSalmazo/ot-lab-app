@@ -2,6 +2,15 @@ import socket
 import threading
 import time
 
+REG_LEVEL = 0
+REG_SETPOINT = 1
+REG_PUMP_CMD = 2
+REG_VALVE_CMD = 3
+REG_AUTO_MODE = 4
+REG_ALARM_HI = 5
+REG_ALARM_LO = 6
+REG_TICK = 7
+
 
 def recv_exact(sock: socket.socket, size: int) -> bytes:
     data = b""
@@ -20,6 +29,7 @@ class SimpleModbusServer:
         self.register_count = register_count
 
         self._thread = None
+        self._process_thread = None
         self._stop_event = threading.Event()
         self._server_socket = None
         self._lock = threading.Lock()
@@ -29,14 +39,14 @@ class SimpleModbusServer:
 
     def _seed_demo_data(self):
         if self.register_count >= 8:
-            self.holding_registers[0] = 10
-            self.holding_registers[1] = 20
-            self.holding_registers[2] = 30
-            self.holding_registers[3] = 40
-            self.holding_registers[4] = 100
-            self.holding_registers[5] = 200
-            self.holding_registers[6] = 300
-            self.holding_registers[7] = 400
+            self.holding_registers[REG_LEVEL] = 320
+            self.holding_registers[REG_SETPOINT] = 600
+            self.holding_registers[REG_PUMP_CMD] = 0
+            self.holding_registers[REG_VALVE_CMD] = 0
+            self.holding_registers[REG_AUTO_MODE] = 1
+            self.holding_registers[REG_ALARM_HI] = 0
+            self.holding_registers[REG_ALARM_LO] = 0
+            self.holding_registers[REG_TICK] = 0
 
     @property
     def running(self):
@@ -48,7 +58,9 @@ class SimpleModbusServer:
 
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._serve_loop, daemon=True)
+        self._process_thread = threading.Thread(target=self._process_loop, daemon=True)
         self._thread.start()
+        self._process_thread.start()
         time.sleep(0.2)
         return self.running
 
@@ -63,9 +75,65 @@ class SimpleModbusServer:
 
         if self._thread:
             self._thread.join(timeout=2)
+        if self._process_thread:
+            self._process_thread.join(timeout=2)
 
         self._thread = None
+        self._process_thread = None
         self._server_socket = None
+
+    def get_registers_preview(self, start: int = 0, quantity: int = 16):
+        start_addr = max(0, int(start))
+        qty = max(1, int(quantity))
+        end_addr = min(len(self.holding_registers), start_addr + qty)
+        with self._lock:
+            data = list(self.holding_registers[start_addr:end_addr])
+        return {
+            "start": start_addr,
+            "quantity": len(data),
+            "values": data,
+        }
+
+    def _process_loop(self):
+        last = time.time()
+        while not self._stop_event.is_set():
+            now = time.time()
+            dt = max(0.05, min(1.0, now - last))
+            last = now
+            self._advance_process(dt)
+            time.sleep(0.2)
+
+    def _advance_process(self, dt: float):
+        if self.register_count < 8:
+            return
+
+        with self._lock:
+            level = float(self.holding_registers[REG_LEVEL])
+            setpoint = float(self.holding_registers[REG_SETPOINT])
+            pump_cmd = 1 if self.holding_registers[REG_PUMP_CMD] > 0 else 0
+            valve_cmd = 1 if self.holding_registers[REG_VALVE_CMD] > 0 else 0
+            auto_mode = 1 if self.holding_registers[REG_AUTO_MODE] > 0 else 0
+
+            if auto_mode:
+                if level < (setpoint - 20):
+                    pump_cmd = 1
+                elif level > (setpoint + 20):
+                    pump_cmd = 0
+                self.holding_registers[REG_PUMP_CMD] = pump_cmd
+
+            inflow = 7.5 if pump_cmd else 0.0
+            outflow = 9.0 if valve_cmd else 2.0
+            level += (inflow - outflow) * dt * 2.0
+
+            if level < 0:
+                level = 0.0
+            if level > 1000:
+                level = 1000.0
+
+            self.holding_registers[REG_LEVEL] = int(level)
+            self.holding_registers[REG_ALARM_HI] = 1 if level >= 850 else 0
+            self.holding_registers[REG_ALARM_LO] = 1 if level <= 150 else 0
+            self.holding_registers[REG_TICK] = (int(self.holding_registers[REG_TICK]) + 1) % 65536
 
     def _serve_loop(self):
         try:
@@ -178,7 +246,15 @@ class SimpleModbusServer:
                 return self._exception_response(function_code, 2)
 
             with self._lock:
-                self.holding_registers[register] = value
+                if register in {REG_LEVEL, REG_ALARM_HI, REG_ALARM_LO, REG_TICK}:
+                    return self._exception_response(function_code, 3)
+
+                if register == REG_SETPOINT:
+                    self.holding_registers[register] = max(0, min(1000, int(value)))
+                elif register in {REG_PUMP_CMD, REG_VALVE_CMD, REG_AUTO_MODE}:
+                    self.holding_registers[register] = 1 if int(value) > 0 else 0
+                else:
+                    self.holding_registers[register] = int(value)
 
             return bytes([function_code]) + data
 
@@ -196,8 +272,11 @@ class SimpleModbusClient:
         self._thread = None
         self._stop_event = threading.Event()
         self._tx_id = 1
+        self._lock = threading.Lock()
         self.last_values = []
         self.last_error = None
+        self.last_poll_at = None
+        self.last_success_at = None
 
     @property
     def running(self):
@@ -247,10 +326,15 @@ class SimpleModbusClient:
                     start_addr=self.poll_start,
                     quantity=self.poll_quantity,
                 )
-                self.last_values = values
-                self.last_error = None
+                with self._lock:
+                    self.last_values = values
+                    self.last_error = None
+                    self.last_poll_at = time.time()
+                    self.last_success_at = self.last_poll_at
             except Exception as e:
-                self.last_error = str(e)
+                with self._lock:
+                    self.last_error = str(e)
+                    self.last_poll_at = time.time()
                 print(f"[modbus-client] poll error: {e}")
 
             sleep_step = 0.1
@@ -305,3 +389,12 @@ class SimpleModbusClient:
                     values.append(int.from_bytes(data[i:i + 2], "big"))
 
             return values
+
+    def get_snapshot(self):
+        with self._lock:
+            return {
+                "last_values": list(self.last_values),
+                "last_error": self.last_error,
+                "last_poll_at": self.last_poll_at,
+                "last_success_at": self.last_success_at,
+            }
