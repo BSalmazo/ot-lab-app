@@ -1558,7 +1558,7 @@ button:disabled {
 
 .hmi-layout {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 1fr 320px;
   gap: 14px;
 }
 
@@ -1569,25 +1569,80 @@ button:disabled {
   background: rgba(15, 23, 42, 0.72);
 }
 
-.hmi-process-title {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text);
-  margin-bottom: 10px;
+.hmi-process-panel-centered {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.tank-wrapper {
+.hmi-process-topbar {
   display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.hmi-process-topbar select {
+  width: 180px;
+}
+
+.hmi-switch {
+  background: var(--blue);
+  border: 1px solid rgba(59, 130, 246, 0.7);
+  color: #fff;
+}
+
+.hmi-switch.hmi-switch-on {
+  background: #16a34a;
+  border-color: rgba(22, 163, 74, 0.85);
+}
+
+.hmi-switch.hmi-switch-off {
+  background: var(--blue);
+  border-color: rgba(59, 130, 246, 0.7);
+}
+
+.tank-stage {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 10px;
+  background: rgba(2, 6, 23, 0.35);
+  min-height: 320px;
+  display: grid;
+  grid-template-columns: 1fr 220px 1fr;
+  grid-template-rows: 1fr 1fr;
   gap: 10px;
+  padding: 10px;
+}
+
+.stage-left-top {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.stage-center {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stage-right-bottom {
+  grid-column: 3;
+  grid-row: 2;
+  display: flex;
   align-items: flex-end;
+  justify-content: center;
 }
 
 .tank-body {
-  width: 120px;
-  height: 220px;
-  border: 2px solid rgba(148, 163, 184, 0.6);
-  border-radius: 8px;
-  background: rgba(30, 41, 59, 0.65);
+  width: 150px;
+  height: 260px;
+  border: 2px solid rgba(148, 163, 184, 0.7);
+  border-radius: 10px;
+  background: rgba(30, 41, 59, 0.72);
   position: relative;
   overflow: hidden;
 }
@@ -1610,45 +1665,6 @@ button:disabled {
   font-size: 11px;
   color: #f8fafc;
   text-shadow: 0 1px 2px rgba(2, 6, 23, 0.75);
-}
-
-.tank-pipes {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.pipe {
-  min-width: 88px;
-  border: 1px solid rgba(148, 163, 184, 0.3);
-  border-radius: 8px;
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  align-items: center;
-  background: rgba(15, 23, 42, 0.5);
-  font-size: 11px;
-  color: #cbd5e1;
-}
-
-.lamp {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  padding: 4px 8px;
-  font-size: 10px;
-  font-weight: 700;
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  background: rgba(71, 85, 105, 0.35);
-  color: #cbd5e1;
-}
-
-.lamp.lamp-on {
-  color: #052e16;
-  border-color: rgba(34, 197, 94, 0.75);
-  background: rgba(74, 222, 128, 0.92);
 }
 
 .hmi-controls {
@@ -1679,7 +1695,52 @@ button:disabled {
 }
 
 .hmi-row-inline input {
-  width: 130px;
+  width: 120px;
+}
+
+.hmi-banner {
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.hmi-banner.warning {
+  color: #fef3c7;
+  background: rgba(202, 138, 4, 0.35);
+  border: 1px solid rgba(250, 204, 21, 0.75);
+  animation: hmiWarningBlink 0.9s steps(2, start) infinite;
+}
+
+.hmi-banner.danger {
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.55);
+  border: 1px solid rgba(248, 113, 113, 0.82);
+  animation: hmiDangerBlink 0.75s steps(2, start) infinite;
+}
+
+@keyframes hmiWarningBlink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes hmiDangerBlink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0.2;
+  }
 }
 
 .plc-visual-shell {
@@ -1835,6 +1896,21 @@ button:disabled {
 @media (max-width: 900px) {
   .hmi-layout {
     grid-template-columns: 1fr;
+  }
+
+  .tank-stage {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+    min-height: 0;
+  }
+
+  .stage-left-top,
+  .stage-center,
+  .stage-right-bottom {
+    grid-column: 1;
+    grid-row: auto;
+    justify-content: center;
+    align-items: center;
   }
 
   .plc-pin-row {

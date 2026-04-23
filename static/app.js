@@ -250,13 +250,19 @@ function formatClientStatus(client) {
 
 const PROCESS_REG_MAP = {
   level: 0,
-  setpoint: 1,
+  _reserved: 1,
   pump: 2,
   valve: 3,
-  auto: 4,
+  _auto: 4,
   alarmHi: 5,
   alarmLo: 6,
   tick: 7,
+  alarmHiThreshold: 8,
+  alarmLoThreshold: 9,
+  limitHiThreshold: 10,
+  limitLoThreshold: 11,
+  limitHiActive: 12,
+  limitLoActive: 13,
 };
 
 function toSafeInt(value, fallback = 0) {
@@ -276,13 +282,17 @@ function getProcessRegistersFromStatus(data) {
   return {
     raw: values,
     level: toSafeInt(values[PROCESS_REG_MAP.level], 0),
-    setpoint: toSafeInt(values[PROCESS_REG_MAP.setpoint], 0),
     pump: toSafeInt(values[PROCESS_REG_MAP.pump], 0),
     valve: toSafeInt(values[PROCESS_REG_MAP.valve], 0),
-    auto: toSafeInt(values[PROCESS_REG_MAP.auto], 0),
     alarmHi: toSafeInt(values[PROCESS_REG_MAP.alarmHi], 0),
     alarmLo: toSafeInt(values[PROCESS_REG_MAP.alarmLo], 0),
     tick: toSafeInt(values[PROCESS_REG_MAP.tick], 0),
+    alarmHiThreshold: toSafeInt(values[PROCESS_REG_MAP.alarmHiThreshold], 90),
+    alarmLoThreshold: toSafeInt(values[PROCESS_REG_MAP.alarmLoThreshold], 10),
+    limitHiThreshold: toSafeInt(values[PROCESS_REG_MAP.limitHiThreshold], 95),
+    limitLoThreshold: toSafeInt(values[PROCESS_REG_MAP.limitLoThreshold], 5),
+    limitHiActive: toSafeInt(values[PROCESS_REG_MAP.limitHiActive], 0),
+    limitLoActive: toSafeInt(values[PROCESS_REG_MAP.limitLoActive], 0),
   };
 }
 
@@ -294,10 +304,11 @@ function formatRelativeTimestamp(ts) {
   return `${delta.toFixed(1)}s ago`;
 }
 
-function setLampState(id, on) {
+function setSwitchState(id, on) {
   const el = byId(id);
   if (!el) return;
-  el.classList.toggle("lamp-on", !!on);
+  el.classList.toggle("hmi-switch-on", !!on);
+  el.classList.toggle("hmi-switch-off", !on);
 }
 
 function renderProcessHmi(data) {
@@ -311,25 +322,64 @@ function renderProcessHmi(data) {
   if (fill) fill.style.height = `${pct}%`;
   if (levelText) levelText.textContent = `Level: ${regs.level} / 1000 (${pct.toFixed(1)}%)`;
 
-  setLampState("hmiPumpLamp", regs.pump > 0);
-  setLampState("hmiValveLamp", regs.valve > 0);
-
   const err = processSim?.client?.last_error;
   const simRunning = !!processSim?.running;
-  if (statusText) {
-    const modeLabel = regs.auto > 0 ? "AUTO" : "MANUAL";
-    const alarms = [
-      regs.alarmHi > 0 ? "HI" : null,
-      regs.alarmLo > 0 ? "LO" : null,
-    ].filter(Boolean).join(", ");
-    const alarmText = alarms ? ` | ALARM=${alarms}` : "";
-    const errText = err ? ` | client_error=${err}` : "";
-    statusText.textContent = `Sim=${simRunning ? "ON" : "OFF"} | Mode=${modeLabel} | SP=${regs.setpoint}${alarmText}${errText}`;
+  const alarmActive = regs.alarmHi > 0 || regs.alarmLo > 0;
+  const limitActive = regs.limitHiActive > 0 || regs.limitLoActive > 0;
+
+  setSwitchState("simRunSwitchBtn", simRunning);
+  setSwitchState("hmiPumpSwitchBtn", regs.pump > 0);
+  setSwitchState("hmiValveSwitchBtn", regs.valve > 0);
+
+  const processTypeSelect = byId("processTypeSelect");
+  if (
+    processTypeSelect &&
+    document.activeElement !== processTypeSelect &&
+    processSim?.process_type
+  ) {
+    processTypeSelect.value = processSim.process_type;
   }
 
-  const setpointInput = byId("hmiSetpointInput");
-  if (setpointInput && document.activeElement !== setpointInput && regs.setpoint > 0) {
-    setpointInput.value = String(regs.setpoint);
+  const syncInput = (id, value) => {
+    const input = byId(id);
+    if (!input) return;
+    if (document.activeElement === input) return;
+    input.value = String(value);
+  };
+  syncInput("alarmLowInput", regs.alarmLoThreshold);
+  syncInput("alarmHighInput", regs.alarmHiThreshold);
+  syncInput("limitLowInput", regs.limitLoThreshold);
+  syncInput("limitHighInput", regs.limitHiThreshold);
+
+  const alarmBanner = byId("hmiAlarmBanner");
+  if (alarmBanner) {
+    alarmBanner.classList.toggle("hidden", !alarmActive);
+    if (alarmActive) {
+      const reasons = [
+        regs.alarmHi > 0 ? "HIGH" : null,
+        regs.alarmLo > 0 ? "LOW" : null,
+      ].filter(Boolean).join(" / ");
+      alarmBanner.textContent = `ALARM ${reasons}`;
+    }
+  }
+
+  const limitBanner = byId("hmiLimitBanner");
+  if (limitBanner) {
+    limitBanner.classList.toggle("hidden", !limitActive);
+    if (limitActive) {
+      const reasons = [
+        regs.limitHiActive > 0 ? "HIGH LIMIT" : null,
+        regs.limitLoActive > 0 ? "LOW LIMIT" : null,
+      ].filter(Boolean).join(" / ");
+      limitBanner.textContent = `PROCESS STOPPED BY ${reasons}`;
+    }
+  }
+
+  if (statusText) {
+    const alarmText = alarmActive ? " | ALARM=ACTIVE" : "";
+    const limitText = limitActive ? " | LIMIT=ACTIVE" : "";
+    const errText = err ? ` | client_error=${err}` : "";
+    statusText.textContent = `Sim=${simRunning ? "ON" : "OFF"} | Level=${regs.level}${alarmText}${limitText}${errText}`;
   }
 }
 
@@ -346,9 +396,9 @@ function renderProcessPlc(data) {
   const inputs = [
     { code: "I0.0", label: "AL_LO", on: regs.alarmLo > 0 },
     { code: "I0.1", label: "AL_HI", on: regs.alarmHi > 0 },
-    { code: "I0.2", label: "AUTO_SW", on: regs.auto > 0 },
+    { code: "I0.2", label: "LIM_LO", on: regs.limitLoActive > 0 },
     { code: "I0.3", label: "NET_OK", on: pollFresh },
-    { code: "I0.4", label: "LVL>SP", on: regs.level >= regs.setpoint },
+    { code: "I0.4", label: "LIM_HI", on: regs.limitHiActive > 0 },
     { code: "I0.5", label: "TANK_OK", on: regs.level > 50 },
     { code: "I0.6", label: "SRV_ON", on: serverRunning },
     { code: "I0.7", label: "CLI_ON", on: clientRunning },
@@ -358,7 +408,7 @@ function renderProcessPlc(data) {
     { code: "Q0.0", label: "PUMP", on: regs.pump > 0 },
     { code: "Q0.1", label: "VALVE", on: regs.valve > 0 },
     { code: "Q0.2", label: "ALARM", on: regs.alarmHi > 0 || regs.alarmLo > 0 },
-    { code: "Q0.3", label: "AUTO", on: regs.auto > 0 },
+    { code: "Q0.3", label: "LIMIT", on: regs.limitHiActive > 0 || regs.limitLoActive > 0 },
     { code: "Q0.4", label: "RUN", on: plcOnline },
     { code: "Q0.5", label: "HEART", on: (regs.tick % 2) === 0 },
     { code: "Q0.6", label: "RES6", on: false },
@@ -395,8 +445,8 @@ function renderProcessPlc(data) {
           </div>
           <div class="plc-center-values">
             <div><strong>Level:</strong> ${escapeHtml(regs.level)}</div>
-            <div><strong>Setpoint:</strong> ${escapeHtml(regs.setpoint)}</div>
-            <div><strong>Mode:</strong> ${regs.auto > 0 ? "AUTO" : "MANUAL"}</div>
+            <div><strong>Alarm:</strong> ${regs.alarmLoThreshold}..${regs.alarmHiThreshold}</div>
+            <div><strong>Limit:</strong> ${regs.limitLoThreshold}..${regs.limitHiThreshold}</div>
             <div><strong>Tick:</strong> ${escapeHtml(regs.tick)}</div>
           </div>
         </div>
@@ -632,8 +682,13 @@ async function refreshStatus() {
   setDisabled("openMonitorConfigBtn", !agentConnected);
   setDisabled("openServerConfigBtn", !agentConnected);
   setDisabled("openClientConfigBtn", !agentConnected);
-  setDisabled("startProcessSimBtn", false);
-  setDisabled("stopProcessSimBtn", false);
+  setDisabled("simRunSwitchBtn", false);
+
+  const simRunning = !!data?.process_sim?.running;
+  setDisabled("hmiPumpSwitchBtn", !simRunning);
+  setDisabled("hmiValveSwitchBtn", !simRunning);
+  setDisabled("applyAlarmLimitBtn", !simRunning);
+  setDisabled("processTypeSelect", simRunning);
 
   // Só atualizar inputs se NÃO estão em um modal aberto
   const serverModal = byId("serverModal");
@@ -1237,12 +1292,14 @@ async function sendProcessWrite(address, value, note = "") {
 }
 
 async function startProcessSimulation() {
+  const processType = byId("processTypeSelect")?.value || "tank_v1";
   const result = await apiPost("/api/process-sim/start", {
     host: "127.0.0.1",
     port: 15020,
     poll_interval: 0.5,
     poll_start: 0,
-    poll_quantity: 8,
+    poll_quantity: 16,
+    process_type: processType,
   });
 
   if (!result.ok) {
@@ -1266,39 +1323,65 @@ async function stopProcessSimulation() {
   await refreshAll();
 }
 
+async function toggleProcessSimulation() {
+  const status = await apiGet("/api/status");
+  const running = !!status?.process_sim?.running;
+  if (running) {
+    await stopProcessSimulation();
+  } else {
+    await startProcessSimulation();
+  }
+}
+
+async function toggleProcessActuator(registerKey, note) {
+  const status = await apiGet("/api/status");
+  const regs = getProcessRegistersFromStatus(status);
+  const current = Number(regs[registerKey]) > 0;
+  await sendProcessWrite(PROCESS_REG_MAP[registerKey], current ? 0 : 1, note);
+  await refreshAll();
+}
+
+function parseProcessInput(id, fallback) {
+  return toSafeInt(byId(id)?.value, fallback);
+}
+
+async function applyAlarmLimitConfig() {
+  const alarmLow = Math.max(0, Math.min(1000, parseProcessInput("alarmLowInput", 10)));
+  const alarmHigh = Math.max(alarmLow, Math.min(1000, parseProcessInput("alarmHighInput", 90)));
+  const limitLow = Math.max(0, Math.min(1000, parseProcessInput("limitLowInput", 5)));
+  const limitHigh = Math.max(limitLow, Math.min(1000, parseProcessInput("limitHighInput", 95)));
+
+  const writes = [
+    [PROCESS_REG_MAP.alarmLoThreshold, alarmLow, "alarm low"],
+    [PROCESS_REG_MAP.alarmHiThreshold, alarmHigh, "alarm high"],
+    [PROCESS_REG_MAP.limitLoThreshold, limitLow, "limit low"],
+    [PROCESS_REG_MAP.limitHiThreshold, limitHigh, "limit high"],
+  ];
+
+  for (const [addr, value, note] of writes) {
+    const result = await sendProcessWrite(addr, value, note);
+    if (!result.ok) return;
+  }
+
+  setText("hmiProcessStatus", `Alarm/Limit updated: alarm=${alarmLow}..${alarmHigh}, limit=${limitLow}..${limitHigh}`);
+  await refreshAll();
+}
+
 function openProcessSimulationWindows() {
   openWindow("processHmiWindow");
   openWindow("processPlcWindow");
 }
 
 function bindProcessSimulationControls() {
-  byId("startProcessSimBtn")?.addEventListener("click", startProcessSimulation);
-  byId("stopProcessSimBtn")?.addEventListener("click", stopProcessSimulation);
+  byId("simRunSwitchBtn")?.addEventListener("click", toggleProcessSimulation);
   byId("openProcessSimulationBtn")?.addEventListener("click", openProcessSimulationWindows);
-
-  byId("hmiSetSetpointBtn")?.addEventListener("click", async () => {
-    const setpoint = toSafeInt(byId("hmiSetpointInput")?.value, 600);
-    await sendProcessWrite(PROCESS_REG_MAP.setpoint, Math.max(0, Math.min(1000, setpoint)), "setpoint");
+  byId("hmiPumpSwitchBtn")?.addEventListener("click", async () => {
+    await toggleProcessActuator("pump", "pump");
   });
-
-  byId("hmiAutoOnBtn")?.addEventListener("click", async () => {
-    await sendProcessWrite(PROCESS_REG_MAP.auto, 1, "auto on");
+  byId("hmiValveSwitchBtn")?.addEventListener("click", async () => {
+    await toggleProcessActuator("valve", "valve");
   });
-  byId("hmiAutoOffBtn")?.addEventListener("click", async () => {
-    await sendProcessWrite(PROCESS_REG_MAP.auto, 0, "auto off");
-  });
-  byId("hmiPumpOnBtn")?.addEventListener("click", async () => {
-    await sendProcessWrite(PROCESS_REG_MAP.pump, 1, "pump on");
-  });
-  byId("hmiPumpOffBtn")?.addEventListener("click", async () => {
-    await sendProcessWrite(PROCESS_REG_MAP.pump, 0, "pump off");
-  });
-  byId("hmiValveOnBtn")?.addEventListener("click", async () => {
-    await sendProcessWrite(PROCESS_REG_MAP.valve, 1, "valve open");
-  });
-  byId("hmiValveOffBtn")?.addEventListener("click", async () => {
-    await sendProcessWrite(PROCESS_REG_MAP.valve, 0, "valve close");
-  });
+  byId("applyAlarmLimitBtn")?.addEventListener("click", applyAlarmLimitConfig);
 }
 
 async function resetSystem() {

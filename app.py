@@ -111,7 +111,8 @@ class ProcessSimulationManager:
             "port": 15020,
             "poll_interval": 0.5,
             "poll_start": 0,
-            "poll_quantity": 8,
+            "poll_quantity": 16,
+            "process_type": "tank_v1",
         }
 
     def _snapshot_locked(self):
@@ -141,6 +142,7 @@ class ProcessSimulationManager:
 
         return {
             "running": server_running and client_running,
+            "process_type": self._config["process_type"],
             "server": {
                 "running": server_running,
                 "host": self._config["host"],
@@ -185,12 +187,16 @@ class ProcessSimulationManager:
 
         return self.snapshot()
 
-    def start(self, host=None, port=None, poll_interval=None, poll_start=None, poll_quantity=None):
+    def start(self, host=None, port=None, poll_interval=None, poll_start=None, poll_quantity=None, process_type=None):
         host = str(host or self._config["host"]).strip() or "127.0.0.1"
         port = int(port if port is not None else self._config["port"])
         poll_interval = float(poll_interval if poll_interval is not None else self._config["poll_interval"])
         poll_start = int(poll_start if poll_start is not None else self._config["poll_start"])
         poll_quantity = int(poll_quantity if poll_quantity is not None else self._config["poll_quantity"])
+        process_type = str(process_type or self._config["process_type"]).strip() or "tank_v1"
+
+        if process_type != "tank_v1":
+            raise ValueError("Unsupported process_type")
 
         if port < 1 or port > 65535:
             raise ValueError("Port must be between 1 and 65535")
@@ -227,6 +233,7 @@ class ProcessSimulationManager:
             self._config["poll_interval"] = poll_interval
             self._config["poll_start"] = poll_start
             self._config["poll_quantity"] = poll_quantity
+            self._config["process_type"] = process_type
             self._server = server if server_started else None
             self._client = client if client_started else None
             return self._snapshot_locked()
@@ -1374,6 +1381,7 @@ async def api_process_sim_start(request: Request):
             poll_interval=payload.get("poll_interval"),
             poll_start=payload.get("poll_start"),
             poll_quantity=payload.get("poll_quantity"),
+            process_type=payload.get("process_type"),
         )
     except Exception as exc:
         response = JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
