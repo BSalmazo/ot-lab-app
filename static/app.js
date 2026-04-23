@@ -332,38 +332,87 @@ function renderProcessHmi(data) {
 
 function renderProcessPlc(data) {
   const regs = getProcessRegistersFromStatus(data);
-  const rows = [
-    { addr: 0, name: "Tank Level", value: regs.level },
-    { addr: 1, name: "Setpoint", value: regs.setpoint },
-    { addr: 2, name: "Pump Cmd", value: regs.pump },
-    { addr: 3, name: "Valve Cmd", value: regs.valve },
-    { addr: 4, name: "Auto Mode", value: regs.auto },
-    { addr: 5, name: "Alarm HI", value: regs.alarmHi },
-    { addr: 6, name: "Alarm LO", value: regs.alarmLo },
-    { addr: 7, name: "Tick", value: regs.tick },
+  const serverRunning = !!data?.server?.running;
+  const clientRunning = !!data?.client?.running;
+  const agentConnected = !!data?.agent?.connected;
+  const lastSuccessTs = Number(data?.client?.last_success_at || 0);
+  const pollAgeS = lastSuccessTs > 0 ? (Date.now() / 1000 - lastSuccessTs) : Infinity;
+  const pollFresh = Number.isFinite(pollAgeS) && pollAgeS <= 2.5;
+  const plcOnline = agentConnected && serverRunning;
+
+  const inputs = [
+    { code: "I0.0", label: "AL_LO", on: regs.alarmLo > 0 },
+    { code: "I0.1", label: "AL_HI", on: regs.alarmHi > 0 },
+    { code: "I0.2", label: "AUTO_SW", on: regs.auto > 0 },
+    { code: "I0.3", label: "NET_OK", on: pollFresh },
+    { code: "I0.4", label: "LVL>SP", on: regs.level >= regs.setpoint },
+    { code: "I0.5", label: "TANK_OK", on: regs.level > 50 },
+    { code: "I0.6", label: "SRV_ON", on: serverRunning },
+    { code: "I0.7", label: "CLI_ON", on: clientRunning },
   ];
 
-  const grid = byId("plcRegisterGrid");
-  if (grid) {
-    grid.innerHTML = rows
-      .map((r) => {
-        const on = Number(r.value) > 0;
-        return `
-          <div class="plc-cell">
-            <div class="plc-addr">HR${r.addr}</div>
-            <div class="plc-name">${escapeHtml(r.name)}</div>
-            <div class="plc-value ${on ? "plc-value-on" : ""}">${escapeHtml(r.value)}</div>
-          </div>
-        `;
-      })
+  const outputs = [
+    { code: "Q0.0", label: "PUMP", on: regs.pump > 0 },
+    { code: "Q0.1", label: "VALVE", on: regs.valve > 0 },
+    { code: "Q0.2", label: "ALARM", on: regs.alarmHi > 0 || regs.alarmLo > 0 },
+    { code: "Q0.3", label: "AUTO", on: regs.auto > 0 },
+    { code: "Q0.4", label: "RUN", on: plcOnline },
+    { code: "Q0.5", label: "HEART", on: (regs.tick % 2) === 0 },
+    { code: "Q0.6", label: "RES6", on: false },
+    { code: "Q0.7", label: "RES7", on: false },
+  ];
+
+  const buildIoRow = (items, kind) =>
+    items
+      .map((item) => `
+        <div class="plc-pin ${kind}">
+          <div class="plc-pin-terminal"></div>
+          <div class="plc-io-led ${item.on ? "on" : "off"}"></div>
+          <div class="plc-io-label">${escapeHtml(item.code)}</div>
+          <div class="plc-io-name">${escapeHtml(item.label)}</div>
+        </div>
+      `)
       .join("");
+
+  const shell = byId("plcVisualShell");
+  if (shell) {
+    shell.innerHTML = `
+      <div class="plc-faceplate">
+        <div class="plc-top-row">
+          <div class="plc-section-title">INPUTS</div>
+          <div class="plc-pin-row plc-pin-row-top">${buildIoRow(inputs, "in")}</div>
+        </div>
+
+        <div class="plc-body-main">
+          <div class="plc-brand-box">
+            <div class="plc-brand-title">PLC</div>
+            <div class="plc-run-row">
+              <span class="plc-run-led ${plcOnline ? "on blink" : "off"}"></span>
+              <span class="plc-run-label">${plcOnline ? "RUNNING" : "OFFLINE"}</span>
+            </div>
+          </div>
+          <div class="plc-center-values">
+            <div><strong>Level:</strong> ${escapeHtml(regs.level)}</div>
+            <div><strong>Setpoint:</strong> ${escapeHtml(regs.setpoint)}</div>
+            <div><strong>Mode:</strong> ${regs.auto > 0 ? "AUTO" : "MANUAL"}</div>
+            <div><strong>Tick:</strong> ${escapeHtml(regs.tick)}</div>
+          </div>
+        </div>
+
+        <div class="plc-bottom-row">
+          <div class="plc-section-title">OUTPUTS</div>
+          <div class="plc-pin-row plc-pin-row-bottom">${buildIoRow(outputs, "out")}</div>
+        </div>
+      </div>
+    `;
   }
 
   const raw = byId("plcRawSnapshot");
   if (raw) {
     raw.textContent = [
-      `server_running=${!!data?.server?.running}`,
-      `client_running=${!!data?.client?.running}`,
+      `plc_online=${plcOnline}`,
+      `server_running=${serverRunning}`,
+      `client_running=${clientRunning}`,
       `client_last_poll=${formatRelativeTimestamp(data?.client?.last_poll_at)}`,
       `client_last_success=${formatRelativeTimestamp(data?.client?.last_success_at)}`,
       `client_last_error=${data?.client?.last_error || "-"}`,
@@ -752,6 +801,18 @@ const MODBUS_FUNCTION_NAME_MAP = {
 };
 
 const WINDOW_STATE_KEY_PREFIX = "otlab_window_state_v1_";
+const WINDOW_SIZE_RULES = {
+  default: { width: 620, height: 500, minWidth: 460, minHeight: 340 },
+  idsWindow: { width: 700, height: 560, minWidth: 520, minHeight: 380 },
+  logsWindow: { width: 860, height: 620, minWidth: 620, minHeight: 420 },
+  connectionsWindow: { width: 860, height: 620, minWidth: 620, minHeight: 420 },
+  actionsWindow: { width: 980, height: 720, minWidth: 760, minHeight: 520 },
+  actionsHistoryWindow: { width: 760, height: 560, minWidth: 560, minHeight: 400 },
+  actionsPreviewWindow: { width: 760, height: 560, minWidth: 560, minHeight: 400 },
+  alertsWindow: { width: 860, height: 620, minWidth: 620, minHeight: 420 },
+  processHmiWindow: { width: 980, height: 700, minWidth: 760, minHeight: 520 },
+  processPlcWindow: { width: 760, height: 600, minWidth: 560, minHeight: 420 },
+};
 const openAlertDetails = new Set();
 let lastAlertsFingerprint = "";
 let lastAlertsPlain = "";
@@ -759,6 +820,16 @@ let lastLogsFingerprint = "";
 let lastConnectionsFingerprint = "";
 let exceptionInfoByFc = new Map();
 let fcTooltipEl = null;
+
+function clampNumber(value, minimum, maximum, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(minimum, Math.min(n, maximum));
+}
+
+function getWindowSizeRule(id) {
+  return WINDOW_SIZE_RULES[id] || WINDOW_SIZE_RULES.default;
+}
 
 function getAlertKey(alert) {
   return [
@@ -1558,34 +1629,57 @@ function windowStateStorageKey(id) {
 }
 
 function applyWindowState(el, id, index) {
-  const fallbackLeft = 120 + index * 30;
-  const fallbackTop = 120 + index * 30;
+  const fallbackLeft = 120 + index * 24;
+  const fallbackTop = 120 + index * 24;
+  const rule = getWindowSizeRule(id);
+  const maxWidth = Math.max(rule.minWidth, window.innerWidth - 40);
+  const maxHeight = Math.max(rule.minHeight, window.innerHeight - 40);
+  const fallbackWidth = Math.min(rule.width, maxWidth);
+  const fallbackHeight = Math.min(rule.height, maxHeight);
 
   try {
     const raw = localStorage.getItem(windowStateStorageKey(id));
     if (!raw) {
-      el.style.left = `${fallbackLeft}px`;
-      el.style.top = `${fallbackTop}px`;
+      const maxLeft = Math.max(0, window.innerWidth - fallbackWidth);
+      const maxTop = Math.max(0, window.innerHeight - fallbackHeight);
+      el.style.width = `${fallbackWidth}px`;
+      el.style.height = `${fallbackHeight}px`;
+      el.style.left = `${Math.max(0, Math.min(fallbackLeft, maxLeft))}px`;
+      el.style.top = `${Math.max(0, Math.min(fallbackTop, maxTop))}px`;
       return;
     }
 
     const state = JSON.parse(raw);
-    if (Number.isFinite(state.left)) el.style.left = `${state.left}px`;
-    if (Number.isFinite(state.top)) el.style.top = `${state.top}px`;
-    if (Number.isFinite(state.width)) el.style.width = `${state.width}px`;
-    if (Number.isFinite(state.height)) el.style.height = `${state.height}px`;
+    const width = clampNumber(state.width, rule.minWidth, maxWidth, fallbackWidth);
+    const height = clampNumber(state.height, rule.minHeight, maxHeight, fallbackHeight);
+    const maxLeft = Math.max(0, window.innerWidth - width);
+    const maxTop = Math.max(0, window.innerHeight - height);
+    const left = clampNumber(state.left, 0, maxLeft, Math.max(0, Math.min(fallbackLeft, maxLeft)));
+    const top = clampNumber(state.top, 0, maxTop, Math.max(0, Math.min(fallbackTop, maxTop)));
+
+    el.style.width = `${width}px`;
+    el.style.height = `${height}px`;
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
   } catch (_err) {
-    el.style.left = `${fallbackLeft}px`;
-    el.style.top = `${fallbackTop}px`;
+    const maxLeft = Math.max(0, window.innerWidth - fallbackWidth);
+    const maxTop = Math.max(0, window.innerHeight - fallbackHeight);
+    el.style.width = `${fallbackWidth}px`;
+    el.style.height = `${fallbackHeight}px`;
+    el.style.left = `${Math.max(0, Math.min(fallbackLeft, maxLeft))}px`;
+    el.style.top = `${Math.max(0, Math.min(fallbackTop, maxTop))}px`;
   }
 }
 
 function persistWindowState(el, id) {
   if (!el) return;
+  const rule = getWindowSizeRule(id);
+  const maxWidth = Math.max(rule.minWidth, window.innerWidth - 40);
+  const maxHeight = Math.max(rule.minHeight, window.innerHeight - 40);
   const left = parseFloat(el.style.left || "0");
   const top = parseFloat(el.style.top || "0");
-  const width = el.offsetWidth;
-  const height = el.offsetHeight;
+  const width = clampNumber(el.offsetWidth, rule.minWidth, maxWidth, Math.min(rule.width, maxWidth));
+  const height = clampNumber(el.offsetHeight, rule.minHeight, maxHeight, Math.min(rule.height, maxHeight));
   try {
     localStorage.setItem(
       windowStateStorageKey(id),
