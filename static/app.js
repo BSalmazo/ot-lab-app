@@ -853,8 +853,8 @@ const WINDOW_SIZE_RULES = {
   actionsHistoryWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   actionsPreviewWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   alertsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
-  processHmiWindow: { width: 860, height: 620, minWidth: 300, minHeight: 220 },
-  processPlcWindow: { width: 660, height: 480, minWidth: 300, minHeight: 220 },
+  processHmiWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240, resizable: true },
+  processPlcWindow: { width: 660, height: 480, minWidth: 660, minHeight: 480, fixed: true },
 };
 const openAlertDetails = new Set();
 let lastAlertsFingerprint = "";
@@ -872,6 +872,11 @@ function clampNumber(value, minimum, maximum, fallback) {
 
 function getWindowSizeRule(id) {
   return WINDOW_SIZE_RULES[id] || WINDOW_SIZE_RULES.default;
+}
+
+function isWindowResizable(id) {
+  const rule = getWindowSizeRule(id);
+  return !!rule.resizable;
 }
 
 function getAlertKey(alert) {
@@ -1638,6 +1643,9 @@ function initFloatingWindows() {
 
     applyWindowState(el, id, index);
     makeWindowDraggable(el);
+    if (isWindowResizable(id)) {
+      makeWindowResizable(el, id);
+    }
     observeWindowResize(el, id);
   });
 
@@ -1653,6 +1661,75 @@ function initFloatingWindows() {
 
   document.addEventListener("mouseleave", () => hideFcTooltip());
   window.addEventListener("blur", () => hideFcTooltip());
+}
+
+function makeWindowResizable(windowEl, id) {
+  if (!windowEl) return;
+  const handle = windowEl.querySelector(".window-resize-handle");
+  if (!handle) return;
+
+  const rule = getWindowSizeRule(id);
+  let resizing = false;
+  let startX = 0;
+  let startY = 0;
+  let startW = 0;
+  let startH = 0;
+
+  const begin = (clientX, clientY) => {
+    const rect = windowEl.getBoundingClientRect();
+    resizing = true;
+    startX = clientX;
+    startY = clientY;
+    startW = rect.width;
+    startH = rect.height;
+    bringWindowToFront(windowEl);
+  };
+
+  const move = (clientX, clientY) => {
+    if (!resizing) return;
+    const maxWidth = Math.max(rule.minWidth, window.innerWidth - 20);
+    const maxHeight = Math.max(rule.minHeight, window.innerHeight - 20);
+    const width = clampNumber(startW + (clientX - startX), rule.minWidth, maxWidth, startW);
+    const height = clampNumber(startH + (clientY - startY), rule.minHeight, maxHeight, startH);
+    windowEl.style.width = `${width}px`;
+    windowEl.style.height = `${height}px`;
+  };
+
+  const end = () => {
+    if (!resizing) return;
+    resizing = false;
+    persistWindowState(windowEl, id);
+  };
+
+  handle.addEventListener("mousedown", (e) => {
+    begin(e.clientX, e.clientY);
+    e.preventDefault();
+    e.stopPropagation();
+  });
+  document.addEventListener("mousemove", (e) => move(e.clientX, e.clientY));
+  document.addEventListener("mouseup", end);
+
+  handle.addEventListener(
+    "touchstart",
+    (e) => {
+      const t = e.touches[0];
+      if (!t) return;
+      begin(t.clientX, t.clientY);
+      e.preventDefault();
+      e.stopPropagation();
+    },
+    { passive: false }
+  );
+  document.addEventListener(
+    "touchmove",
+    (e) => {
+      const t = e.touches[0];
+      if (!t) return;
+      move(t.clientX, t.clientY);
+    },
+    { passive: true }
+  );
+  document.addEventListener("touchend", end);
 }
 
 function bindAlertDetails(containerId) {
@@ -1683,6 +1760,7 @@ function applyWindowState(el, id, index) {
   const maxHeight = Math.max(rule.minHeight, window.innerHeight - 40);
   const fallbackWidth = Math.min(rule.width, maxWidth);
   const fallbackHeight = Math.min(rule.height, maxHeight);
+  const isFixed = !!rule.fixed;
 
   try {
     const raw = localStorage.getItem(windowStateStorageKey(id));
@@ -1697,8 +1775,8 @@ function applyWindowState(el, id, index) {
     }
 
     const state = JSON.parse(raw);
-    const width = clampNumber(state.width, rule.minWidth, maxWidth, fallbackWidth);
-    const height = clampNumber(state.height, rule.minHeight, maxHeight, fallbackHeight);
+    const width = isFixed ? fallbackWidth : clampNumber(state.width, rule.minWidth, maxWidth, fallbackWidth);
+    const height = isFixed ? fallbackHeight : clampNumber(state.height, rule.minHeight, maxHeight, fallbackHeight);
     const maxLeft = Math.max(0, window.innerWidth - width);
     const maxTop = Math.max(0, window.innerHeight - height);
     const left = clampNumber(state.left, 0, maxLeft, Math.max(0, Math.min(fallbackLeft, maxLeft)));
@@ -1725,8 +1803,12 @@ function persistWindowState(el, id) {
   const maxHeight = Math.max(rule.minHeight, window.innerHeight - 40);
   const left = parseFloat(el.style.left || "0");
   const top = parseFloat(el.style.top || "0");
-  const width = clampNumber(el.offsetWidth, rule.minWidth, maxWidth, Math.min(rule.width, maxWidth));
-  const height = clampNumber(el.offsetHeight, rule.minHeight, maxHeight, Math.min(rule.height, maxHeight));
+  const width = rule.fixed
+    ? Math.min(rule.width, maxWidth)
+    : clampNumber(el.offsetWidth, rule.minWidth, maxWidth, Math.min(rule.width, maxWidth));
+  const height = rule.fixed
+    ? Math.min(rule.height, maxHeight)
+    : clampNumber(el.offsetHeight, rule.minHeight, maxHeight, Math.min(rule.height, maxHeight));
   try {
     localStorage.setItem(
       windowStateStorageKey(id),

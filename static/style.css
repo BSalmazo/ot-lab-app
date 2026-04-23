@@ -920,7 +920,7 @@ button:disabled {
   height: 500px;
   min-width: 280px;
   min-height: 220px;
-  resize: both;
+  resize: none;
   max-width: calc(100vw - 40px);
   max-height: calc(100vh - 40px);
   background: var(--panel);
@@ -950,8 +950,10 @@ button:disabled {
 #processPlcWindow {
   width: 660px;
   height: 480px;
-  min-width: 300px;
-  min-height: 220px;
+  min-width: 660px;
+  min-height: 480px;
+  max-width: 660px;
+  max-height: 480px;
 }
 
 .floating-window.hidden {
@@ -983,6 +985,24 @@ button:disabled {
   flex: 1;
   min-height: 0;
   overflow: auto;
+}
+
+.window-resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  z-index: 12;
+  background:
+    linear-gradient(135deg, transparent 0 30%, rgba(148, 163, 184, 0.75) 30% 36%, transparent 36% 60%, rgba(148, 163, 184, 0.75) 60% 66%, transparent 66% 100%);
+}
+
+.window-resize-handle::before {
+  content: "";
+  position: absolute;
+  inset: 0;
 }
 
 .window-close {
@@ -1182,7 +1202,7 @@ button:disabled {
     height: min(72vh, 500px);
     min-width: 260px;
     min-height: 200px;
-    resize: both;
+    resize: none;
   }
 
   .action-host-row,
