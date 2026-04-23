@@ -407,8 +407,7 @@ function renderProcessPlc(data) {
     items
       .map((item) => `
         <div class="plc-pin ${kind}">
-          <div class="plc-pin-terminal"></div>
-          <div class="plc-io-led ${item.on ? "on" : "off"}"></div>
+          <div class="plc-pin-terminal ${item.on ? "on" : "off"}"></div>
           <div class="plc-io-label">${escapeHtml(item.code)}</div>
           <div class="plc-io-name">${escapeHtml(item.label)}</div>
         </div>
@@ -842,7 +841,7 @@ const WINDOW_SIZE_RULES = {
   actionsPreviewWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   alertsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
   processHmiWindow: { width: 980, height: 700, minWidth: 640, minHeight: 460, resizable: true },
-  processPlcWindow: { width: 430, height: 285, minWidth: 430, minHeight: 285, fixed: true },
+  processPlcWindow: { width: 392, height: 248, minWidth: 392, minHeight: 248, fixed: true },
 };
 const openAlertDetails = new Set();
 let lastAlertsFingerprint = "";
