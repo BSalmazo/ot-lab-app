@@ -1111,6 +1111,14 @@ def is_agent_connected(state: dict, now_ts: float | None = None) -> bool:
     return bool(last_seen is not None and (float(now_ts) - float(last_seen) <= 20))
 
 
+def agent_supports_process_sim(state: dict) -> bool:
+    agent_info = state.get("agent_info") or {}
+    caps = agent_info.get("capabilities") or []
+    if not isinstance(caps, list):
+        return False
+    return "process_sim_v1" in caps
+
+
 def should_log_agent_event(state: dict, payload: dict) -> bool:
     event_type = normalize_event_type(payload.get("type"))
     function_code = payload.get("function_code")
@@ -1429,6 +1437,19 @@ async def api_process_sim_start(request: Request):
         )
         set_session_cookie_if_needed(request, response, session_id)
         return response
+    if not agent_supports_process_sim(state):
+        response = JSONResponse(
+            {
+                "ok": False,
+                "error": (
+                    "Este agente nao suporta process-sim local (process_sim_v1). "
+                    "Atualize o agente para a versao mais recente deste branch."
+                ),
+            },
+            status_code=400,
+        )
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
 
     host = str(payload.get("host") or "127.0.0.1")
     port = int(payload.get("port") or 15020)
@@ -1464,6 +1485,19 @@ def api_process_sim_stop(request: Request):
         )
         set_session_cookie_if_needed(request, response, session_id)
         return response
+    if not agent_supports_process_sim(state):
+        response = JSONResponse(
+            {
+                "ok": False,
+                "error": (
+                    "Este agente nao suporta process-sim local (process_sim_v1). "
+                    "Atualize o agente para a versao mais recente deste branch."
+                ),
+            },
+            status_code=400,
+        )
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
 
     queue_command(session_id, "STOP_PROCESS_SIM", {})
     response = JSONResponse({"ok": True, "queued": True, "process_sim": state.get("process_sim") or default_process_sim()})
@@ -1491,6 +1525,19 @@ async def api_process_sim_write(request: Request):
     if not is_agent_connected(state):
         response = JSONResponse(
             {"ok": False, "error": "Agent local desconectado. Inicie o agente para escrever no simulador."},
+            status_code=400,
+        )
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+    if not agent_supports_process_sim(state):
+        response = JSONResponse(
+            {
+                "ok": False,
+                "error": (
+                    "Este agente nao suporta process-sim local (process_sim_v1). "
+                    "Atualize o agente para a versao mais recente deste branch."
+                ),
+            },
             status_code=400,
         )
         set_session_cookie_if_needed(request, response, session_id)
