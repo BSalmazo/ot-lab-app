@@ -6,6 +6,13 @@ import requests
 
 
 class HttpClientMixin:
+    def _ensure_control_session(self):
+        session = getattr(self, "_control_session", None)
+        if session is None:
+            session = requests.Session()
+            self._control_session = session
+        return session
+
     def _ensure_async_post_worker(self):
         if getattr(self, "_normal_post_queue", None) is not None:
             return
@@ -84,7 +91,8 @@ class HttpClientMixin:
 
     def fetch_remote_config(self):
         try:
-            response = requests.get(
+            session = self._ensure_control_session()
+            response = session.get(
                 f"{self.server_url}/api/agent/config",
                 params={"session_id": self.session_id},
                 timeout=2,
@@ -100,7 +108,8 @@ class HttpClientMixin:
 
     def fetch_pending_commands(self):
         try:
-            response = requests.get(
+            session = self._ensure_control_session()
+            response = session.get(
                 f"{self.server_url}/api/agent/commands",
                 params={"session_id": self.session_id},
                 timeout=2,
