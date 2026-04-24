@@ -710,11 +710,13 @@ def main():
         f"port_mode={agent.port_mode} custom_ports={agent.custom_ports} -> {args.server}"
     )
 
-    last_config_poll = 0.0
-    last_heartbeat = 0.0
+    stop_event = threading.Event()
 
-    try:
-        while True:
+    def control_plane_loop():
+        last_config_poll = 0.0
+        last_heartbeat = 0.0
+        last_diag = 0.0
+        while not stop_event.is_set():
             try:
                 # Prioritize command processing to reduce UI-to-execution latency.
                 agent.process_pending_commands()
@@ -728,15 +730,39 @@ def main():
                 if now - last_heartbeat >= 1.0:
                     agent.send_heartbeat()
                     last_heartbeat = now
+
+                if now - last_diag >= 8.0:
+                    print(
+                        "[agent] control loop alive "
+                        f"session={agent.session_id} "
+                        f"instance={getattr(agent, '_control_plane_instance', '-')}"
+                    )
+                    last_diag = now
             except Exception as e:
-                print(f"[agent] error in main loop: {e}")
-                time.sleep(0.2)
+                print(f"[agent] error in control loop: {e}")
+                stop_event.wait(0.2)
                 continue
-            
-            time.sleep(0.25)
+
+            stop_event.wait(0.25)
+
+    control_thread = threading.Thread(
+        target=control_plane_loop,
+        name="agent-control-plane",
+        daemon=True,
+    )
+    control_thread.start()
+
+    try:
+        while True:
+            time.sleep(1.0)
     except KeyboardInterrupt:
         print("\n[agent] stopping...")
     finally:
+        stop_event.set()
+        try:
+            control_thread.join(timeout=1.5)
+        except Exception:
+            pass
         agent.stop_process_sim()
         agent.stop_modbus_client()
         agent.stop_modbus_server()
