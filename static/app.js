@@ -674,7 +674,7 @@ async function refreshStatus() {
   const simRunning = !!data?.process_sim?.running;
   setDisabled("hmiPumpSwitchBtn", !simRunning);
   setDisabled("hmiValveSwitchBtn", !simRunning);
-  setDisabled("applyAlarmLimitBtn", !simRunning);
+  setDisabled("applyAlarmLimitBtn", false);
   setDisabled("processTypeSelect", simRunning);
 
   // Só atualizar inputs se NÃO estão em um modal aberto
@@ -840,8 +840,8 @@ const WINDOW_SIZE_RULES = {
   actionsHistoryWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   actionsPreviewWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   alertsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
-  processHmiWindow: { width: 860, height: 600, minWidth: 560, minHeight: 400, resizable: true },
-  processConfigWindow: { width: 420, height: 280, minWidth: 360, minHeight: 240, resizable: true },
+  processHmiWindow: { width: 720, height: 500, minWidth: 420, minHeight: 310, resizable: true },
+  processConfigWindow: { width: 340, height: 220, minWidth: 320, minHeight: 200, resizable: true },
   processPlcWindow: { width: 384, height: 236, minWidth: 384, minHeight: 236, fixed: true },
 };
 const openAlertDetails = new Set();
@@ -1339,6 +1339,12 @@ function parseProcessInput(id, fallback) {
 }
 
 async function applyAlarmLimitConfig() {
+  const status = await apiGet("/api/status");
+  if (!status?.process_sim?.running) {
+    setText("processConfigStatus", "Inicie a simulação antes de salvar.");
+    return;
+  }
+
   const alarmLow = Math.max(0, Math.min(100, parseProcessInput("alarmLowInput", 0)));
   const alarmHigh = Math.max(0, Math.min(100, parseProcessInput("alarmHighInput", 0)));
   const limitLow = Math.max(0, Math.min(100, parseProcessInput("limitLowInput", 0)));
@@ -1353,10 +1359,14 @@ async function applyAlarmLimitConfig() {
 
   for (const [addr, value, note] of writes) {
     const result = await sendProcessWrite(addr, value, note);
-    if (!result.ok) return;
+    if (!result.ok) {
+      setText("processConfigStatus", `Falha ao salvar (${note}).`);
+      return;
+    }
   }
 
-  setText("hmiProcessStatus", `Alarm/Limit updated: alarm=${alarmLow}..${alarmHigh}, limit=${limitLow}..${limitHigh}`);
+  setText("processConfigStatus", "Salvo com sucesso.");
+  closeWindow("processConfigWindow");
   await refreshAll();
 }
 
@@ -1368,7 +1378,10 @@ function openProcessSimulationWindows() {
 function bindProcessSimulationControls() {
   byId("simRunSwitchBtn")?.addEventListener("click", toggleProcessSimulation);
   byId("openProcessSimulationBtn")?.addEventListener("click", openProcessSimulationWindows);
-  byId("openProcessConfigBtn")?.addEventListener("click", () => openWindow("processConfigWindow"));
+  byId("openProcessConfigBtn")?.addEventListener("click", () => {
+    setText("processConfigStatus", "-");
+    openWindow("processConfigWindow");
+  });
   byId("hmiPumpSwitchBtn")?.addEventListener("click", async () => {
     await toggleProcessActuator("pump", "pump");
   });
@@ -1739,7 +1752,7 @@ function bindAlertDetails(containerId) {
 }
 
 function windowStateStorageKey(id) {
-  const variant = id === "processHmiWindow" ? "hmi_v4_" : "";
+  const variant = id === "processHmiWindow" ? "hmi_v5_" : (id === "processConfigWindow" ? "cfg_v2_" : "");
   return `${WINDOW_STATE_KEY_PREFIX}${variant}${id}`;
 }
 
