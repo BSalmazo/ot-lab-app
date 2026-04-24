@@ -17,6 +17,45 @@ from .protocols.modbus.modbus_definitions import get_modbus_function_label
 
 
 class SnifferMixin:
+    def _select_preferred_all_ifaces(self, monitored_ifaces):
+        """
+        Keep ALL-mode practical: prefer a minimal interface set to avoid
+        overwhelming Python with duplicate/high-volume traffic across many adapters.
+        """
+        ifaces = list(monitored_ifaces or [])
+        if not ifaces:
+            return []
+
+        lower_map = {iface: str(iface or "").lower() for iface in ifaces}
+        loopbacks = [iface for iface in ifaces if lower_map.get(iface, "").startswith("lo")]
+        physical = [
+            iface
+            for iface in ifaces
+            if lower_map.get(iface, "").startswith(("en", "eth", "wlan", "wifi"))
+        ]
+
+        selected = []
+
+        # For local simulations/server-client on localhost, loopback is the primary signal path.
+        if self._needs_loopback_capture():
+            if loopbacks:
+                selected.append(loopbacks[0])
+            if physical:
+                selected.append(physical[0])
+            if not selected:
+                selected.append(ifaces[0])
+            return selected
+
+        # For non-localhost scenarios, one primary physical iface is usually enough.
+        if physical:
+            selected.append(physical[0])
+        elif loopbacks:
+            selected.append(loopbacks[0])
+        else:
+            selected.append(ifaces[0])
+
+        return selected
+
     def _build_capture_filter(self):
         port_mode = str(getattr(self, "port_mode", "MODBUS_PORTS") or "MODBUS_PORTS").upper()
         ports = []
@@ -424,7 +463,10 @@ class SnifferMixin:
         available = self.get_available_interfaces()
 
         if self.iface == DEFAULT_IFACE:
-            return self.classify_available_interfaces().get("monitored", available)
+            monitored = self.classify_available_interfaces().get("monitored", available)
+            selected = self._select_preferred_all_ifaces(monitored)
+            print(f"[agent] ALL-mode selected sniff interfaces: {selected}")
+            return selected
 
         if self.iface in available:
             return [self.iface]
