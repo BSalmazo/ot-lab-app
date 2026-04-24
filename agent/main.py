@@ -692,6 +692,11 @@ def main():
     )
 
     agent.register()
+    remote_cfg = agent.fetch_remote_config()
+    if remote_cfg:
+        print("[agent] connectivity check ok: remote config fetched")
+    else:
+        print("[agent] connectivity check failed: could not fetch remote config")
     started = agent.start()
 
     if not started:
