@@ -589,9 +589,43 @@ def get_or_create_session_id(request: Request):
     return session_id
 
 
+def _find_most_recent_connected_session_id(now_ts: float | None = None) -> str | None:
+    if now_ts is None:
+        now_ts = time.time()
+    best_sid = None
+    best_seen = -1.0
+    with lock:
+        for sid, st in agents_by_session.items():
+            agent_info = st.get("agent_info") or {}
+            last_seen = agent_info.get("last_seen")
+            if last_seen is None:
+                continue
+            try:
+                last_seen_f = float(last_seen)
+            except Exception:
+                continue
+            if (float(now_ts) - last_seen_f) > AGENT_LIVENESS_WINDOW_SECONDS:
+                continue
+            if last_seen_f > best_seen:
+                best_seen = last_seen_f
+                best_sid = sid
+    return best_sid
+
+
+def resolve_active_session_id(preferred_session_id: str, now_ts: float | None = None) -> str:
+    if now_ts is None:
+        now_ts = time.time()
+    preferred_state = ensure_session_state(preferred_session_id)
+    if is_agent_connected(preferred_state, now_ts):
+        return preferred_session_id
+    fallback_sid = _find_most_recent_connected_session_id(now_ts)
+    return fallback_sid or preferred_session_id
+
+
 def get_session_state_from_request(request: Request):
-    session_id = get_or_create_session_id(request)
-    return session_id, ensure_session_state(session_id)
+    requested_session_id = get_or_create_session_id(request)
+    active_session_id = resolve_active_session_id(requested_session_id)
+    return active_session_id, ensure_session_state(active_session_id)
 
 
 def set_session_cookie_if_needed(request: Request, response: Response, session_id: str):
