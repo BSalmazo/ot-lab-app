@@ -1,18 +1,77 @@
+const SESSION_STORAGE_KEY = "otlab_session_id_v1";
+const SESSION_ID_REGEX = /^sess_[A-Za-z0-9_-]{8,128}$/;
+
+let pinnedSessionId = null;
+
+function isValidSessionId(value) {
+  return SESSION_ID_REGEX.test(String(value || "").trim());
+}
+
+function loadPinnedSessionId() {
+  try {
+    const fromUrl = new URLSearchParams(window.location.search).get("session_id");
+    if (isValidSessionId(fromUrl)) {
+      pinnedSessionId = String(fromUrl).trim();
+      localStorage.setItem(SESSION_STORAGE_KEY, pinnedSessionId);
+      return;
+    }
+  } catch (_) {}
+
+  try {
+    const saved = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (isValidSessionId(saved)) {
+      pinnedSessionId = String(saved).trim();
+    }
+  } catch (_) {}
+}
+
+function bindSessionToUrl(url) {
+  if (!isValidSessionId(pinnedSessionId)) return url;
+  try {
+    const u = new URL(url, window.location.origin);
+    if (!u.searchParams.get("session_id")) {
+      u.searchParams.set("session_id", pinnedSessionId);
+    }
+    if (u.origin === window.location.origin) {
+      return `${u.pathname}${u.search}${u.hash}`;
+    }
+    return u.toString();
+  } catch (_) {
+    return url;
+  }
+}
+
+function captureSessionId(payload) {
+  const candidate = payload?.session_id;
+  if (!isValidSessionId(candidate)) return;
+  const normalized = String(candidate).trim();
+  pinnedSessionId = normalized;
+  try {
+    localStorage.setItem(SESSION_STORAGE_KEY, normalized);
+  } catch (_) {}
+}
+
+loadPinnedSessionId();
+
 async function apiGet(url) {
-  const res = await fetch(url, {
+  const res = await fetch(bindSessionToUrl(url), {
     credentials: "same-origin",
   });
-  return res.json();
+  const data = await res.json();
+  captureSessionId(data);
+  return data;
 }
 
 async function apiPost(url, data = {}) {
-  const res = await fetch(url, {
+  const res = await fetch(bindSessionToUrl(url), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
     body: JSON.stringify(data),
   });
-  return res.json();
+  const payload = await res.json();
+  captureSessionId(payload);
+  return payload;
 }
 
 function byId(id) {
