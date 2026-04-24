@@ -41,6 +41,7 @@ app.add_middleware(
 BASE_DIR = Path(__file__).resolve().parent
 SESSION_COOKIE = "scada_session_id"
 AGENT_LIVENESS_WINDOW_SECONDS = 120
+SESSION_ID_PATTERN = re.compile(r"^sess_[A-Za-z0-9_-]{8,128}$")
 
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 app.mount("/downloads", StaticFiles(directory=str(BASE_DIR / "downloads")), name="downloads")
@@ -582,11 +583,29 @@ def ensure_session_state(session_id: str):
         return agents_by_session[session_id]
 
 
+def normalize_session_id(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if not SESSION_ID_PATTERN.match(raw):
+        return None
+    return raw
+
+
 def get_or_create_session_id(request: Request):
-    session_id = request.cookies.get(SESSION_COOKIE)
-    if not session_id:
-        session_id = f"sess_{uuid.uuid4().hex}"
-    return session_id
+    explicit = normalize_session_id(request.query_params.get("session_id"))
+    if explicit:
+        return explicit
+
+    explicit_header = normalize_session_id(request.headers.get("x-otlab-session-id"))
+    if explicit_header:
+        return explicit_header
+
+    cookie_session = normalize_session_id(request.cookies.get(SESSION_COOKIE))
+    if cookie_session:
+        return cookie_session
+
+    return f"sess_{uuid.uuid4().hex}"
 
 
 def _find_most_recent_connected_session_id(now_ts: float | None = None) -> str | None:
