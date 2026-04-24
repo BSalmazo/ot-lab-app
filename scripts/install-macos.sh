@@ -7,6 +7,7 @@ set -e
 AGENT_NAME="otlab-agent-macos-amd64"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENT_PATH="$SCRIPT_DIR/$AGENT_NAME"
+CHECK_LOG="$SCRIPT_DIR/.otlab-agent-check.log"
 
 echo "=================================================="
 echo "  OT Lab Agent - macOS Installation"
@@ -51,16 +52,46 @@ fi
 echo ""
 
 # Step 4: Optional - Check Npcap/libpcap
-echo "📋 Step 4: Checking packet capture library..."
-if command -v brew &> /dev/null; then
-    if brew list libpcap &> /dev/null; then
-        echo "   ✓ libpcap is installed"
-    else
-        echo "   ⚠ libpcap not found. Install with:"
-        echo "     brew install libpcap"
-    fi
+echo "📋 Step 4: Checking packet capture runtime..."
+set +e
+"$AGENT_PATH" --help >"$CHECK_LOG" 2>&1
+CHECK_RC=$?
+set -e
+
+if [ $CHECK_RC -eq 0 ]; then
+    echo "   ✓ Packet capture runtime is available"
 else
-    echo "   ℹ Could not verify libpcap (Homebrew not found)"
+    echo "   ⚠ Agent runtime check failed (possible libpcap issue)"
+    if command -v brew &> /dev/null; then
+        echo "   ↻ Trying automatic install: brew install libpcap"
+        if brew install libpcap; then
+            set +e
+            "$AGENT_PATH" --help >"$CHECK_LOG" 2>&1
+            CHECK_RC=$?
+            set -e
+            if [ $CHECK_RC -eq 0 ]; then
+                echo "   ✓ libpcap installed and runtime check passed"
+            else
+                echo "   ❌ Runtime check still failing after install attempt"
+                echo "   See details in: $CHECK_LOG"
+                cat "$CHECK_LOG"
+                exit 1
+            fi
+        else
+            echo "   ❌ Failed to install libpcap via Homebrew"
+            echo "   See details in: $CHECK_LOG"
+            cat "$CHECK_LOG"
+            exit 1
+        fi
+    else
+        echo "   ❌ Homebrew not found and runtime check failed"
+        echo "   Install Homebrew + libpcap, then retry:"
+        echo "     /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+        echo "     brew install libpcap"
+        echo "   See details in: $CHECK_LOG"
+        cat "$CHECK_LOG"
+        exit 1
+    fi
 fi
 echo ""
 
