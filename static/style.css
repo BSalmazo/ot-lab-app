@@ -941,17 +941,17 @@ button:disabled {
 }
 
 #processHmiWindow {
-  width: 860px;
-  height: 600px;
-  min-width: 560px;
-  min-height: 400px;
+  width: 720px;
+  height: 500px;
+  min-width: 420px;
+  min-height: 310px;
 }
 
 #processConfigWindow {
-  width: 420px;
-  height: 280px;
-  min-width: 360px;
-  min-height: 240px;
+  width: 340px;
+  height: 220px;
+  min-width: 320px;
+  min-height: 200px;
 }
 
 #processPlcWindow {
@@ -1611,7 +1611,14 @@ button:disabled {
   gap: 6px;
 }
 
-.hmi-window-tools select {
+.hmi-head-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.hmi-head-main select {
   width: 120px;
 }
 
@@ -1648,7 +1655,7 @@ button:disabled {
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 10px;
   background: rgba(2, 6, 23, 0.35);
-  min-height: 270px;
+  min-height: 220px;
   display: grid;
   grid-template-columns: 1fr 220px 1fr;
   grid-template-rows: 1fr 1fr;
@@ -1659,13 +1666,13 @@ button:disabled {
 .hmi-config-panel {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .hmi-config-row {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .hmi-config-row label {
@@ -1675,11 +1682,11 @@ button:disabled {
 
 .hmi-config-inline {
   display: flex;
-  gap: 8px;
+  gap: 6px;
 }
 
 .hmi-config-inline input {
-  width: 120px;
+  width: 98px;
 }
 
 .hmi-config-actions {

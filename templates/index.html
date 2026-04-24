@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OT Lab App</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260424j" />
+  <link rel="stylesheet" href="/static/style.css?v=20260424k" />
 </head>
 <body>
   <div class="page">
@@ -170,12 +170,14 @@
 
       <div class="floating-window hidden" id="processHmiWindow">
         <div class="window-head">
-          <span>Process HMI</span>
-          <div class="window-tools hmi-window-tools">
-            <button id="simRunSwitchBtn" class="small hmi-switch" type="button">START / STOP</button>
+          <div class="hmi-head-main">
+            <span>Process HMI</span>
             <select id="processTypeSelect">
               <option value="tank_v1">Tank</option>
             </select>
+          </div>
+          <div class="window-tools hmi-window-tools">
+            <button id="simRunSwitchBtn" class="small hmi-switch" type="button">START / STOP</button>
             <button id="openProcessConfigBtn" class="small secondary" type="button">Alarm/Limit</button>
             <button class="window-close" type="button" data-close-window="processHmiWindow">✕</button>
           </div>
@@ -229,6 +231,7 @@
             <div class="hmi-config-actions">
               <button id="applyAlarmLimitBtn" class="small" type="button">Salvar</button>
             </div>
+            <div id="processConfigStatus" class="status slim">-</div>
           </div>
         </div>
       </div>
@@ -385,6 +388,6 @@
   <script src="/static/protocols/modbus/ModbusActionForm.js?v=20260330p"></script>
   <script src="/static/protocols/modbus/ModbusTab.js?v=20260331a"></script>
   <script src="/static/actions/ActionsWindow.js?v=20260330p"></script>
-  <script src="/static/app.js?v=20260424j"></script>
+  <script src="/static/app.js?v=20260424k"></script>
 </body>
 </html>
