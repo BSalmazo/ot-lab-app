@@ -632,13 +632,9 @@ def _find_most_recent_connected_session_id(now_ts: float | None = None) -> str |
 
 
 def resolve_active_session_id(preferred_session_id: str, now_ts: float | None = None) -> str:
-    if now_ts is None:
-        now_ts = time.time()
-    preferred_state = ensure_session_state(preferred_session_id)
-    if is_agent_connected(preferred_state, now_ts):
-        return preferred_session_id
-    fallback_sid = _find_most_recent_connected_session_id(now_ts)
-    return fallback_sid or preferred_session_id
+    # Never switch requests to another session automatically.
+    # In shared/public deployments this can route commands to the wrong agent.
+    return preferred_session_id
 
 
 def get_session_state_from_request(request: Request):
