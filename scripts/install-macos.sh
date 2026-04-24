@@ -4,7 +4,7 @@
 
 set -e
 
-SCRIPT_VERSION="install-macos.sh 2026-04-24r4"
+SCRIPT_VERSION="install-macos.sh 2026-04-24r5"
 AGENT_NAME="otlab-agent-macos-amd64"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENT_PATH="$SCRIPT_DIR/$AGENT_NAME"
