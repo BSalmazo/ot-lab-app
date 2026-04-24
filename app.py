@@ -57,6 +57,11 @@ RELEASES_CACHE_TTL = 3600  # 1 hour
 
 lock = Lock()
 agents_by_session = {}
+APP_INSTANCE_ID = (
+    str(os.getenv("RAILWAY_REPLICA_ID") or "").strip()
+    or str(os.getenv("HOSTNAME") or "").strip()
+    or f"inst-{uuid.uuid4().hex[:8]}"
+)
 
 
 def recv_exact(sock: socket.socket, size: int) -> bytes:
@@ -1129,6 +1134,10 @@ def queue_command(session_id: str, command_type: str, payload: dict):
             })
 
     push_log_for_session(session_id, build_command_log_message(command_type, payload))
+    print(
+        f"[app:{APP_INSTANCE_ID}] command queued "
+        f"session={session_id} type={command_type} id={cmd['id']}"
+    )
     return cmd
 
 
@@ -1522,6 +1531,7 @@ def api_status(request: Request):
         "process_sim": state.get("process_sim") or default_process_sim(),
         "agent_config": state["agent_config"],
         "session_id": session_id,
+        "instance_id": APP_INSTANCE_ID,
     })
 
     set_session_cookie_if_needed(request, response, session_id)
@@ -1887,6 +1897,7 @@ def get_agent_config(request: Request, session_id: str = None):
     response = JSONResponse({
         "ok": True,
         "config": state["agent_config"],
+        "instance_id": APP_INSTANCE_ID,
     })
 
     if session_id is None:
@@ -2102,7 +2113,17 @@ def get_agent_commands(session_id: str):
                     status="sent",
                     message="Delivered to agent",
                 )
-    return {"ok": True, "commands": commands}
+    if commands:
+        print(
+            f"[app:{APP_INSTANCE_ID}] command poll hit "
+            f"session={session_id} drained={len(commands)}"
+        )
+    return {
+        "ok": True,
+        "commands": commands,
+        "instance_id": APP_INSTANCE_ID,
+        "pending_before_drain": len(commands),
+    }
 
 
 @app.post("/api/agent/command_result")
@@ -2280,7 +2301,7 @@ def agent_runtime_update(payload: dict = Body(...)):
     elif previous_client_running and not current_client_running:
         push_log_for_session(session_id, "Modbus client stopped")
 
-    return {"ok": True}
+    return {"ok": True, "instance_id": APP_INSTANCE_ID}
 
 
 @app.post("/api/reset")
@@ -2350,6 +2371,7 @@ def agent_register(payload: dict = Body(...)):
         "config": state["agent_config"],
         "server": state["remote_server"],
         "client": state["remote_client"],
+        "instance_id": APP_INSTANCE_ID,
     }
 
 
@@ -2395,6 +2417,7 @@ def agent_heartbeat(payload: dict = Body(...)):
         "config": state["agent_config"],
         "server": state["remote_server"],
         "client": state["remote_client"],
+        "instance_id": APP_INSTANCE_ID,
     }
 
 

@@ -6,6 +6,18 @@ import requests
 
 
 class HttpClientMixin:
+    def _observe_control_plane_instance(self, source: str, instance_id):
+        inst = str(instance_id or "").strip()
+        if not inst:
+            return
+
+        prev = getattr(self, "_control_plane_instance", None)
+        if prev and prev != inst:
+            print(f"[agent] control-plane instance switched: {prev} -> {inst} ({source})")
+        elif not prev:
+            print(f"[agent] control-plane instance: {inst} ({source})")
+        self._control_plane_instance = inst
+
     def _ensure_control_session(self):
         session = getattr(self, "_control_session", None)
         if session is None:
@@ -69,6 +81,12 @@ class HttpClientMixin:
                             f"[agent] HTTP error on {path}: "
                             f"status={resp.status_code} body={resp.text[:200]!r}"
                         )
+                    elif path in {"/api/agent/register", "/api/agent/heartbeat"}:
+                        try:
+                            data = resp.json()
+                        except Exception:
+                            data = {}
+                        self._observe_control_plane_instance(path, data.get("instance_id"))
                 except Exception as e:
                     if _should_log_http_error(path):
                         print(f"[agent] HTTP post failed on {path}: {type(e).__name__}: {e}")
@@ -101,6 +119,7 @@ class HttpClientMixin:
             data = response.json()
             if not data.get("ok"):
                 return None
+            self._observe_control_plane_instance("/api/agent/config", data.get("instance_id"))
             return data.get("config")
         except Exception as e:
             print(f"[agent] failed to fetch remote config: {type(e).__name__}: {e}")
@@ -118,7 +137,19 @@ class HttpClientMixin:
             data = response.json()
             if not data.get("ok"):
                 return []
-            return data.get("commands", [])
+            self._observe_control_plane_instance("/api/agent/commands", data.get("instance_id"))
+            commands = data.get("commands", [])
+            pending_before_drain = data.get("pending_before_drain", len(commands))
+            now = time.time()
+            last_diag = float(getattr(self, "_last_command_poll_diag", 0.0) or 0.0)
+            if commands or (now - last_diag) >= 8.0:
+                print(
+                    "[agent] command poll "
+                    f"instance={getattr(self, '_control_plane_instance', '-')}"
+                    f" pending={pending_before_drain} received={len(commands)}"
+                )
+                self._last_command_poll_diag = now
+            return commands
         except Exception as e:
             print(f"[agent] failed to fetch commands: {e}")
             return []
