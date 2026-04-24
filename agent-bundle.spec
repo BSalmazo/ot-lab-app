@@ -7,6 +7,7 @@ Bundles the agent with all dependencies into a standalone executable
 
 import os
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_data_files
 
 block_cipher = None
 
@@ -25,6 +26,9 @@ config_file = root_dir / "agent-config.json"
 if config_file.exists():
     datas.append((str(config_file), "."))
 
+# Ensure TLS CA bundle is included for requests/certifi in frozen builds.
+datas += collect_data_files("certifi")
+
 a = Analysis(
     # Use top-level agent.py as entrypoint so package imports resolve correctly
     [str(root_dir / "agent.py")],
@@ -40,6 +44,7 @@ a = Analysis(
         'scapy.layers.l2',
         'requests',
         'urllib3',
+        'certifi',
     ],
     hookspath=[],
     hooksconfig={},

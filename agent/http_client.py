@@ -22,6 +22,15 @@ class HttpClientMixin:
         self._event_batch_hard_limit = 1200
         self._event_flush_interval_s = 0.12
         self._event_batch_last_flush = 0.0
+        self._http_error_log_last = {}
+
+        def _should_log_http_error(path: str) -> bool:
+            now = time.time()
+            last = float(self._http_error_log_last.get(path, 0.0))
+            if (now - last) >= 5.0:
+                self._http_error_log_last[path] = now
+                return True
+            return False
 
         def worker():
             while True:
@@ -43,13 +52,19 @@ class HttpClientMixin:
 
                 path, payload, timeout = item
                 try:
-                    self._post_session.post(
+                    resp = self._post_session.post(
                         f"{self.server_url}{path}",
                         json=payload,
                         timeout=timeout,
                     )
-                except Exception:
-                    pass
+                    if resp.status_code >= 400 and _should_log_http_error(path):
+                        print(
+                            f"[agent] HTTP error on {path}: "
+                            f"status={resp.status_code} body={resp.text[:200]!r}"
+                        )
+                except Exception as e:
+                    if _should_log_http_error(path):
+                        print(f"[agent] HTTP post failed on {path}: {type(e).__name__}: {e}")
 
         thread = threading.Thread(target=worker, name="agent-http-post-worker", daemon=True)
         thread.start()
@@ -79,7 +94,8 @@ class HttpClientMixin:
             if not data.get("ok"):
                 return None
             return data.get("config")
-        except Exception:
+        except Exception as e:
+            print(f"[agent] failed to fetch remote config: {type(e).__name__}: {e}")
             return None
 
     def fetch_pending_commands(self):
