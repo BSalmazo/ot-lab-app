@@ -840,8 +840,8 @@ const WINDOW_SIZE_RULES = {
   actionsHistoryWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   actionsPreviewWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   alertsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
-  processHmiWindow: { width: 960, height: 680, minWidth: 320, minHeight: 240, resizable: true },
-  processPlcWindow: { width: 392, height: 248, minWidth: 392, minHeight: 248, fixed: true },
+  processHmiWindow: { width: 960, height: 680, minWidth: 760, minHeight: 540, resizable: true },
+  processPlcWindow: { width: 384, height: 236, minWidth: 384, minHeight: 236, fixed: true },
 };
 const openAlertDetails = new Set();
 let lastAlertsFingerprint = "";
@@ -1736,7 +1736,7 @@ function bindAlertDetails(containerId) {
 }
 
 function windowStateStorageKey(id) {
-  const variant = id === "processHmiWindow" ? "hmi_v2_" : "";
+  const variant = id === "processHmiWindow" ? "hmi_v3_" : "";
   return `${WINDOW_STATE_KEY_PREFIX}${variant}${id}`;
 }
 

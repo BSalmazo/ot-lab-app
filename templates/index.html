@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OT Lab App</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260424h" />
+  <link rel="stylesheet" href="/static/style.css?v=20260424i" />
 </head>
 <body>
   <div class="page">
@@ -171,18 +171,26 @@
       <div class="floating-window hidden" id="processHmiWindow">
         <div class="window-head">
           <span>Process HMI</span>
-          <button class="window-close" type="button" data-close-window="processHmiWindow">✕</button>
+          <div class="window-tools hmi-window-tools">
+            <button id="simRunSwitchBtn" class="small hmi-switch" type="button">START / STOP</button>
+            <select id="processTypeSelect">
+              <option value="tank_v1">Tank</option>
+            </select>
+            <label class="hmi-head-field">AL L/H
+              <input id="alarmLowInput" type="number" min="0" max="100" value="0" />
+              <input id="alarmHighInput" type="number" min="0" max="100" value="0" />
+            </label>
+            <label class="hmi-head-field">LIM L/H
+              <input id="limitLowInput" type="number" min="0" max="100" value="0" />
+              <input id="limitHighInput" type="number" min="0" max="100" value="0" />
+            </label>
+            <button id="applyAlarmLimitBtn" class="small" type="button">Apply</button>
+            <button class="window-close" type="button" data-close-window="processHmiWindow">✕</button>
+          </div>
         </div>
         <div class="window-body">
           <div class="hmi-layout">
             <div class="hmi-process-panel hmi-process-panel-centered">
-              <div class="hmi-process-topbar">
-                <button id="simRunSwitchBtn" class="small hmi-switch" type="button">START / STOP</button>
-                <select id="processTypeSelect">
-                  <option value="tank_v1">Tank</option>
-                </select>
-              </div>
-
               <div class="tank-stage">
                 <div class="stage-left-top">
                   <button id="hmiPumpSwitchBtn" class="small hmi-switch" type="button">PUMP</button>
@@ -195,29 +203,6 @@
                 </div>
                 <div class="stage-right-bottom">
                   <button id="hmiValveSwitchBtn" class="small hmi-switch" type="button">VALVE</button>
-                </div>
-              </div>
-            </div>
-
-            <div class="hmi-controls">
-              <div class="hmi-row">
-                <label>Alarm Low / High (0 = disabled)</label>
-                <div class="hmi-row-inline">
-                  <input id="alarmLowInput" type="number" min="0" max="100" value="0" />
-                  <input id="alarmHighInput" type="number" min="0" max="100" value="0" />
-                </div>
-              </div>
-              <div class="hmi-row">
-                <label>Limit Low / High (0 = disabled)</label>
-                <div class="hmi-row-inline">
-                  <input id="limitLowInput" type="number" min="0" max="100" value="0" />
-                  <input id="limitHighInput" type="number" min="0" max="100" value="0" />
-                </div>
-              </div>
-              <div class="hmi-row">
-                <label>Configuration</label>
-                <div class="hmi-row-inline">
-                  <button id="applyAlarmLimitBtn" class="small" type="button">Apply Alarm/Limit</button>
                 </div>
               </div>
               <div id="hmiAlarmBanner" class="hmi-banner warning hidden">ALARM ACTIVE</div>
@@ -380,6 +365,6 @@
   <script src="/static/protocols/modbus/ModbusActionForm.js?v=20260330p"></script>
   <script src="/static/protocols/modbus/ModbusTab.js?v=20260331a"></script>
   <script src="/static/actions/ActionsWindow.js?v=20260330p"></script>
-  <script src="/static/app.js?v=20260424h"></script>
+  <script src="/static/app.js?v=20260424i"></script>
 </body>
 </html>

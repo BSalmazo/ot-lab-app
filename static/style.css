@@ -943,17 +943,17 @@ button:disabled {
 #processHmiWindow {
   width: 960px;
   height: 680px;
-  min-width: 320px;
-  min-height: 240px;
+  min-width: 760px;
+  min-height: 540px;
 }
 
 #processPlcWindow {
-  width: 392px;
-  height: 248px;
-  min-width: 392px;
-  min-height: 248px;
-  max-width: 392px;
-  max-height: 248px;
+  width: 384px;
+  height: 236px;
+  min-width: 384px;
+  min-height: 236px;
+  max-width: 384px;
+  max-height: 236px;
 }
 
 #processPlcWindow .window-body {
@@ -961,10 +961,15 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
 }
 
 #processPlcWindow .window-head {
-  padding: 6px 8px;
+  padding: 4px 7px;
+}
+
+#processPlcWindow .window-close {
+  padding: 4px 8px;
 }
 
 .floating-window.hidden {
@@ -1590,15 +1595,40 @@ button:disabled {
 /* PROCESS SIMULATION */
 
 .hmi-layout {
-  display: grid;
-  grid-template-columns: 1fr 320px;
-  gap: 14px;
+  display: block;
+}
+
+.hmi-window-tools {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.hmi-window-tools select {
+  width: 120px;
+}
+
+.hmi-head-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #cbd5e1;
+}
+
+.hmi-head-field input {
+  width: 54px;
+  padding: 3px 4px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
 }
 
 .hmi-process-panel {
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 10px;
+  padding: 8px;
   background: rgba(15, 23, 42, 0.72);
 }
 
@@ -1606,16 +1636,6 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 10px;
-}
-
-.hmi-process-topbar {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.hmi-process-topbar select {
-  width: 180px;
 }
 
 .hmi-switch {
@@ -1698,37 +1718,6 @@ button:disabled {
   font-size: 11px;
   color: #f8fafc;
   text-shadow: 0 1px 2px rgba(2, 6, 23, 0.75);
-}
-
-.hmi-controls {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 10px;
-  background: rgba(15, 23, 42, 0.72);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.hmi-row {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.hmi-row label {
-  font-size: 12px;
-  color: #cbd5e1;
-}
-
-.hmi-row-inline {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.hmi-row-inline input {
-  width: 120px;
 }
 
 .hmi-banner {
