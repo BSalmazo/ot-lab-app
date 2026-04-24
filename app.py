@@ -40,6 +40,7 @@ app.add_middleware(
 
 BASE_DIR = Path(__file__).resolve().parent
 SESSION_COOKIE = "scada_session_id"
+AGENT_LIVENESS_WINDOW_SECONDS = 120
 
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 app.mount("/downloads", StaticFiles(directory=str(BASE_DIR / "downloads")), name="downloads")
@@ -1108,7 +1109,7 @@ def is_agent_connected(state: dict, now_ts: float | None = None) -> bool:
         now_ts = time.time()
     agent_info = state.get("agent_info") or {}
     last_seen = agent_info.get("last_seen")
-    return bool(last_seen is not None and (float(now_ts) - float(last_seen) <= 20))
+    return bool(last_seen is not None and (float(now_ts) - float(last_seen) <= AGENT_LIVENESS_WINDOW_SECONDS))
 
 
 def agent_supports_process_sim(state: dict) -> bool:
@@ -2207,6 +2208,7 @@ def agent_register(payload: dict = Body(...)):
 
     state = ensure_session_state(session_id)
     agent_info = state["agent_info"]
+    recv_ts = time.time()
 
     agent_info["connected"] = True
     agent_info["agent_id"] = payload.get("agent_id")
@@ -2216,7 +2218,8 @@ def agent_register(payload: dict = Body(...)):
     agent_info["port_mode"] = payload.get("port_mode")
     agent_info["custom_ports"] = safe_normalize_custom_ports(payload.get("custom_ports"))
     agent_info["running"] = payload.get("running", False)
-    agent_info["last_seen"] = payload.get("timestamp", time.time())
+    agent_info["last_seen"] = recv_ts
+    agent_info["agent_timestamp"] = payload.get("timestamp")
     agent_info["available_ifaces"] = payload.get("available_ifaces", [])
     agent_info["available_monitored_ifaces"] = payload.get("available_monitored_ifaces", [])
     agent_info["available_unmonitored_ifaces"] = payload.get("available_unmonitored_ifaces", [])
@@ -2247,6 +2250,7 @@ def agent_heartbeat(payload: dict = Body(...)):
 
     state = ensure_session_state(session_id)
     agent_info = state["agent_info"]
+    recv_ts = time.time()
 
     agent_info["connected"] = True
     agent_info["agent_id"] = payload.get("agent_id")
@@ -2256,7 +2260,8 @@ def agent_heartbeat(payload: dict = Body(...)):
     agent_info["port_mode"] = payload.get("port_mode")
     agent_info["custom_ports"] = safe_normalize_custom_ports(payload.get("custom_ports"))
     agent_info["running"] = payload.get("running", False)
-    agent_info["last_seen"] = payload.get("timestamp", time.time())
+    agent_info["last_seen"] = recv_ts
+    agent_info["agent_timestamp"] = payload.get("timestamp")
     agent_info["available_ifaces"] = payload.get(
         "available_ifaces",
         agent_info.get("available_ifaces", [])
@@ -2301,6 +2306,7 @@ def agent_snapshot_ingest(payload: dict = Body(...)):
     agent_info["custom_ports"] = safe_normalize_custom_ports(payload.get("custom_ports"))
     agent_info["running"] = True
     agent_info["last_seen"] = time.time()
+    agent_info["agent_timestamp"] = payload.get("timestamp")
     agent_info["available_ifaces"] = payload.get(
         "available_ifaces",
         agent_info.get("available_ifaces", [])
