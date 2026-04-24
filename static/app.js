@@ -92,6 +92,10 @@ function openWindow(id) {
   const el = byId(id);
   if (!el) return;
   el.classList.remove("hidden");
+  const rule = getWindowSizeRule(id);
+  if (rule?.autoFit) {
+    fitWindowToContent(el, id);
+  }
   bringWindowToFront(el);
 }
 
@@ -840,8 +844,8 @@ const WINDOW_SIZE_RULES = {
   actionsHistoryWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   actionsPreviewWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   alertsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
-  processHmiWindow: { width: 620, height: 430, minWidth: 340, minHeight: 250, resizable: true },
-  processConfigWindow: { width: 300, height: 170, minWidth: 280, minHeight: 160, resizable: true },
+  processHmiWindow: { width: 500, height: 390, minWidth: 280, minHeight: 220, resizable: true, autoFit: true },
+  processConfigWindow: { width: 286, height: 150, minWidth: 240, minHeight: 120, resizable: true, autoFit: true },
   processPlcWindow: { width: 384, height: 236, minWidth: 384, minHeight: 236, fixed: true },
 };
 const openAlertDetails = new Set();
@@ -1341,7 +1345,7 @@ function parseProcessInput(id, fallback) {
 async function applyAlarmLimitConfig() {
   const status = await apiGet("/api/status");
   if (!status?.process_sim?.running) {
-    setText("processConfigStatus", "Inicie a simulação antes de salvar.");
+    alert("Inicie a simulacao antes de salvar.");
     return;
   }
 
@@ -1360,12 +1364,11 @@ async function applyAlarmLimitConfig() {
   for (const [addr, value, note] of writes) {
     const result = await sendProcessWrite(addr, value, note);
     if (!result.ok) {
-      setText("processConfigStatus", `Falha ao salvar (${note}).`);
+      alert(`Falha ao salvar (${note}).`);
       return;
     }
   }
 
-  setText("processConfigStatus", "Salvo com sucesso.");
   closeWindow("processConfigWindow");
   await refreshAll();
 }
@@ -1378,10 +1381,7 @@ function openProcessSimulationWindows() {
 function bindProcessSimulationControls() {
   byId("simRunSwitchBtn")?.addEventListener("click", toggleProcessSimulation);
   byId("openProcessSimulationBtn")?.addEventListener("click", openProcessSimulationWindows);
-  byId("openProcessConfigBtn")?.addEventListener("click", () => {
-    setText("processConfigStatus", "-");
-    openWindow("processConfigWindow");
-  });
+  byId("openProcessConfigBtn")?.addEventListener("click", () => openWindow("processConfigWindow"));
   byId("hmiPumpSwitchBtn")?.addEventListener("click", async () => {
     await toggleProcessActuator("pump", "pump");
   });
@@ -1735,6 +1735,44 @@ function makeWindowResizable(windowEl, id) {
   document.addEventListener("touchend", end);
 }
 
+function fitWindowToContent(windowEl, id) {
+  if (!windowEl) return;
+  const rule = getWindowSizeRule(id);
+  const body = windowEl.querySelector(".window-body");
+  const head = windowEl.querySelector(".window-head");
+  if (!body || !head) return;
+
+  const bodyStyle = window.getComputedStyle(body);
+  const bodyPadX = (parseFloat(bodyStyle.paddingLeft) || 0) + (parseFloat(bodyStyle.paddingRight) || 0);
+  const bodyPadY = (parseFloat(bodyStyle.paddingTop) || 0) + (parseFloat(bodyStyle.paddingBottom) || 0);
+
+  let contentWidth = body.scrollWidth;
+  let contentHeight = body.scrollHeight;
+  const firstChild = body.firstElementChild;
+  if (firstChild) {
+    contentWidth = Math.max(contentWidth, firstChild.scrollWidth);
+    contentHeight = Math.max(contentHeight, firstChild.scrollHeight);
+  }
+
+  const handleExtra = isWindowResizable(id) ? 16 : 0;
+  const desiredWidth = Math.ceil(contentWidth + bodyPadX + 8);
+  const desiredHeight = Math.ceil(head.offsetHeight + contentHeight + bodyPadY + handleExtra + 6);
+
+  const maxWidth = Math.max(rule.minWidth, window.innerWidth - 40);
+  const maxHeight = Math.max(rule.minHeight, window.innerHeight - 40);
+  const width = clampNumber(desiredWidth, rule.minWidth, maxWidth, Math.min(rule.width, maxWidth));
+  const height = clampNumber(desiredHeight, rule.minHeight, maxHeight, Math.min(rule.height, maxHeight));
+  const currentLeft = parseFloat(windowEl.style.left || "120");
+  const currentTop = parseFloat(windowEl.style.top || "120");
+  const left = clampNumber(currentLeft, 0, Math.max(0, window.innerWidth - width), 0);
+  const top = clampNumber(currentTop, 0, Math.max(0, window.innerHeight - height), 0);
+
+  windowEl.style.width = `${width}px`;
+  windowEl.style.height = `${height}px`;
+  windowEl.style.left = `${left}px`;
+  windowEl.style.top = `${top}px`;
+}
+
 function bindAlertDetails(containerId) {
   const container = byId(containerId);
   if (!container) return;
@@ -1752,7 +1790,7 @@ function bindAlertDetails(containerId) {
 }
 
 function windowStateStorageKey(id) {
-  const variant = id === "processHmiWindow" ? "hmi_v6_" : (id === "processConfigWindow" ? "cfg_v3_" : "");
+  const variant = id === "processHmiWindow" ? "hmi_v7_" : (id === "processConfigWindow" ? "cfg_v4_" : "");
   return `${WINDOW_STATE_KEY_PREFIX}${variant}${id}`;
 }
 

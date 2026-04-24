@@ -941,17 +941,17 @@ button:disabled {
 }
 
 #processHmiWindow {
-  width: 620px;
-  height: 430px;
-  min-width: 340px;
-  min-height: 250px;
+  width: 500px;
+  height: 390px;
+  min-width: 280px;
+  min-height: 220px;
 }
 
 #processConfigWindow {
-  width: 300px;
-  height: 170px;
-  min-width: 280px;
-  min-height: 160px;
+  width: 286px;
+  height: 150px;
+  min-width: 240px;
+  min-height: 120px;
 }
 
 #processConfigWindow .window-head {
@@ -1638,7 +1638,7 @@ button:disabled {
 .hmi-process-panel {
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 8px;
+  padding: 6px;
   background: rgba(15, 23, 42, 0.72);
 }
 
@@ -1652,6 +1652,14 @@ button:disabled {
   background: var(--blue);
   border: 1px solid rgba(59, 130, 246, 0.7);
   color: #fff;
+}
+
+#processHmiWindow .window-body {
+  padding: 3px;
+}
+
+#processHmiWindow .window-head {
+  padding: 8px 10px;
 }
 
 .hmi-switch.hmi-switch-on {
@@ -1668,29 +1676,31 @@ button:disabled {
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 10px;
   background: rgba(2, 6, 23, 0.35);
-  min-height: 220px;
+  min-height: 180px;
   display: grid;
-  grid-template-columns: 1fr 220px 1fr;
+  grid-template-columns: 90px 140px 90px;
   grid-template-rows: 1fr 1fr;
-  gap: 10px;
-  padding: 10px;
+  gap: 6px;
+  padding: 6px;
+  width: max-content;
+  margin: 0 auto;
 }
 
 .hmi-config-panel {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .hmi-config-row {
   display: grid;
-  grid-template-columns: 56px 1fr;
+  grid-template-columns: 50px 1fr;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
 }
 
 .hmi-config-row label {
-  font-size: 11px;
+  font-size: 10px;
   color: #cbd5e1;
 }
 
@@ -1700,14 +1710,14 @@ button:disabled {
 }
 
 .hmi-config-inline input {
-  width: 76px;
-  padding: 2px 4px;
+  width: 68px;
+  padding: 1px 4px;
 }
 
 .hmi-config-actions {
   display: flex;
-  justify-content: flex-end;
-  margin-top: 2px;
+  justify-content: flex-start;
+  margin-top: 1px;
 }
 
 .stage-left-top {
@@ -1735,8 +1745,8 @@ button:disabled {
 }
 
 .tank-body {
-  width: 150px;
-  height: 260px;
+  width: 112px;
+  height: 188px;
   border: 2px solid rgba(148, 163, 184, 0.7);
   border-radius: 10px;
   background: rgba(30, 41, 59, 0.72);
@@ -1756,10 +1766,10 @@ button:disabled {
 
 .tank-value {
   position: absolute;
-  left: 8px;
-  bottom: 8px;
-  right: 8px;
-  font-size: 11px;
+  left: 6px;
+  bottom: 6px;
+  right: 6px;
+  font-size: 10px;
   color: #f8fafc;
   text-shadow: 0 1px 2px rgba(2, 6, 23, 0.75);
 }
