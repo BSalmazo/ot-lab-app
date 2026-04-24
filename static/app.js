@@ -840,8 +840,8 @@ const WINDOW_SIZE_RULES = {
   actionsHistoryWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   actionsPreviewWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   alertsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
-  processHmiWindow: { width: 720, height: 500, minWidth: 420, minHeight: 310, resizable: true },
-  processConfigWindow: { width: 340, height: 220, minWidth: 320, minHeight: 200, resizable: true },
+  processHmiWindow: { width: 620, height: 430, minWidth: 340, minHeight: 250, resizable: true },
+  processConfigWindow: { width: 300, height: 170, minWidth: 280, minHeight: 160, resizable: true },
   processPlcWindow: { width: 384, height: 236, minWidth: 384, minHeight: 236, fixed: true },
 };
 const openAlertDetails = new Set();
@@ -1752,7 +1752,7 @@ function bindAlertDetails(containerId) {
 }
 
 function windowStateStorageKey(id) {
-  const variant = id === "processHmiWindow" ? "hmi_v5_" : (id === "processConfigWindow" ? "cfg_v2_" : "");
+  const variant = id === "processHmiWindow" ? "hmi_v6_" : (id === "processConfigWindow" ? "cfg_v3_" : "");
   return `${WINDOW_STATE_KEY_PREFIX}${variant}${id}`;
 }
 
