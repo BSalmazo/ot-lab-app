@@ -509,6 +509,34 @@ def default_remote_client():
         "updated_at": None,
     }
 
+def default_process_sim():
+    return {
+        "running": False,
+        "process_type": "tank_v1",
+        "server": {
+            "running": False,
+            "host": "127.0.0.1",
+            "port": 15020,
+            "registers_preview": {
+                "start": 0,
+                "quantity": 0,
+                "values": [],
+            },
+        },
+        "client": {
+            "running": False,
+            "host": "127.0.0.1",
+            "port": 15020,
+            "poll_interval": 0.5,
+            "poll_start": 0,
+            "poll_quantity": 16,
+            "last_values": [],
+            "last_error": None,
+            "last_poll_at": None,
+            "last_success_at": None,
+        },
+    }
+
 def default_modbus_summary():
     return {
         "detected": False,
@@ -541,6 +569,7 @@ def ensure_session_state(session_id: str):
                 "agent_config": default_agent_config(),
                 "remote_server": default_remote_server(),
                 "remote_client": default_remote_client(),
+                "process_sim": default_process_sim(),
                 "modbus_summary": default_modbus_summary(),
                 "connection_history": deque(maxlen=80),
                 "pending_commands": [],
@@ -991,6 +1020,20 @@ def build_command_log_message(command_type: str, payload: dict):
             f"Modbus action queued "
             f"({payload.get('function_id', '-')}, {payload.get('host', '-') }:{payload.get('port', '-')})"
         )
+    if command_type == "START_PROCESS_SIM":
+        return (
+            "Process simulation start requested "
+            f"({payload.get('host', '-') }:{payload.get('port', '-')}, "
+            f"poll={payload.get('poll_interval', '-') }s, "
+            f"start={payload.get('poll_start', '-') }, qty={payload.get('poll_quantity', '-')})"
+        )
+    if command_type == "STOP_PROCESS_SIM":
+        return "Process simulation stop requested"
+    if command_type == "WRITE_PROCESS_SIM":
+        return (
+            "Process simulation write requested "
+            f"(HR{payload.get('address', '-') }={payload.get('value', '-')}, unit={payload.get('unit_id', 1)})"
+        )
     return f"Command queued: {command_type}"
 
 
@@ -1058,6 +1101,14 @@ def build_agent_config(request: Request, session_id: str, state: dict):
         "port_mode": state["agent_config"].get("port_mode") or "MODBUS_PORTS",
         "custom_ports": safe_normalize_custom_ports(state["agent_config"].get("custom_ports")),
     }
+
+
+def is_agent_connected(state: dict, now_ts: float | None = None) -> bool:
+    if now_ts is None:
+        now_ts = time.time()
+    agent_info = state.get("agent_info") or {}
+    last_seen = agent_info.get("last_seen")
+    return bool(last_seen is not None and (float(now_ts) - float(last_seen) <= 20))
 
 
 def should_log_agent_event(state: dict, payload: dict) -> bool:
@@ -1316,10 +1367,7 @@ def api_status(request: Request):
     now = time.time()
 
     agent_info = state["agent_info"]
-    connected = (
-        agent_info["last_seen"] is not None and
-        (now - agent_info["last_seen"] <= 20)
-    )
+    connected = is_agent_connected(state, now)
     agent_info["connected"] = connected
 
     response = JSONResponse({
@@ -1332,7 +1380,7 @@ def api_status(request: Request):
         },
         "server": state["remote_server"],
         "client": state["remote_client"],
-        "process_sim": process_sim.snapshot(),
+        "process_sim": state.get("process_sim") or default_process_sim(),
         "agent_config": state["agent_config"],
         "session_id": session_id,
     })
@@ -1358,15 +1406,15 @@ def api_events(request: Request):
 
 @app.get("/api/process-sim/status")
 def api_process_sim_status(request: Request):
-    session_id, _state = get_session_state_from_request(request)
-    response = JSONResponse({"ok": True, "process_sim": process_sim.snapshot(), "session_id": session_id})
+    session_id, state = get_session_state_from_request(request)
+    response = JSONResponse({"ok": True, "process_sim": state.get("process_sim") or default_process_sim(), "session_id": session_id})
     set_session_cookie_if_needed(request, response, session_id)
     return response
 
 
 @app.post("/api/process-sim/start")
 async def api_process_sim_start(request: Request):
-    session_id, _state = get_session_state_from_request(request)
+    session_id, state = get_session_state_from_request(request)
     try:
         payload = await request.json()
         if not isinstance(payload, dict):
@@ -1374,46 +1422,58 @@ async def api_process_sim_start(request: Request):
     except Exception:
         payload = {}
 
-    try:
-        snapshot = process_sim.start(
-            host=payload.get("host"),
-            port=payload.get("port"),
-            poll_interval=payload.get("poll_interval"),
-            poll_start=payload.get("poll_start"),
-            poll_quantity=payload.get("poll_quantity"),
-            process_type=payload.get("process_type"),
+    if not is_agent_connected(state):
+        response = JSONResponse(
+            {"ok": False, "error": "Agent local desconectado. Inicie o agente para rodar o simulador local."},
+            status_code=400,
         )
-    except Exception as exc:
-        response = JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
         set_session_cookie_if_needed(request, response, session_id)
         return response
 
-    push_log_for_session(
+    host = str(payload.get("host") or "127.0.0.1")
+    port = int(payload.get("port") or 15020)
+    poll_interval = float(payload.get("poll_interval") or 0.5)
+    poll_start = int(payload.get("poll_start") or 0)
+    poll_quantity = int(payload.get("poll_quantity") or 16)
+    process_type = str(payload.get("process_type") or "tank_v1")
+
+    queue_command(
         session_id,
-        (
-            "Process simulation started "
-            f"(host={snapshot['server']['host']}, port={snapshot['server']['port']}, "
-            f"poll={snapshot['client']['poll_interval']}s)"
-        ),
+        "START_PROCESS_SIM",
+        {
+            "host": host,
+            "port": port,
+            "poll_interval": poll_interval,
+            "poll_start": poll_start,
+            "poll_quantity": poll_quantity,
+            "process_type": process_type,
+        },
     )
-    response = JSONResponse({"ok": True, "process_sim": snapshot})
+    response = JSONResponse({"ok": True, "queued": True, "process_sim": state.get("process_sim") or default_process_sim()})
     set_session_cookie_if_needed(request, response, session_id)
     return response
 
 
 @app.post("/api/process-sim/stop")
 def api_process_sim_stop(request: Request):
-    session_id, _state = get_session_state_from_request(request)
-    snapshot = process_sim.stop()
-    push_log_for_session(session_id, "Process simulation stopped")
-    response = JSONResponse({"ok": True, "process_sim": snapshot})
+    session_id, state = get_session_state_from_request(request)
+    if not is_agent_connected(state):
+        response = JSONResponse(
+            {"ok": False, "error": "Agent local desconectado. Inicie o agente para controlar o simulador."},
+            status_code=400,
+        )
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+
+    queue_command(session_id, "STOP_PROCESS_SIM", {})
+    response = JSONResponse({"ok": True, "queued": True, "process_sim": state.get("process_sim") or default_process_sim()})
     set_session_cookie_if_needed(request, response, session_id)
     return response
 
 
 @app.post("/api/process-sim/write")
 async def api_process_sim_write(request: Request):
-    session_id, _state = get_session_state_from_request(request)
+    session_id, state = get_session_state_from_request(request)
     try:
         payload = await request.json()
     except Exception:
@@ -1428,15 +1488,20 @@ async def api_process_sim_write(request: Request):
         set_session_cookie_if_needed(request, response, session_id)
         return response
 
-    try:
-        snapshot = process_sim.write_register(address=address, value=value, unit_id=unit_id)
-    except Exception as exc:
-        response = JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    if not is_agent_connected(state):
+        response = JSONResponse(
+            {"ok": False, "error": "Agent local desconectado. Inicie o agente para escrever no simulador."},
+            status_code=400,
+        )
         set_session_cookie_if_needed(request, response, session_id)
         return response
 
-    push_log_for_session(session_id, f"Process write: HR{address}={value}")
-    response = JSONResponse({"ok": True, "process_sim": snapshot})
+    queue_command(
+        session_id,
+        "WRITE_PROCESS_SIM",
+        {"address": address, "value": value, "unit_id": unit_id},
+    )
+    response = JSONResponse({"ok": True, "queued": True, "process_sim": state.get("process_sim") or default_process_sim()})
     set_session_cookie_if_needed(request, response, session_id)
     return response
 
@@ -1900,6 +1965,7 @@ def agent_runtime_update(payload: dict = Body(...)):
 
     server_data = payload.get("server") or {}
     client_data = payload.get("client") or {}
+    process_data = payload.get("process_sim") or {}
 
     previous_server_running = state["remote_server"]["running"]
     previous_client_running = state["remote_client"]["running"]
@@ -1952,6 +2018,69 @@ def agent_runtime_update(payload: dict = Body(...)):
                 state["remote_client"]["last_success_at"] = float(client_data.get("last_success_at"))
             except Exception:
                 pass
+
+    if process_data:
+        current = state.get("process_sim") or default_process_sim()
+        server_block = process_data.get("server") or {}
+        client_block = process_data.get("client") or {}
+
+        process_snapshot = {
+            "running": bool(process_data.get("running", current.get("running", False))),
+            "process_type": str(process_data.get("process_type") or current.get("process_type") or "tank_v1"),
+            "server": {
+                "running": bool(server_block.get("running", current.get("server", {}).get("running", False))),
+                "host": str(server_block.get("host") or current.get("server", {}).get("host") or "127.0.0.1"),
+                "port": int(server_block.get("port") or current.get("server", {}).get("port") or 15020),
+                "registers_preview": {
+                    "start": 0,
+                    "quantity": 0,
+                    "values": [],
+                },
+            },
+            "client": {
+                "running": bool(client_block.get("running", current.get("client", {}).get("running", False))),
+                "host": str(client_block.get("host") or current.get("client", {}).get("host") or "127.0.0.1"),
+                "port": int(client_block.get("port") or current.get("client", {}).get("port") or 15020),
+                "poll_interval": float(client_block.get("poll_interval") or current.get("client", {}).get("poll_interval") or 0.5),
+                "poll_start": int(client_block.get("poll_start") or current.get("client", {}).get("poll_start") or 0),
+                "poll_quantity": int(client_block.get("poll_quantity") or current.get("client", {}).get("poll_quantity") or 16),
+                "last_values": [],
+                "last_error": client_block.get("last_error", current.get("client", {}).get("last_error")),
+                "last_poll_at": client_block.get("last_poll_at", current.get("client", {}).get("last_poll_at")),
+                "last_success_at": client_block.get("last_success_at", current.get("client", {}).get("last_success_at")),
+            },
+        }
+
+        registers_preview = server_block.get("registers_preview")
+        if isinstance(registers_preview, dict):
+            values = registers_preview.get("values") or []
+            safe_values = []
+            if isinstance(values, list):
+                for raw in values[:64]:
+                    try:
+                        safe_values.append(int(raw))
+                    except Exception:
+                        continue
+            process_snapshot["server"]["registers_preview"] = {
+                "start": int(registers_preview.get("start", 0) or 0),
+                "quantity": int(registers_preview.get("quantity", len(safe_values)) or len(safe_values)),
+                "values": safe_values,
+            }
+
+        last_values = client_block.get("last_values")
+        if isinstance(last_values, list):
+            safe_values = []
+            for raw in last_values[:64]:
+                try:
+                    safe_values.append(int(raw))
+                except Exception:
+                    continue
+            process_snapshot["client"]["last_values"] = safe_values
+        else:
+            current_values = (current.get("client") or {}).get("last_values") or []
+            process_snapshot["client"]["last_values"] = list(current_values)[:64]
+
+        state["process_sim"] = process_snapshot
 
     current_server_running = state["remote_server"]["running"]
     current_client_running = state["remote_client"]["running"]
