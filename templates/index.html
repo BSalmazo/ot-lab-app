@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OT Lab App</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260424i" />
+  <link rel="stylesheet" href="/static/style.css?v=20260424j" />
 </head>
 <body>
   <div class="page">
@@ -176,15 +176,7 @@
             <select id="processTypeSelect">
               <option value="tank_v1">Tank</option>
             </select>
-            <label class="hmi-head-field">AL L/H
-              <input id="alarmLowInput" type="number" min="0" max="100" value="0" />
-              <input id="alarmHighInput" type="number" min="0" max="100" value="0" />
-            </label>
-            <label class="hmi-head-field">LIM L/H
-              <input id="limitLowInput" type="number" min="0" max="100" value="0" />
-              <input id="limitHighInput" type="number" min="0" max="100" value="0" />
-            </label>
-            <button id="applyAlarmLimitBtn" class="small" type="button">Apply</button>
+            <button id="openProcessConfigBtn" class="small secondary" type="button">Alarm/Limit</button>
             <button class="window-close" type="button" data-close-window="processHmiWindow">✕</button>
           </div>
         </div>
@@ -211,6 +203,34 @@
           </div>
         </div>
         <div class="window-resize-handle" aria-hidden="true"></div>
+      </div>
+
+      <div class="floating-window hidden" id="processConfigWindow">
+        <div class="window-head">
+          <span>Alarm / Limit Config</span>
+          <button class="window-close" type="button" data-close-window="processConfigWindow">✕</button>
+        </div>
+        <div class="window-body">
+          <div class="hmi-config-panel">
+            <div class="hmi-config-row">
+              <label>Alarm Low / High (0 = disabled)</label>
+              <div class="hmi-config-inline">
+                <input id="alarmLowInput" type="number" min="0" max="100" value="0" />
+                <input id="alarmHighInput" type="number" min="0" max="100" value="0" />
+              </div>
+            </div>
+            <div class="hmi-config-row">
+              <label>Limit Low / High (0 = disabled)</label>
+              <div class="hmi-config-inline">
+                <input id="limitLowInput" type="number" min="0" max="100" value="0" />
+                <input id="limitHighInput" type="number" min="0" max="100" value="0" />
+              </div>
+            </div>
+            <div class="hmi-config-actions">
+              <button id="applyAlarmLimitBtn" class="small" type="button">Salvar</button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="floating-window hidden" id="processPlcWindow">
@@ -365,6 +385,6 @@
   <script src="/static/protocols/modbus/ModbusActionForm.js?v=20260330p"></script>
   <script src="/static/protocols/modbus/ModbusTab.js?v=20260331a"></script>
   <script src="/static/actions/ActionsWindow.js?v=20260330p"></script>
-  <script src="/static/app.js?v=20260424i"></script>
+  <script src="/static/app.js?v=20260424j"></script>
 </body>
 </html>

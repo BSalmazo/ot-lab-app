@@ -840,7 +840,8 @@ const WINDOW_SIZE_RULES = {
   actionsHistoryWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   actionsPreviewWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   alertsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
-  processHmiWindow: { width: 960, height: 680, minWidth: 760, minHeight: 540, resizable: true },
+  processHmiWindow: { width: 860, height: 600, minWidth: 560, minHeight: 400, resizable: true },
+  processConfigWindow: { width: 420, height: 280, minWidth: 360, minHeight: 240, resizable: true },
   processPlcWindow: { width: 384, height: 236, minWidth: 384, minHeight: 236, fixed: true },
 };
 const openAlertDetails = new Set();
@@ -1367,6 +1368,7 @@ function openProcessSimulationWindows() {
 function bindProcessSimulationControls() {
   byId("simRunSwitchBtn")?.addEventListener("click", toggleProcessSimulation);
   byId("openProcessSimulationBtn")?.addEventListener("click", openProcessSimulationWindows);
+  byId("openProcessConfigBtn")?.addEventListener("click", () => openWindow("processConfigWindow"));
   byId("hmiPumpSwitchBtn")?.addEventListener("click", async () => {
     await toggleProcessActuator("pump", "pump");
   });
@@ -1623,6 +1625,7 @@ function initFloatingWindows() {
     "actionsPreviewWindow",
     "alertsWindow",
     "processHmiWindow",
+    "processConfigWindow",
     "processPlcWindow",
   ].forEach((id, index) => {
     const el = byId(id);
@@ -1736,7 +1739,7 @@ function bindAlertDetails(containerId) {
 }
 
 function windowStateStorageKey(id) {
-  const variant = id === "processHmiWindow" ? "hmi_v3_" : "";
+  const variant = id === "processHmiWindow" ? "hmi_v4_" : "";
   return `${WINDOW_STATE_KEY_PREFIX}${variant}${id}`;
 }
 
