@@ -1255,38 +1255,39 @@ def download_agent_file(platform: str, request: Request):
     script_path = config["script_path"]
     runtime_config = build_agent_config(request, session_id, state)
 
-    # Try to fetch the newest agent binary from GitHub releases first.
-    # Fallback to local bundled copy if unavailable.
+    # Prefer local bundled binary from the current deployed revision.
+    # This keeps web download aligned with the exact app version in production.
+    # Fallback to GitHub releases only when local binary is missing.
     agent_bytes = None
     agent_source = "local"
-
-    try:
-        releases = get_github_releases(force_refresh=True) or []
-        for release in releases:
-            assets = release.get("assets") or {}
-            asset = assets.get(platform)
-            if not asset:
-                continue
-
-            asset_url = asset.get("url")
-            if not asset_url:
-                continue
-
-            fetch_resp = requests.get(asset_url, timeout=20)
-            fetch_resp.raise_for_status()
-            agent_bytes = fetch_resp.content
-            agent_source = f"github:{release.get('tag', 'unknown')}"
-            break
-    except Exception as e:
-        print(f"[app] failed to fetch agent from GitHub releases ({platform}): {e}")
-
-    if agent_bytes is None:
-        agent_path = config["agent_path"]
-        if not agent_path.exists():
-            return JSONResponse({"error": "Agent file not found (release + local fallback unavailable)"}, status_code=404)
+    agent_path = config["agent_path"]
+    if agent_path.exists():
         with open(agent_path, "rb") as f:
             agent_bytes = f.read()
-        agent_source = "local-fallback"
+        agent_source = "local-deploy"
+    else:
+        try:
+            releases = get_github_releases(force_refresh=True) or []
+            for release in releases:
+                assets = release.get("assets") or {}
+                asset = assets.get(platform)
+                if not asset:
+                    continue
+
+                asset_url = asset.get("url")
+                if not asset_url:
+                    continue
+
+                fetch_resp = requests.get(asset_url, timeout=20)
+                fetch_resp.raise_for_status()
+                agent_bytes = fetch_resp.content
+                agent_source = f"github:{release.get('tag', 'unknown')}"
+                break
+        except Exception as e:
+            print(f"[app] failed to fetch agent from GitHub releases ({platform}): {e}")
+
+    if agent_bytes is None:
+        return JSONResponse({"error": "Agent file not found (local + release fallback unavailable)"}, status_code=404)
 
     if not script_path.exists():
         return JSONResponse({"error": "Installation script not found"}, status_code=404)
@@ -1298,7 +1299,10 @@ def download_agent_file(platform: str, request: Request):
         zf.write(script_path, arcname=config["script_name"])
         zf.writestr("agent-config.json", json.dumps(runtime_config, indent=2))
 
-    push_log_for_session(session_id, f"Agent bundle generated for {platform} (binary source={agent_source})")
+    push_log_for_session(
+        session_id,
+        f"Agent bundle generated for {platform} (binary source={agent_source})",
+    )
     
     zip_buffer.seek(0)
     
