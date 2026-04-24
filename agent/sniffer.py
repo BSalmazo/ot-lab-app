@@ -134,6 +134,14 @@ class SnifferMixin:
                 ports.add(client_port)
         except Exception:
             pass
+        try:
+            process_runtime = (getattr(self, "process_sim_runtime", {}) or {})
+            process_server = (process_runtime.get("server", {}) or {})
+            process_port = int(process_server.get("port", 0))
+            if 1 <= process_port <= 65535:
+                ports.add(process_port)
+        except Exception:
+            pass
         return ports
 
     def _is_likely_monitored_modbus_traffic(self, sport: int, dport: int):

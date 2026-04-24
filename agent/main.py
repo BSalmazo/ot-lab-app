@@ -64,6 +64,8 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
 
         self.modbus_server = None
         self.modbus_client = None
+        self.process_modbus_server = None
+        self.process_modbus_client = None
 
         self.server_runtime = {
             "running": False,
@@ -77,6 +79,28 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
             "poll_interval": 1.0,
             "poll_start": 0,
             "poll_quantity": 4,
+        }
+        self.process_sim_runtime = {
+            "running": False,
+            "process_type": "tank_v1",
+            "server": {
+                "running": False,
+                "host": "127.0.0.1",
+                "port": 15020,
+                "registers_preview": {"start": 0, "quantity": 0, "values": []},
+            },
+            "client": {
+                "running": False,
+                "host": "127.0.0.1",
+                "port": 15020,
+                "poll_interval": 0.5,
+                "poll_start": 0,
+                "poll_quantity": 16,
+                "last_values": [],
+                "last_error": None,
+                "last_poll_at": None,
+                "last_success_at": None,
+            },
         }
 
         self.last_applied_config = {
@@ -164,6 +188,23 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
                     result_msg = self.execute_modbus_action(payload)
                     if cmd_id:
                         self.send_command_result(cmd_id, "done", result_msg)
+                elif cmd_type == "START_PROCESS_SIM":
+                    self.start_process_sim(
+                        host=payload.get("host", self.process_sim_runtime["server"]["host"]),
+                        port=int(payload.get("port", self.process_sim_runtime["server"]["port"])),
+                        poll_interval=float(payload.get("poll_interval", self.process_sim_runtime["client"]["poll_interval"])),
+                        poll_start=int(payload.get("poll_start", self.process_sim_runtime["client"]["poll_start"])),
+                        poll_quantity=int(payload.get("poll_quantity", self.process_sim_runtime["client"]["poll_quantity"])),
+                        process_type=payload.get("process_type", self.process_sim_runtime["process_type"]),
+                    )
+                elif cmd_type == "STOP_PROCESS_SIM":
+                    self.stop_process_sim()
+                elif cmd_type == "WRITE_PROCESS_SIM":
+                    self.write_process_register(
+                        address=int(payload.get("address")),
+                        value=int(payload.get("value")),
+                        unit_id=int(payload.get("unit_id", 1)),
+                    )
                 if cmd_type != "RUN_MODBUS_ACTION" and cmd_id:
                     self.send_command_result(cmd_id, "done", f"{cmd_type} executed")
             except Exception as e:
@@ -239,6 +280,175 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
             self.client_runtime["running"] = False
 
         print("[agent] modbus client stopped")
+
+    @staticmethod
+    def _recv_exact(sock: socket.socket, size: int) -> bytes:
+        data = b""
+        while len(data) < size:
+            chunk = sock.recv(size - len(data))
+            if not chunk:
+                raise ConnectionError("socket closed while receiving")
+            data += chunk
+        return data
+
+    def _modbus_write_single_register(
+        self, host: str, port: int, register: int, value: int, unit_id: int = 1, timeout_s: float = 2.0
+    ):
+        tx_id = int(time.time() * 1000) & 0xFFFF
+        function_code = 6
+        pdu = bytes([function_code]) + int(register).to_bytes(2, "big") + int(value).to_bytes(2, "big")
+        mbap = (
+            tx_id.to_bytes(2, "big")
+            + (0).to_bytes(2, "big")
+            + (len(pdu) + 1).to_bytes(2, "big")
+            + int(unit_id).to_bytes(1, "big")
+        )
+
+        with socket.create_connection((host, int(port)), timeout=timeout_s) as conn:
+            conn.settimeout(timeout_s)
+            conn.sendall(mbap + pdu)
+            resp_header = self._recv_exact(conn, 7)
+            resp_tx_id = int.from_bytes(resp_header[0:2], "big")
+            resp_proto_id = int.from_bytes(resp_header[2:4], "big")
+            resp_len = int.from_bytes(resp_header[4:6], "big")
+            if resp_tx_id != tx_id or resp_proto_id != 0:
+                raise RuntimeError("invalid Modbus response header")
+            resp_pdu = self._recv_exact(conn, resp_len - 1)
+            if len(resp_pdu) < 2:
+                raise RuntimeError("short Modbus response")
+            fc = resp_pdu[0]
+            if fc & 0x80:
+                exc_code = resp_pdu[1]
+                raise RuntimeError(f"modbus exception code={exc_code}")
+            if fc != function_code:
+                raise RuntimeError(f"unexpected function code in response: {fc}")
+
+    def get_process_sim_snapshot(self):
+        with self.runtime_lock:
+            server_ref = self.process_modbus_server
+            client_ref = self.process_modbus_client
+            runtime = dict(self.process_sim_runtime)
+            runtime["server"] = dict(self.process_sim_runtime.get("server") or {})
+            runtime["client"] = dict(self.process_sim_runtime.get("client") or {})
+
+        server_running = bool(server_ref and server_ref.running)
+        client_running = bool(client_ref and client_ref.running)
+        runtime["server"]["running"] = server_running
+        runtime["client"]["running"] = client_running
+        runtime["running"] = server_running and client_running
+
+        if server_running:
+            try:
+                runtime["server"]["registers_preview"] = server_ref.get_registers_preview(start=0, quantity=16)
+            except Exception:
+                pass
+        if client_running:
+            try:
+                snap = client_ref.get_snapshot()
+                runtime["client"]["last_values"] = list(snap.get("last_values") or [])
+                runtime["client"]["last_error"] = snap.get("last_error")
+                runtime["client"]["last_poll_at"] = snap.get("last_poll_at")
+                runtime["client"]["last_success_at"] = snap.get("last_success_at")
+            except Exception:
+                pass
+        return runtime
+
+    def start_process_sim(self, host, port, poll_interval, poll_start, poll_quantity, process_type):
+        process_type = str(process_type or "tank_v1").strip() or "tank_v1"
+        if process_type != "tank_v1":
+            raise RuntimeError("unsupported process_type")
+
+        self.stop_process_sim()
+
+        server = SimpleModbusServer(host=host, port=port)
+        server_started = server.start()
+        if not server_started:
+            try:
+                server.stop()
+            except Exception:
+                pass
+            raise RuntimeError("failed to start process simulation server")
+
+        client = SimpleModbusClient(
+            host=host,
+            port=port,
+            poll_interval=poll_interval,
+            poll_start=poll_start,
+            poll_quantity=poll_quantity,
+        )
+        client_started = client.start()
+        if not client_started:
+            try:
+                client.stop()
+            except Exception:
+                pass
+            try:
+                server.stop()
+            except Exception:
+                pass
+            raise RuntimeError("failed to start process simulation client")
+
+        with self.runtime_lock:
+            self.process_modbus_server = server
+            self.process_modbus_client = client
+            self.process_sim_runtime["process_type"] = process_type
+            self.process_sim_runtime["server"].update(
+                {
+                    "running": True,
+                    "host": str(host),
+                    "port": int(port),
+                }
+            )
+            self.process_sim_runtime["client"].update(
+                {
+                    "running": True,
+                    "host": str(host),
+                    "port": int(port),
+                    "poll_interval": float(poll_interval),
+                    "poll_start": int(poll_start),
+                    "poll_quantity": int(poll_quantity),
+                }
+            )
+            self.process_sim_runtime["running"] = True
+
+        print(
+            "[agent] process simulation started "
+            f"host={host} port={port} poll={poll_interval}s start={poll_start} qty={poll_quantity}"
+        )
+
+    def stop_process_sim(self):
+        with self.runtime_lock:
+            server = self.process_modbus_server
+            client = self.process_modbus_client
+            self.process_modbus_server = None
+            self.process_modbus_client = None
+
+        if client:
+            try:
+                client.stop()
+            except Exception:
+                pass
+        if server:
+            try:
+                server.stop()
+            except Exception:
+                pass
+
+        with self.runtime_lock:
+            self.process_sim_runtime["running"] = False
+            self.process_sim_runtime["server"]["running"] = False
+            self.process_sim_runtime["client"]["running"] = False
+
+        print("[agent] process simulation stopped")
+
+    def write_process_register(self, address: int, value: int, unit_id: int = 1):
+        snapshot = self.get_process_sim_snapshot()
+        if not snapshot.get("running"):
+            raise RuntimeError("process simulation is not running")
+        host = str(snapshot["server"]["host"])
+        port = int(snapshot["server"]["port"])
+        self._modbus_write_single_register(host=host, port=port, register=int(address), value=int(value), unit_id=int(unit_id))
+        print(f"[agent] process write HR{address}={value} (unit={unit_id})")
 
     def execute_modbus_action(self, payload: dict):
         try:
@@ -519,6 +729,7 @@ def main():
     except KeyboardInterrupt:
         print("\n[agent] stopping...")
     finally:
+        agent.stop_process_sim()
         agent.stop_modbus_client()
         agent.stop_modbus_server()
         agent.stop()
