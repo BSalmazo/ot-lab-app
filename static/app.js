@@ -1280,11 +1280,10 @@ async function sendProcessWrite(address, value, note = "") {
 
   const result = await apiPost("/api/process-sim/write", payload);
   if (!result.ok) {
-    setText("hmiProcessStatus", `Write failed (${note || `HR${address}`})`);
+    const msg = result.error || `Write failed (${note || `HR${address}`})`;
+    alert(msg);
     return result;
   }
-
-  setText("hmiProcessStatus", `Write applied: HR${address}=${value}${note ? ` (${note})` : ""}`);
   return result;
 }
 
@@ -1300,23 +1299,21 @@ async function startProcessSimulation() {
   });
 
   if (!result.ok) {
-    setText("hmiProcessStatus", `Failed to start simulation: ${result.error || "unknown error"}`);
+    alert(result.error || "Failed to start simulation");
     return;
   }
 
   openWindow("processHmiWindow");
   openWindow("processPlcWindow");
-  setText("hmiProcessStatus", "Simulation started.");
   await refreshAll();
 }
 
 async function stopProcessSimulation() {
   const result = await apiPost("/api/process-sim/stop");
   if (!result.ok) {
-    setText("hmiProcessStatus", `Failed to stop simulation: ${result.error || "unknown error"}`);
+    alert(result.error || "Failed to stop simulation");
     return;
   }
-  setText("hmiProcessStatus", "Simulation stopped.");
   await refreshAll();
 }
 

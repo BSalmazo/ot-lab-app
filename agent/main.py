@@ -112,6 +112,7 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
         self.capabilities = [
             "modbus_actions_v1",
             "run_modbus_action_command",
+            "process_sim_v1",
         ]
 
     @staticmethod
@@ -205,6 +206,8 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
                         value=int(payload.get("value")),
                         unit_id=int(payload.get("unit_id", 1)),
                     )
+                else:
+                    raise RuntimeError(f"unknown command: {cmd_type}")
                 if cmd_type != "RUN_MODBUS_ACTION" and cmd_id:
                     self.send_command_result(cmd_id, "done", f"{cmd_type} executed")
             except Exception as e:
