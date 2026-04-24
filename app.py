@@ -5,6 +5,8 @@ import socket
 import time
 import uuid
 import zipfile
+import hashlib
+import os
 import requests
 
 from collections import deque
@@ -389,6 +391,20 @@ def get_github_releases(force_refresh: bool = False):
         if releases_cache["data"] is not None:
             return releases_cache["data"]
         return []
+
+
+def get_server_build_id() -> str:
+    candidates = [
+        os.getenv("RAILWAY_GIT_COMMIT_SHA"),
+        os.getenv("GITHUB_SHA"),
+        os.getenv("SOURCE_VERSION"),
+        os.getenv("VERCEL_GIT_COMMIT_SHA"),
+    ]
+    for value in candidates:
+        raw = str(value or "").strip()
+        if raw:
+            return raw[:16]
+    return "unknown"
 
 
 def default_agent_snapshot():
@@ -1309,6 +1325,8 @@ def download_agent_file(platform: str, request: Request):
     # Fallback to local bundled binary only when GitHub is unavailable.
     agent_bytes = None
     agent_source = "github"
+    agent_asset_name = None
+    agent_release_tag = None
     try:
         releases = get_github_releases(force_refresh=True) or []
 
@@ -1341,6 +1359,8 @@ def download_agent_file(platform: str, request: Request):
             fetch_resp.raise_for_status()
             agent_bytes = fetch_resp.content
             agent_source = f"github:{release.get('tag', 'unknown')}"
+            agent_asset_name = asset.get("name")
+            agent_release_tag = release.get("tag")
             break
     except Exception as e:
         print(f"[app] failed to fetch agent from GitHub releases ({platform}): {e}")
@@ -1351,22 +1371,43 @@ def download_agent_file(platform: str, request: Request):
             with open(agent_path, "rb") as f:
                 agent_bytes = f.read()
             agent_source = "local-fallback"
+            agent_asset_name = config["agent_name"]
+            agent_release_tag = "local-fallback"
         else:
             return JSONResponse({"error": "Agent file not found (release + local fallback unavailable)"}, status_code=404)
 
     if not script_path.exists():
         return JSONResponse({"error": "Installation script not found"}, status_code=404)
     
+    agent_sha256 = hashlib.sha256(agent_bytes).hexdigest()
+    generated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    bundle_manifest = {
+        "generated_at": generated_at,
+        "server_build_id": get_server_build_id(),
+        "session_id": session_id,
+        "platform": platform,
+        "binary_source": agent_source,
+        "binary_release_tag": agent_release_tag,
+        "binary_asset_name": agent_asset_name,
+        "binary_name_in_zip": config["agent_name"],
+        "binary_size_bytes": len(agent_bytes),
+        "binary_sha256": agent_sha256,
+    }
+
     # Create ZIP with only the files needed for one-click install/run.
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(config["agent_name"], agent_bytes)
         zf.write(script_path, arcname=config["script_name"])
         zf.writestr("agent-config.json", json.dumps(runtime_config, indent=2))
+        zf.writestr("otlab-bundle-manifest.json", json.dumps(bundle_manifest, indent=2))
 
     push_log_for_session(
         session_id,
-        f"Agent bundle generated for {platform} (binary source={agent_source})",
+        (
+            f"Agent bundle generated for {platform} "
+            f"(source={agent_source}, asset={agent_asset_name or '-'}, sha256={agent_sha256[:12]})"
+        ),
     )
     
     zip_buffer.seek(0)
@@ -1374,7 +1415,16 @@ def download_agent_file(platform: str, request: Request):
     response = Response(
         content=zip_buffer.getvalue(),
         media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename={config['zip_name']}"}
+        headers={
+            "Content-Disposition": f"attachment; filename={config['zip_name']}",
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-OTLAB-Binary-Source": str(agent_source),
+            "X-OTLAB-Binary-Asset": str(agent_asset_name or ""),
+            "X-OTLAB-Binary-Sha256": agent_sha256,
+            "X-OTLAB-Server-Build": get_server_build_id(),
+        },
     )
     set_session_cookie_if_needed(request, response, session_id)
     return response
@@ -1410,7 +1460,13 @@ def download_install_script(platform: str, request: Request):
     response = Response(
         content=content,
         media_type=media_type,
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-OTLAB-Server-Build": get_server_build_id(),
+        },
     )
     set_session_cookie_if_needed(request, response, session_id)
     return response
@@ -1432,7 +1488,13 @@ def download_installation_guide(request: Request):
     response = Response(
         content=content,
         media_type="text/markdown",
-        headers={"Content-Disposition": "attachment; filename=INSTALLATION.md"}
+        headers={
+            "Content-Disposition": "attachment; filename=INSTALLATION.md",
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-OTLAB-Server-Build": get_server_build_id(),
+        },
     )
     set_session_cookie_if_needed(request, response, session_id)
     return response

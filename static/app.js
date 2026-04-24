@@ -1668,10 +1668,18 @@ function formatFileSize(bytes) {
 }
 
 function getBundleDownloadUrl(platform) {
-  if (platform === "windows") return "/api/downloads/agent/windows";
-  if (platform === "macos") return "/api/downloads/agent/mac";
-  if (platform === "linux") return "/api/downloads/agent/linux";
-  return "#";
+  let base = null;
+  if (platform === "windows") base = "/api/downloads/agent/windows";
+  if (platform === "macos") base = "/api/downloads/agent/mac";
+  if (platform === "linux") base = "/api/downloads/agent/linux";
+  if (!base) return "#";
+
+  const params = new URLSearchParams();
+  if (isValidSessionId(pinnedSessionId)) {
+    params.set("session_id", pinnedSessionId);
+  }
+  params.set("_ts", String(Date.now()));
+  return `${base}?${params.toString()}`;
 }
 
 function initFloatingWindows() {
