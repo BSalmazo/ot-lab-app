@@ -72,7 +72,9 @@ chmod +x ~/Downloads/otlab-agent-linux-amd64
 1. ✓ Removes macOS quarantine flag
 2. ✓ Sets executable permissions
 3. ✓ Verifies installation
-4. ℹ Checks libpcap status
+4. ✓ Validates packet-capture runtime by running `agent --help`
+5. ✓ If needed, attempts `brew install libpcap` automatically
+6. ✓ Aborts with clear error if runtime is still unavailable
 
 ### `install-windows.bat`
 1. ✓ Removes Zone.Identifier (SmartScreen)
