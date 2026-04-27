@@ -1,0 +1,24 @@
+{
+  "ts": 1774974717.863273,
+  "elapsed_ms": 14.01,
+  "http_status": 200,
+  "http_ok": true,
+  "data": {
+    "ok": true,
+    "command_id": "9e8a88bc-a678-4c09-9bef-cd5b2e4ea5a6",
+    "function": {
+      "id": "fc06_write_single_register",
+      "code": 6,
+      "code_label": "06",
+      "name": "Write Single Register"
+    },
+    "preview": {
+      "host": "127.0.0.1",
+      "port": 15020,
+      "unit_id": 1,
+      "transaction_id": 53169,
+      "request_hex": "CF B1 00 00 00 06 01 06 00 01 00 01",
+      "pdu_hex": "06 00 01 00 01"
+    }
+  }
+}

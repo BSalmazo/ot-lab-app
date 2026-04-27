@@ -19,7 +19,7 @@ if not exist "%AGENT_PATH%" (
     echo Error: Agent not found at %AGENT_PATH%
     echo.
     echo Please download the agent first from the OT Lab dashboard:
-    echo   https://your-ot-lab-site.com/downloads
+    echo   Open the OT Lab App dashboard and use the Download Agent button
     pause
     exit /b 1
 )
@@ -77,7 +77,7 @@ echo Or open Command Prompt and type:
 echo   "%AGENT_PATH%"
 echo.
 echo For more information, visit:
-echo   https://your-ot-lab-site.com
+echo   Open the OT Lab App dashboard
 echo.
 echo Starting agent now...
 "%AGENT_PATH%"

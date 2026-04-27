@@ -1,0 +1,11 @@
+{
+  "base_url": "http://127.0.0.1:8000",
+  "session_id": "sess_92c7874bfe77418daa4e3e200ac629f4",
+  "started_at": 1774974718.239347,
+  "finished_at": 1774976877.1510458,
+  "duration_actual_s": 2158.912,
+  "duration_requested_s": 3600,
+  "interval_s": 0.5,
+  "samples": 2472,
+  "events_http_ok_ratio": 1.0
+}

@@ -9,6 +9,9 @@ venv/
 # Test/checkpoint artifacts
 artifacts/
 
+# Downloaded/generated agent binaries are published as GitHub release assets.
+downloads/
+
 # PyInstaller build outputs
 build/
 dist/

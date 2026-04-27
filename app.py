@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import io
 import json
 import re
@@ -46,7 +48,6 @@ AGENT_LIVENESS_WINDOW_SECONDS = 120
 SESSION_ID_PATTERN = re.compile(r"^sess_[A-Za-z0-9_-]{8,128}$")
 
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
-app.mount("/downloads", StaticFiles(directory=str(BASE_DIR / "downloads")), name="downloads")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 # GitHub releases cache
@@ -378,6 +379,7 @@ def get_github_releases(force_refresh: bool = False):
                 processed_releases.append({
                     "tag": release["tag_name"],
                     "name": release["name"],
+                    "target_commitish": release.get("target_commitish"),
                     "published_at": release["published_at"],
                     "updated_at": release.get("updated_at") or release.get("published_at"),
                     "prerelease": release["prerelease"],
@@ -410,6 +412,14 @@ def get_server_build_id() -> str:
         if raw:
             return raw[:16]
     return "unknown"
+
+
+def release_matches_build(release: dict, build_id: str | None = None) -> bool:
+    build_id = str(build_id or get_server_build_id() or "").strip()
+    target = str((release or {}).get("target_commitish") or "").strip()
+    if not build_id or build_id == "unknown" or not target:
+        return True
+    return target.startswith(build_id) or build_id.startswith(target)
 
 
 def default_agent_snapshot():
@@ -1301,21 +1311,18 @@ def download_agent_file(platform: str, request: Request):
     
     platform_config = {
         "windows": {
-            "agent_path": BASE_DIR / "downloads" / "agent" / "windows" / "otlab-agent.exe",
             "agent_name": "otlab-agent-windows-amd64.exe",
             "script_path": BASE_DIR / "scripts" / "install-windows.bat",
             "script_name": "install-windows.bat",
             "zip_name": "otlab-agent-windows.zip"
         },
         "macos": {
-            "agent_path": BASE_DIR / "downloads" / "agent" / "mac" / "otlab-agent-mac",
             "agent_name": "otlab-agent-macos-amd64",
             "script_path": BASE_DIR / "scripts" / "install-macos.sh",
             "script_name": "install-macos.sh",
             "zip_name": "otlab-agent-macos.zip"
         },
         "linux": {
-            "agent_path": BASE_DIR / "downloads" / "agent" / "linux" / "otlab-agent-linux",
             "agent_name": "otlab-agent-linux-amd64",
             "script_path": BASE_DIR / "scripts" / "install-linux.sh",
             "script_name": "install-linux.sh",
@@ -1331,11 +1338,11 @@ def download_agent_file(platform: str, request: Request):
     runtime_config = build_agent_config(request, session_id, state)
 
     # Prefer GitHub release assets and prioritize dev-latest for branch builds.
-    # Fallback to local bundled binary only when GitHub is unavailable.
     agent_bytes = None
     agent_source = "github"
     agent_asset_name = None
     agent_release_tag = None
+    selected_release = None
     try:
         releases = get_github_releases(force_refresh=True) or []
 
@@ -1352,7 +1359,10 @@ def download_agent_file(platform: str, request: Request):
             key=_release_sort_key,
             reverse=True,
         )
+        build_id = get_server_build_id()
         preferred_releases = dev_latest + others
+        if build_id != "unknown":
+            preferred_releases = [r for r in preferred_releases if release_matches_build(r, build_id)]
 
         for release in preferred_releases:
             assets = release.get("assets") or {}
@@ -1370,20 +1380,22 @@ def download_agent_file(platform: str, request: Request):
             agent_source = f"github:{release.get('tag', 'unknown')}"
             agent_asset_name = asset.get("name")
             agent_release_tag = release.get("tag")
+            selected_release = release
             break
     except Exception as e:
         print(f"[app] failed to fetch agent from GitHub releases ({platform}): {e}")
 
     if agent_bytes is None:
-        agent_path = config["agent_path"]
-        if agent_path.exists():
-            with open(agent_path, "rb") as f:
-                agent_bytes = f.read()
-            agent_source = "local-fallback"
-            agent_asset_name = config["agent_name"]
-            agent_release_tag = "local-fallback"
-        else:
-            return JSONResponse({"error": "Agent file not found (release + local fallback unavailable)"}, status_code=404)
+        return JSONResponse(
+            {
+                "error": (
+                    "Compatible agent release asset not found yet. "
+                    "Wait for the GitHub build/release workflow to finish, then retry."
+                ),
+                "server_build_id": get_server_build_id(),
+            },
+            status_code=409,
+        )
 
     if not script_path.exists():
         return JSONResponse({"error": "Installation script not found"}, status_code=404)
@@ -1397,6 +1409,7 @@ def download_agent_file(platform: str, request: Request):
         "platform": platform,
         "binary_source": agent_source,
         "binary_release_tag": agent_release_tag,
+        "binary_release_target_commitish": (selected_release or {}).get("target_commitish"),
         "binary_asset_name": agent_asset_name,
         "binary_name_in_zip": config["agent_name"],
         "binary_size_bytes": len(agent_bytes),
@@ -1851,12 +1864,15 @@ def get_agent_releases(request: Request):
     refresh_param = str(request.query_params.get("refresh", "")).lower().strip()
     force_refresh = refresh_param in {"1", "true", "yes", "y"}
     releases = get_github_releases(force_refresh=force_refresh)
+    server_build_id = get_server_build_id()
     
     if not releases:
         return JSONResponse({
             "ok": False,
             "error": "No releases available",
-            "releases": []
+            "server_build_id": server_build_id,
+            "release_ready": False,
+            "releases": [],
         }, status_code=503)
     
     # Find the latest stable release and dev-latest using update time.
@@ -1880,10 +1896,15 @@ def get_agent_releases(request: Request):
         available_releases.append({"type": "stable", **latest_stable})
     if dev_latest:
         available_releases.append({"type": "development", **dev_latest})
-    
+
+    for release in available_releases:
+        release["compatible_with_server"] = release_matches_build(release, server_build_id)
+
     response = JSONResponse({
         "ok": True,
-        "releases": available_releases
+        "server_build_id": server_build_id,
+        "release_ready": any(release.get("compatible_with_server") for release in available_releases),
+        "releases": available_releases,
     })
     set_session_cookie_if_needed(request, response, session_id)
     return response

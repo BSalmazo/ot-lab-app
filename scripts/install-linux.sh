@@ -18,7 +18,7 @@ if [ ! -f "$AGENT_PATH" ]; then
     echo "❌ Error: Agent not found at $AGENT_PATH"
     echo ""
     echo "Please download the agent first from the OT Lab dashboard:"
-    echo "  https://your-ot-lab-site.com/downloads"
+    echo "  Open the OT Lab App dashboard and use the Download Agent button"
     exit 1
 fi
 
@@ -99,7 +99,7 @@ echo "To run the agent:"
 echo "  $AGENT_PATH"
 echo ""
 echo "For more information, visit:"
-echo "  https://your-ot-lab-site.com"
+echo "  Open the OT Lab App dashboard"
 echo ""
 
 echo "Starting agent now..."
