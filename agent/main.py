@@ -798,8 +798,18 @@ def main():
     except KeyboardInterrupt:
         print("\n[agent] stopping...")
     finally:
-        agent.stop_process_sim()
-        agent.stop_modbus_client()
-        agent.stop_modbus_server()
-        agent.stop()
-        agent.send_runtime_update()
+        cleanup_steps = [
+            agent.stop_process_sim,
+            agent.stop_modbus_client,
+            agent.stop_modbus_server,
+            agent.stop,
+            agent.send_runtime_update,
+        ]
+        for cleanup_step in cleanup_steps:
+            try:
+                cleanup_step()
+            except KeyboardInterrupt:
+                print("[agent] shutdown interrupted")
+                break
+            except Exception as e:
+                print(f"[agent] shutdown warning: {type(e).__name__}: {e}")
