@@ -1083,10 +1083,19 @@ def build_connection_history(state: dict):
 
 
 def build_command_log_message(command_type: str, payload: dict):
+    if command_type == "CONFIGURE_SERVER":
+        return f"Modbus server configuration sent to agent ({payload.get('host', '-') }:{payload.get('port', '-')})"
     if command_type == "START_SERVER":
         return f"Modbus server start requested ({payload.get('host', '-') }:{payload.get('port', '-')})"
     if command_type == "STOP_SERVER":
         return "Modbus server stop requested"
+    if command_type == "CONFIGURE_CLIENT":
+        return (
+            f"Modbus client configuration sent to agent "
+            f"({payload.get('host', '-') }:{payload.get('port', '-')}, "
+            f"poll={payload.get('poll_interval', '-') }s, "
+            f"start={payload.get('poll_start', '-') }, qty={payload.get('poll_quantity', '-')})"
+        )
     if command_type == "START_CLIENT":
         return (
             f"Modbus client start requested "
@@ -2011,6 +2020,8 @@ async def configure_server(request: Request):
     state["remote_server"]["updated_at"] = time.time()
 
     push_log_for_session(session_id, f"Server configuration updated (host={host}, port={port})")
+    if is_agent_connected(state):
+        queue_command(session_id, "CONFIGURE_SERVER", {"host": host, "port": port})
 
     response = JSONResponse({"ok": True, "server": state["remote_server"]})
     set_session_cookie_if_needed(request, response, session_id)
@@ -2036,6 +2047,18 @@ async def configure_client(request: Request):
     state["remote_client"]["updated_at"] = time.time()
 
     push_log_for_session(session_id, f"Client configuration updated (host={host}, port={port}, poll={poll_interval}s)")
+    if is_agent_connected(state):
+        queue_command(
+            session_id,
+            "CONFIGURE_CLIENT",
+            {
+                "host": host,
+                "port": port,
+                "poll_interval": poll_interval,
+                "poll_start": poll_start,
+                "poll_quantity": poll_quantity,
+            },
+        )
 
     response = JSONResponse({"ok": True, "client": state["remote_client"]})
     set_session_cookie_if_needed(request, response, session_id)

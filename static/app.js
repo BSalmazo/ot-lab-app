@@ -282,13 +282,18 @@ function formatAgentStatus(data) {
   const portMode = data.agent_config?.port_mode || data.agent?.port_mode || "-";
   const customPorts = data.agent_config?.custom_ports || data.agent?.custom_ports || [];
   const customPortText = Array.isArray(customPorts) && customPorts.length ? customPorts.join(",") : "-";
+  const lastSeen = Number(data.agent?.last_seen || 0);
+  const lastSeenText = lastSeen > 0
+    ? `${Math.max(0, Math.round(Date.now() / 1000 - lastSeen))}s ago`
+    : "-";
 
   return [
     `STATUS: ${connected ? "CONNECTED" : "DISCONNECTED"}`,
     `INTERFACE: ${iface}`,
     `MODE: ${mode}`,
     `PORT FILTER: ${portMode}`,
-    `CUSTOM PORTS: ${customPortText}`
+    `CUSTOM PORTS: ${customPortText}`,
+    `LAST HEARTBEAT: ${lastSeenText}`
   ].join("\n");
 }
 
@@ -717,6 +722,7 @@ async function refreshStatus() {
   const agentConnected = !!data.agent?.connected;
 
   setText("agentStatus", formatAgentStatus(data));
+  setText("agentSessionHint", `Session: ${data.session_id || "-"}`);
   setText("serverStatus", formatServerStatus(data.server));
   setText("clientStatus", formatClientStatus(data.client));
 

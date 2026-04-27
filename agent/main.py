@@ -173,10 +173,23 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
                         host=payload.get("host", self.server_runtime["host"]),
                         port=int(payload.get("port", self.server_runtime["port"])),
                     )
+                elif cmd_type == "CONFIGURE_SERVER":
+                    self.configure_modbus_server(
+                        host=payload.get("host", self.server_runtime["host"]),
+                        port=int(payload.get("port", self.server_runtime["port"])),
+                    )
                 elif cmd_type == "STOP_SERVER":
                     self.stop_modbus_server()
                 elif cmd_type == "START_CLIENT":
                     self.start_modbus_client(
+                        host=payload.get("host", self.client_runtime["host"]),
+                        port=int(payload.get("port", self.client_runtime["port"])),
+                        poll_interval=float(payload.get("poll_interval", self.client_runtime["poll_interval"])),
+                        poll_start=int(payload.get("poll_start", self.client_runtime["poll_start"])),
+                        poll_quantity=int(payload.get("poll_quantity", self.client_runtime["poll_quantity"])),
+                    )
+                elif cmd_type == "CONFIGURE_CLIENT":
+                    self.configure_modbus_client(
                         host=payload.get("host", self.client_runtime["host"]),
                         port=int(payload.get("port", self.client_runtime["port"])),
                         poll_interval=float(payload.get("poll_interval", self.client_runtime["poll_interval"])),
@@ -232,6 +245,21 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
 
         print(f"[agent] modbus server start result: running={started} host={host} port={port}")
 
+    def configure_modbus_server(self, host, port):
+        was_running = bool(self.modbus_server and self.modbus_server.running)
+        if was_running:
+            self.start_modbus_server(host=host, port=port)
+        else:
+            with self.runtime_lock:
+                self.server_runtime["host"] = host
+                self.server_runtime["port"] = int(port)
+                self.server_runtime["running"] = False
+
+        print(
+            "[agent] modbus server config applied "
+            f"host={host} port={port} running={was_running}"
+        )
+
     def stop_modbus_server(self):
         with self.runtime_lock:
             server = self.modbus_server
@@ -269,6 +297,30 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
         print(
             f"[agent] modbus client start result: running={started} "
             f"host={host} port={port} poll_interval={poll_interval}"
+        )
+
+    def configure_modbus_client(self, host, port, poll_interval, poll_start, poll_quantity):
+        with self.runtime_lock:
+            client = self.modbus_client
+
+        if client and client.running:
+            client.update_config(host, port, poll_interval, poll_start, poll_quantity)
+            running = True
+        else:
+            running = False
+
+        with self.runtime_lock:
+            self.client_runtime["host"] = host
+            self.client_runtime["port"] = int(port)
+            self.client_runtime["poll_interval"] = float(poll_interval)
+            self.client_runtime["poll_start"] = int(poll_start)
+            self.client_runtime["poll_quantity"] = int(poll_quantity)
+            self.client_runtime["running"] = running
+
+        print(
+            "[agent] modbus client config applied "
+            f"host={host} port={port} poll={poll_interval}s "
+            f"start={poll_start} qty={poll_quantity} running={running}"
         )
 
     def stop_modbus_client(self):
@@ -691,19 +743,6 @@ def main():
         f"port_mode={agent.port_mode} custom_ports={agent.custom_ports}"
     )
 
-    agent.register()
-    remote_cfg = agent.fetch_remote_config()
-    if remote_cfg:
-        print("[agent] connectivity check ok: remote config fetched")
-    else:
-        print("[agent] connectivity check failed: could not fetch remote config")
-    started = agent.start()
-
-    if not started:
-        print(f"[agent] started without active sniffing. iface={agent.iface}")
-
-    agent.send_runtime_update()
-
     print(
         f"[agent] session={agent.session_id} id={agent.agent_id} "
         f"iface={agent.iface} mode={agent.mode} "
@@ -750,7 +789,24 @@ def main():
         name="agent-control-plane",
         daemon=True,
     )
+
+    agent.register()
+    remote_cfg = agent.fetch_remote_config()
+    if remote_cfg:
+        print("[agent] connectivity check ok: remote config fetched")
+        agent.apply_config_if_needed(remote_cfg)
+    else:
+        print("[agent] connectivity check failed: could not fetch remote config")
+
     control_thread.start()
+    print("[agent] control loop started")
+
+    started = agent.start()
+
+    if not started:
+        print(f"[agent] started without active sniffing. iface={agent.iface}")
+
+    agent.send_runtime_update()
 
     try:
         while True:
