@@ -60,7 +60,7 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
         self._last_snapshot_sent_at = 0.0
 
         self.state = self._empty_state()
-        self.runtime_lock = threading.Lock()
+        self.runtime_lock = threading.RLock()
 
         self.modbus_server = None
         self.modbus_client = None
