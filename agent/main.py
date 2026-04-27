@@ -749,13 +749,27 @@ def main():
         f"port_mode={agent.port_mode} custom_ports={agent.custom_ports} -> {args.server}"
     )
 
-    stop_event = threading.Event()
+    agent.register()
+    remote_cfg = agent.fetch_remote_config()
+    if remote_cfg:
+        print("[agent] connectivity check ok: remote config fetched")
+        agent.apply_config_if_needed(remote_cfg)
+    else:
+        print("[agent] connectivity check failed: could not fetch remote config")
 
-    def control_plane_loop():
+    started = agent.start()
+
+    if not started:
+        print(f"[agent] started without active sniffing. iface={agent.iface}")
+
+    agent.send_runtime_update()
+    print("[agent] control loop started")
+
+    try:
         last_config_poll = 0.0
         last_heartbeat = 0.0
         last_diag = 0.0
-        while not stop_event.is_set():
+        while True:
             try:
                 # Prioritize command processing to reduce UI-to-execution latency.
                 agent.process_pending_commands()
@@ -779,46 +793,11 @@ def main():
                     last_diag = now
             except Exception as e:
                 print(f"[agent] error in control loop: {e}")
-                stop_event.wait(0.2)
-                continue
 
-            stop_event.wait(0.25)
-
-    control_thread = threading.Thread(
-        target=control_plane_loop,
-        name="agent-control-plane",
-        daemon=True,
-    )
-
-    agent.register()
-    remote_cfg = agent.fetch_remote_config()
-    if remote_cfg:
-        print("[agent] connectivity check ok: remote config fetched")
-        agent.apply_config_if_needed(remote_cfg)
-    else:
-        print("[agent] connectivity check failed: could not fetch remote config")
-
-    control_thread.start()
-    print("[agent] control loop started")
-
-    started = agent.start()
-
-    if not started:
-        print(f"[agent] started without active sniffing. iface={agent.iface}")
-
-    agent.send_runtime_update()
-
-    try:
-        while True:
-            time.sleep(1.0)
+            time.sleep(0.25)
     except KeyboardInterrupt:
         print("\n[agent] stopping...")
     finally:
-        stop_event.set()
-        try:
-            control_thread.join(timeout=1.5)
-        except Exception:
-            pass
         agent.stop_process_sim()
         agent.stop_modbus_client()
         agent.stop_modbus_server()

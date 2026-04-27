@@ -107,6 +107,45 @@ class HttpClientMixin:
         flush_thread.start()
         self._event_flusher = flush_thread
 
+    def _should_log_http_error(self, path: str) -> bool:
+        now = time.time()
+        errors = getattr(self, "_http_error_log_last", None)
+        if errors is None:
+            errors = {}
+            self._http_error_log_last = errors
+        last = float(errors.get(path, 0.0))
+        if (now - last) >= 5.0:
+            errors[path] = now
+            return True
+        return False
+
+    def _post_sync(self, path: str, payload: dict, timeout=2):
+        try:
+            session = self._ensure_control_session()
+            resp = session.post(
+                f"{self.server_url}{path}",
+                json=payload,
+                timeout=timeout,
+            )
+            if resp.status_code >= 400:
+                if self._should_log_http_error(path):
+                    print(
+                        f"[agent] HTTP error on {path}: "
+                        f"status={resp.status_code} body={resp.text[:200]!r}"
+                    )
+                return None
+
+            try:
+                data = resp.json()
+            except Exception:
+                data = {}
+            self._observe_control_plane_instance(path, data.get("instance_id"))
+            return data
+        except Exception as e:
+            if self._should_log_http_error(path):
+                print(f"[agent] HTTP post failed on {path}: {type(e).__name__}: {e}")
+            return None
+
     def fetch_remote_config(self):
         try:
             session = self._ensure_control_session()
@@ -265,9 +304,13 @@ class HttpClientMixin:
         )
 
     def _post(self, path: str, payload: dict, timeout=2, critical: bool = False):
+        if critical:
+            self._post_sync(path, payload, timeout=timeout)
+            return
+
         self._ensure_async_post_worker()
         item = (path, payload, timeout)
-        target_queue = self._critical_post_queue if critical else self._normal_post_queue
+        target_queue = self._normal_post_queue
 
         try:
             target_queue.put_nowait(item)
