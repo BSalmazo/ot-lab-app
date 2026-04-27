@@ -1,6 +1,6 @@
 # OT Lab App
 
-OT Lab App is an in-progress OT/ICS cybersecurity lab platform designed to support visibility and experimentation in Modbus/TCP environments.
+OT Lab App is an in-progress OT/ICS cybersecurity lab platform designed to run as a web interface for Modbus/TCP visibility and experimentation.
 
 It combines a web-based interface, protocol-aware backend logic, and a local capture agent to monitor traffic, manage events and alerts, and interact with Modbus client/server components in a controlled lab setup.
 
@@ -11,7 +11,8 @@ It combines a web-based interface, protocol-aware backend logic, and a local cap
 - Session-based event, alert, and log handling
 - Modbus client and server controls from the web UI
 - Traffic summaries focused on industrial communication behavior
-- Cross-platform agent distribution (Windows, macOS, Linux)
+- Cross-platform agent distribution from GitHub release assets (Windows, macOS, Linux)
+- Local process simulation and HMI/PLC views for controlled testing
 
 ## Main goals
 
@@ -34,8 +35,17 @@ It combines a web-based interface, protocol-aware backend logic, and a local cap
 - `agent/` — local agent logic, runtime, sniffing, protocol-related modules
 - `templates/` — web interface templates
 - `static/` — frontend assets
-- `downloads/` — local downloadable agent files
+- `scripts/` — installer helpers used when packaging agent downloads
+- `studies/` — checkpoint reports, paper/TRP material, and research evidence
 - `.github/workflows/` — automation workflows
+
+## Deployment model
+
+Railway runs the FastAPI web app from this repository. Users open the Railway URL, use the dashboard, download an agent package for their operating system, and connect that agent back to their web session.
+
+Agent binaries are not stored in the repository. GitHub Actions builds them and publishes them as release assets under `dev-latest`; the web app downloads the release asset that matches the deployed commit and wraps it with the user/session-specific `agent-config.json`.
+
+For the safest Railway flow, configure a Railway deploy hook as the GitHub secret `RAILWAY_DEPLOY_HOOK_URL` and disable Railway's direct branch auto-deploy. The GitHub workflow will then build/publish the agent first and trigger Railway only after the matching binaries are available. If Railway deploys directly from GitHub before the workflow finishes, the app will temporarily block agent downloads for that build instead of serving an incompatible agent.
 
 ## Status
 
