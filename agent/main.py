@@ -768,7 +768,6 @@ def main():
     try:
         last_config_poll = 0.0
         last_heartbeat = 0.0
-        last_diag = 0.0
         while True:
             try:
                 # Prioritize command processing to reduce UI-to-execution latency.
@@ -784,13 +783,6 @@ def main():
                     agent.send_heartbeat()
                     last_heartbeat = now
 
-                if now - last_diag >= 8.0:
-                    print(
-                        "[agent] control loop alive "
-                        f"session={agent.session_id} "
-                        f"instance={getattr(agent, '_control_plane_instance', '-')}"
-                    )
-                    last_diag = now
             except Exception as e:
                 print(f"[agent] error in control loop: {e}")
 
@@ -804,6 +796,7 @@ def main():
             agent.stop_modbus_server,
             agent.stop,
             agent.send_runtime_update,
+            agent.send_disconnect,
         ]
         for cleanup_step in cleanup_steps:
             try:

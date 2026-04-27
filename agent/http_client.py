@@ -179,9 +179,7 @@ class HttpClientMixin:
             self._observe_control_plane_instance("/api/agent/commands", data.get("instance_id"))
             commands = data.get("commands", [])
             pending_before_drain = data.get("pending_before_drain", len(commands))
-            now = time.time()
-            last_diag = float(getattr(self, "_last_command_poll_diag", 0.0) or 0.0)
-            if commands or (now - last_diag) >= 8.0:
+            if commands:
                 print(
                     "[agent] command poll "
                     f"instance={getattr(self, '_control_plane_instance', '-')}"
@@ -300,6 +298,18 @@ class HttpClientMixin:
                 "message": message,
             },
             timeout=(1.0, 2.0),
+            critical=True,
+        )
+
+    def send_disconnect(self):
+        self._post(
+            "/api/agent/disconnect",
+            {
+                "session_id": self.session_id,
+                "agent_id": self.agent_id,
+                "timestamp": time.time(),
+            },
+            timeout=(0.8, 1.5),
             critical=True,
         )
 

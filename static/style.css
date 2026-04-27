@@ -1773,6 +1773,14 @@ button:disabled {
   gap: 4px;
 }
 
+.hmi-config-section {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
 .hmi-config-row {
   display: grid;
   grid-template-columns: 50px 1fr;
@@ -1791,12 +1799,13 @@ button:disabled {
 }
 
 .hmi-config-inline input {
-  width: 68px;
+  width: 92px;
   padding: 1px 4px;
 }
 
 .hmi-config-actions {
   display: flex;
+  gap: 6px;
   justify-content: flex-start;
   margin-top: 1px;
 }
