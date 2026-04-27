@@ -34,6 +34,81 @@ body {
   color: var(--text);
 }
 
+.downloads-body {
+  height: auto;
+  min-height: 100%;
+  overflow: auto;
+}
+
+.downloads-page {
+  width: min(1120px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 32px 0 48px;
+}
+
+.downloads-hero {
+  margin-bottom: 24px;
+}
+
+.downloads-hero h1 {
+  margin: 12px 0 8px;
+  font-size: 34px;
+  line-height: 1.1;
+}
+
+.downloads-hero p,
+.downloads-notes li,
+.download-card p {
+  color: var(--muted);
+}
+
+.back-link {
+  color: var(--text);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.downloads-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.download-card {
+  min-height: 220px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: var(--shadow);
+}
+
+.download-card h2,
+.downloads-notes h2 {
+  margin: 0;
+}
+
+.download-card .download-btn {
+  margin-top: auto;
+  text-align: center;
+}
+
+.downloads-notes {
+  margin-top: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px;
+}
+
+.downloads-notes ul {
+  margin: 12px 0 16px;
+  padding-left: 20px;
+}
+
 .page {
   width: 100%;
   height: 100%;
@@ -1612,6 +1687,12 @@ button:disabled {
   display: none;
 }
 
+.muted-note {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 /* PROCESS SIMULATION */
 
 .hmi-layout {
@@ -1964,6 +2045,14 @@ button:disabled {
 }
 
 @media (max-width: 900px) {
+  .downloads-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .downloads-hero h1 {
+    font-size: 28px;
+  }
+
   .hmi-layout {
     grid-template-columns: 1fr;
   }
