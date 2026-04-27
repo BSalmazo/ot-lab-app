@@ -757,6 +757,16 @@ async function refreshStatus() {
     if (byId("pollQuantity")) byId("pollQuantity").value = data.client?.poll_quantity ?? 4;
   }
 
+  const processConfigWindow = byId("processConfigWindow");
+  if (!processConfigWindow || processConfigWindow.classList.contains("hidden")) {
+    if (byId("plcHostInput")) byId("plcHostInput").value = data.process_sim?.server?.host || "127.0.0.1";
+    if (byId("plcPortInput")) byId("plcPortInput").value = data.process_sim?.server?.port || 15020;
+    if (byId("hmiHostInput")) byId("hmiHostInput").value = data.process_sim?.client?.host || "127.0.0.1";
+    if (byId("hmiPortInput")) byId("hmiPortInput").value = data.process_sim?.client?.port || 15020;
+    if (byId("processPollIntervalInput")) byId("processPollIntervalInput").value = data.process_sim?.client?.poll_interval ?? 0.5;
+    if (byId("processPollQuantityInput")) byId("processPollQuantityInput").value = data.process_sim?.client?.poll_quantity ?? 16;
+  }
+
   setText("monitorSnapshot", buildReadableSnapshot(data.monitor?.snapshot || {}));
   renderProcessSimulation(data);
 }
@@ -904,7 +914,7 @@ const WINDOW_SIZE_RULES = {
   actionsPreviewWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   alertsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
   processHmiWindow: { width: 500, height: 390, minWidth: 280, minHeight: 220, resizable: true, autoFit: true },
-  processConfigWindow: { width: 286, height: 150, minWidth: 240, minHeight: 120, resizable: true, autoFit: true },
+  processConfigWindow: { width: 360, height: 320, minWidth: 320, minHeight: 260, resizable: true, autoFit: true },
   processPlcWindow: { width: 384, height: 236, minWidth: 384, minHeight: 236, fixed: true },
 };
 const openAlertDetails = new Set();
@@ -1348,12 +1358,20 @@ async function sendProcessWrite(address, value, note = "") {
 
 async function startProcessSimulation() {
   const processType = byId("processTypeSelect")?.value || "tank_v1";
+  const plcHost = byId("plcHostInput")?.value || "127.0.0.1";
+  const plcPort = parseProcessInput("plcPortInput", 15020);
+  const hmiHost = byId("hmiHostInput")?.value || plcHost;
+  const hmiPort = parseProcessInput("hmiPortInput", plcPort);
+  const pollInterval = Number(byId("processPollIntervalInput")?.value || 0.5);
+  const pollQuantity = parseProcessInput("processPollQuantityInput", 16);
   const result = await apiPost("/api/process-sim/start", {
-    host: "127.0.0.1",
-    port: 15020,
-    poll_interval: 0.5,
+    plc_host: plcHost,
+    plc_port: plcPort,
+    hmi_host: hmiHost,
+    hmi_port: hmiPort,
+    poll_interval: pollInterval,
     poll_start: 0,
-    poll_quantity: 16,
+    poll_quantity: pollQuantity,
     process_type: processType,
   });
 
@@ -1398,6 +1416,34 @@ function parseProcessInput(id, fallback) {
   return toSafeInt(byId(id)?.value, fallback);
 }
 
+async function saveProcessConfig() {
+  const plcHost = byId("plcHostInput")?.value || "127.0.0.1";
+  const plcPort = parseProcessInput("plcPortInput", 15020);
+  const hmiHost = byId("hmiHostInput")?.value || plcHost;
+  const hmiPort = parseProcessInput("hmiPortInput", plcPort);
+  const pollInterval = Number(byId("processPollIntervalInput")?.value || 0.5);
+  const pollQuantity = parseProcessInput("processPollQuantityInput", 16);
+  const processType = byId("processTypeSelect")?.value || "tank_v1";
+
+  const result = await apiPost("/api/process-sim/configure", {
+    plc_host: plcHost,
+    plc_port: plcPort,
+    hmi_host: hmiHost,
+    hmi_port: hmiPort,
+    poll_interval: pollInterval,
+    poll_start: 0,
+    poll_quantity: pollQuantity,
+    process_type: processType,
+  });
+
+  if (!result.ok) {
+    alert(result.error || "Failed to save process config");
+    return result;
+  }
+  await refreshAll();
+  return result;
+}
+
 async function applyAlarmLimitConfig() {
   const status = await apiGet("/api/status");
   if (!status?.process_sim?.running) {
@@ -1438,6 +1484,7 @@ function bindProcessSimulationControls() {
   byId("simRunSwitchBtn")?.addEventListener("click", toggleProcessSimulation);
   byId("openProcessSimulationBtn")?.addEventListener("click", openProcessSimulationWindows);
   byId("openProcessConfigBtn")?.addEventListener("click", () => openWindow("processConfigWindow"));
+  byId("saveProcessConfigBtn")?.addEventListener("click", saveProcessConfig);
   byId("hmiPumpSwitchBtn")?.addEventListener("click", async () => {
     await toggleProcessActuator("pump", "pump");
   });

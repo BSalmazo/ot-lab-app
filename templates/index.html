@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OT Lab App</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260427a" />
+  <link rel="stylesheet" href="/static/style.css?v=20260427b" />
 </head>
 <body>
   <div class="page">
@@ -178,7 +178,7 @@
           </div>
           <div class="window-tools hmi-window-tools">
             <button id="simRunSwitchBtn" class="small hmi-switch" type="button">START / STOP</button>
-            <button id="openProcessConfigBtn" class="small secondary" type="button">Alarm/Limit</button>
+            <button id="openProcessConfigBtn" class="small secondary" type="button">Config</button>
             <button class="window-close" type="button" data-close-window="processHmiWindow">✕</button>
           </div>
         </div>
@@ -209,11 +209,35 @@
 
       <div class="floating-window hidden" id="processConfigWindow">
         <div class="window-head">
-          <span>Alarm / Limit Config</span>
+          <span>Process Config</span>
           <button class="window-close" type="button" data-close-window="processConfigWindow">✕</button>
         </div>
         <div class="window-body">
           <div class="hmi-config-panel">
+            <div class="hmi-config-section">PLC</div>
+            <div class="hmi-config-row">
+              <label>IP/Port</label>
+              <div class="hmi-config-inline">
+                <input id="plcHostInput" value="127.0.0.1" />
+                <input id="plcPortInput" type="number" min="1" max="65535" value="15020" />
+              </div>
+            </div>
+            <div class="hmi-config-section">HMI</div>
+            <div class="hmi-config-row">
+              <label>Target</label>
+              <div class="hmi-config-inline">
+                <input id="hmiHostInput" value="127.0.0.1" />
+                <input id="hmiPortInput" type="number" min="1" max="65535" value="15020" />
+              </div>
+            </div>
+            <div class="hmi-config-row">
+              <label>Poll</label>
+              <div class="hmi-config-inline">
+                <input id="processPollIntervalInput" type="number" min="0.1" step="0.1" value="0.5" />
+                <input id="processPollQuantityInput" type="number" min="1" max="125" value="16" />
+              </div>
+            </div>
+            <div class="hmi-config-section">Alarm / Limit</div>
             <div class="hmi-config-row">
               <label>AL L/H</label>
               <div class="hmi-config-inline">
@@ -229,6 +253,7 @@
               </div>
             </div>
             <div class="hmi-config-actions">
+              <button id="saveProcessConfigBtn" class="small secondary" type="button">Save Config</button>
               <button id="applyAlarmLimitBtn" class="small" type="button">Salvar</button>
             </div>
           </div>
@@ -383,6 +408,6 @@
   <script src="/static/protocols/modbus/ModbusActionForm.js?v=20260330p"></script>
   <script src="/static/protocols/modbus/ModbusTab.js?v=20260331a"></script>
   <script src="/static/actions/ActionsWindow.js?v=20260330p"></script>
-  <script src="/static/app.js?v=20260427a"></script>
+  <script src="/static/app.js?v=20260427b"></script>
 </body>
 </html>

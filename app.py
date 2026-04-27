@@ -44,7 +44,7 @@ app.add_middleware(
 
 BASE_DIR = Path(__file__).resolve().parent
 SESSION_COOKIE = "scada_session_id"
-AGENT_LIVENESS_WINDOW_SECONDS = 120
+AGENT_LIVENESS_WINDOW_SECONDS = 15
 SESSION_ID_PATTERN = re.compile(r"^sess_[A-Za-z0-9_-]{8,128}$")
 
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
@@ -117,12 +117,46 @@ class ProcessSimulationManager:
         self._server = None
         self._client = None
         self._config = {
-            "host": "127.0.0.1",
-            "port": 15020,
+            "plc_host": "127.0.0.1",
+            "plc_port": 15020,
+            "hmi_host": "127.0.0.1",
+            "hmi_port": 15020,
             "poll_interval": 0.5,
             "poll_start": 0,
             "poll_quantity": 16,
             "process_type": "tank_v1",
+        }
+
+    def _normalize_config(self, host=None, port=None, hmi_host=None, hmi_port=None, poll_interval=None, poll_start=None, poll_quantity=None, process_type=None):
+        plc_host = str(host or self._config["plc_host"]).strip() or "127.0.0.1"
+        plc_port = int(port if port is not None else self._config["plc_port"])
+        hmi_host = str(hmi_host or self._config["hmi_host"] or plc_host).strip() or plc_host
+        hmi_port = int(hmi_port if hmi_port is not None else self._config["hmi_port"])
+        poll_interval = float(poll_interval if poll_interval is not None else self._config["poll_interval"])
+        poll_start = int(poll_start if poll_start is not None else self._config["poll_start"])
+        poll_quantity = int(poll_quantity if poll_quantity is not None else self._config["poll_quantity"])
+        process_type = str(process_type or self._config["process_type"]).strip() or "tank_v1"
+
+        if process_type != "tank_v1":
+            raise ValueError("Unsupported process_type")
+        if plc_port < 1 or plc_port > 65535 or hmi_port < 1 or hmi_port > 65535:
+            raise ValueError("Ports must be between 1 and 65535")
+        if poll_interval <= 0:
+            raise ValueError("poll_interval must be > 0")
+        if poll_start < 0:
+            raise ValueError("poll_start must be >= 0")
+        if poll_quantity < 1 or poll_quantity > 125:
+            raise ValueError("poll_quantity must be between 1 and 125")
+
+        return {
+            "plc_host": plc_host,
+            "plc_port": plc_port,
+            "hmi_host": hmi_host,
+            "hmi_port": hmi_port,
+            "poll_interval": poll_interval,
+            "poll_start": poll_start,
+            "poll_quantity": poll_quantity,
+            "process_type": process_type,
         }
 
     def _snapshot_locked(self):
@@ -155,14 +189,14 @@ class ProcessSimulationManager:
             "process_type": self._config["process_type"],
             "server": {
                 "running": server_running,
-                "host": self._config["host"],
-                "port": self._config["port"],
+                "host": self._config["plc_host"],
+                "port": self._config["plc_port"],
                 "registers_preview": server_preview,
             },
             "client": {
                 "running": client_running,
-                "host": self._config["host"],
-                "port": self._config["port"],
+                "host": self._config["hmi_host"],
+                "port": self._config["hmi_port"],
                 "poll_interval": self._config["poll_interval"],
                 "poll_start": self._config["poll_start"],
                 "poll_quantity": self._config["poll_quantity"],
@@ -197,29 +231,36 @@ class ProcessSimulationManager:
 
         return self.snapshot()
 
-    def start(self, host=None, port=None, poll_interval=None, poll_start=None, poll_quantity=None, process_type=None):
-        host = str(host or self._config["host"]).strip() or "127.0.0.1"
-        port = int(port if port is not None else self._config["port"])
-        poll_interval = float(poll_interval if poll_interval is not None else self._config["poll_interval"])
-        poll_start = int(poll_start if poll_start is not None else self._config["poll_start"])
-        poll_quantity = int(poll_quantity if poll_quantity is not None else self._config["poll_quantity"])
-        process_type = str(process_type or self._config["process_type"]).strip() or "tank_v1"
+    def configure(self, host=None, port=None, hmi_host=None, hmi_port=None, poll_interval=None, poll_start=None, poll_quantity=None, process_type=None):
+        new_config = self._normalize_config(
+            host=host,
+            port=port,
+            hmi_host=hmi_host,
+            hmi_port=hmi_port,
+            poll_interval=poll_interval,
+            poll_start=poll_start,
+            poll_quantity=poll_quantity,
+            process_type=process_type,
+        )
+        with self._lock:
+            self._config.update(new_config)
+            return self._snapshot_locked()
 
-        if process_type != "tank_v1":
-            raise ValueError("Unsupported process_type")
-
-        if port < 1 or port > 65535:
-            raise ValueError("Port must be between 1 and 65535")
-        if poll_interval <= 0:
-            raise ValueError("poll_interval must be > 0")
-        if poll_start < 0:
-            raise ValueError("poll_start must be >= 0")
-        if poll_quantity < 1 or poll_quantity > 125:
-            raise ValueError("poll_quantity must be between 1 and 125")
+    def start(self, host=None, port=None, hmi_host=None, hmi_port=None, poll_interval=None, poll_start=None, poll_quantity=None, process_type=None):
+        new_config = self._normalize_config(
+            host=host,
+            port=port,
+            hmi_host=hmi_host,
+            hmi_port=hmi_port,
+            poll_interval=poll_interval,
+            poll_start=poll_start,
+            poll_quantity=poll_quantity,
+            process_type=process_type,
+        )
 
         self.stop()
 
-        server = SimpleModbusServer(host=host, port=port)
+        server = SimpleModbusServer(host=new_config["plc_host"], port=new_config["plc_port"])
         server_started = server.start()
         if not server_started:
             try:
@@ -229,29 +270,24 @@ class ProcessSimulationManager:
             raise RuntimeError("failed to start process simulation server")
 
         client = SimpleModbusClient(
-            host=host,
-            port=port,
-            poll_interval=poll_interval,
-            poll_start=poll_start,
-            poll_quantity=poll_quantity,
+            host=new_config["hmi_host"],
+            port=new_config["hmi_port"],
+            poll_interval=new_config["poll_interval"],
+            poll_start=new_config["poll_start"],
+            poll_quantity=new_config["poll_quantity"],
         )
         client_started = client.start()
 
         with self._lock:
-            self._config["host"] = host
-            self._config["port"] = port
-            self._config["poll_interval"] = poll_interval
-            self._config["poll_start"] = poll_start
-            self._config["poll_quantity"] = poll_quantity
-            self._config["process_type"] = process_type
+            self._config.update(new_config)
             self._server = server if server_started else None
             self._client = client if client_started else None
             return self._snapshot_locked()
 
     def write_register(self, address: int, value: int, unit_id: int = 1):
         with self._lock:
-            host = self._config["host"]
-            port = self._config["port"]
+            host = self._config["hmi_host"]
+            port = self._config["hmi_port"]
             running = bool(self._server and self._server.running)
 
         if not running:
@@ -1539,6 +1575,7 @@ def api_status(request: Request):
     agent_info = state["agent_info"]
     connected = is_agent_connected(state, now)
     agent_info["connected"] = connected
+    state["process_sim"] = process_sim.snapshot()
 
     response = JSONResponse({
         "agent": agent_info,
@@ -1550,7 +1587,7 @@ def api_status(request: Request):
         },
         "server": state["remote_server"],
         "client": state["remote_client"],
-        "process_sim": state.get("process_sim") or default_process_sim(),
+        "process_sim": state["process_sim"],
         "agent_config": state["agent_config"],
         "session_id": session_id,
         "instance_id": APP_INSTANCE_ID,
@@ -1578,7 +1615,41 @@ def api_events(request: Request):
 @app.get("/api/process-sim/status")
 def api_process_sim_status(request: Request):
     session_id, state = get_session_state_from_request(request)
-    response = JSONResponse({"ok": True, "process_sim": state.get("process_sim") or default_process_sim(), "session_id": session_id})
+    snapshot = process_sim.snapshot()
+    state["process_sim"] = snapshot
+    response = JSONResponse({"ok": True, "process_sim": snapshot, "session_id": session_id})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.post("/api/process-sim/configure")
+async def api_process_sim_configure(request: Request):
+    session_id, state = get_session_state_from_request(request)
+    try:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            payload = {}
+    except Exception:
+        payload = {}
+
+    try:
+        snapshot = process_sim.configure(
+            host=payload.get("plc_host") or payload.get("host"),
+            port=payload.get("plc_port") or payload.get("port"),
+            hmi_host=payload.get("hmi_host"),
+            hmi_port=payload.get("hmi_port"),
+            poll_interval=payload.get("poll_interval"),
+            poll_start=payload.get("poll_start"),
+            poll_quantity=payload.get("poll_quantity"),
+            process_type=payload.get("process_type"),
+        )
+    except Exception as e:
+        response = JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+
+    state["process_sim"] = snapshot
+    response = JSONResponse({"ok": True, "process_sim": snapshot, "session_id": session_id})
     set_session_cookie_if_needed(request, response, session_id)
     return response
 
@@ -1593,47 +1664,34 @@ async def api_process_sim_start(request: Request):
     except Exception:
         payload = {}
 
-    if not is_agent_connected(state):
-        response = JSONResponse(
-            {"ok": False, "error": "Agent local desconectado. Inicie o agente para rodar o simulador local."},
-            status_code=400,
-        )
-        set_session_cookie_if_needed(request, response, session_id)
-        return response
-    if not agent_supports_process_sim(state):
-        response = JSONResponse(
-            {
-                "ok": False,
-                "error": (
-                    "Este agente nao suporta process-sim local (process_sim_v1). "
-                    "Atualize o agente para a versao mais recente deste branch."
-                ),
-            },
-            status_code=400,
-        )
-        set_session_cookie_if_needed(request, response, session_id)
-        return response
-
-    host = str(payload.get("host") or "127.0.0.1")
-    port = int(payload.get("port") or 15020)
+    host = str(payload.get("plc_host") or payload.get("host") or "127.0.0.1")
+    port = int(payload.get("plc_port") or payload.get("port") or 15020)
+    hmi_host = str(payload.get("hmi_host") or host)
+    hmi_port = int(payload.get("hmi_port") or port)
     poll_interval = float(payload.get("poll_interval") or 0.5)
     poll_start = int(payload.get("poll_start") or 0)
     poll_quantity = int(payload.get("poll_quantity") or 16)
     process_type = str(payload.get("process_type") or "tank_v1")
 
-    queue_command(
-        session_id,
-        "START_PROCESS_SIM",
-        {
-            "host": host,
-            "port": port,
-            "poll_interval": poll_interval,
-            "poll_start": poll_start,
-            "poll_quantity": poll_quantity,
-            "process_type": process_type,
-        },
-    )
-    response = JSONResponse({"ok": True, "queued": True, "process_sim": state.get("process_sim") or default_process_sim()})
+    try:
+        snapshot = process_sim.start(
+            host=host,
+            port=port,
+            hmi_host=hmi_host,
+            hmi_port=hmi_port,
+            poll_interval=poll_interval,
+            poll_start=poll_start,
+            poll_quantity=poll_quantity,
+            process_type=process_type,
+        )
+    except Exception as e:
+        response = JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+
+    state["process_sim"] = snapshot
+    push_log_for_session(session_id, f"Process simulation started (PLC={host}:{port}, HMI target={hmi_host}:{hmi_port})")
+    response = JSONResponse({"ok": True, "queued": False, "process_sim": snapshot})
     set_session_cookie_if_needed(request, response, session_id)
     return response
 
@@ -1641,29 +1699,10 @@ async def api_process_sim_start(request: Request):
 @app.post("/api/process-sim/stop")
 def api_process_sim_stop(request: Request):
     session_id, state = get_session_state_from_request(request)
-    if not is_agent_connected(state):
-        response = JSONResponse(
-            {"ok": False, "error": "Agent local desconectado. Inicie o agente para controlar o simulador."},
-            status_code=400,
-        )
-        set_session_cookie_if_needed(request, response, session_id)
-        return response
-    if not agent_supports_process_sim(state):
-        response = JSONResponse(
-            {
-                "ok": False,
-                "error": (
-                    "Este agente nao suporta process-sim local (process_sim_v1). "
-                    "Atualize o agente para a versao mais recente deste branch."
-                ),
-            },
-            status_code=400,
-        )
-        set_session_cookie_if_needed(request, response, session_id)
-        return response
-
-    queue_command(session_id, "STOP_PROCESS_SIM", {})
-    response = JSONResponse({"ok": True, "queued": True, "process_sim": state.get("process_sim") or default_process_sim()})
+    snapshot = process_sim.stop()
+    state["process_sim"] = snapshot
+    push_log_for_session(session_id, "Process simulation stopped")
+    response = JSONResponse({"ok": True, "queued": False, "process_sim": snapshot})
     set_session_cookie_if_needed(request, response, session_id)
     return response
 
@@ -1685,33 +1724,15 @@ async def api_process_sim_write(request: Request):
         set_session_cookie_if_needed(request, response, session_id)
         return response
 
-    if not is_agent_connected(state):
-        response = JSONResponse(
-            {"ok": False, "error": "Agent local desconectado. Inicie o agente para escrever no simulador."},
-            status_code=400,
-        )
-        set_session_cookie_if_needed(request, response, session_id)
-        return response
-    if not agent_supports_process_sim(state):
-        response = JSONResponse(
-            {
-                "ok": False,
-                "error": (
-                    "Este agente nao suporta process-sim local (process_sim_v1). "
-                    "Atualize o agente para a versao mais recente deste branch."
-                ),
-            },
-            status_code=400,
-        )
+    try:
+        snapshot = process_sim.write_register(address=address, value=value, unit_id=unit_id)
+    except Exception as e:
+        response = JSONResponse({"ok": False, "error": str(e)}, status_code=400)
         set_session_cookie_if_needed(request, response, session_id)
         return response
 
-    queue_command(
-        session_id,
-        "WRITE_PROCESS_SIM",
-        {"address": address, "value": value, "unit_id": unit_id},
-    )
-    response = JSONResponse({"ok": True, "queued": True, "process_sim": state.get("process_sim") or default_process_sim()})
+    state["process_sim"] = snapshot
+    response = JSONResponse({"ok": True, "queued": False, "process_sim": snapshot})
     set_session_cookie_if_needed(request, response, session_id)
     return response
 
@@ -2463,6 +2484,21 @@ def agent_heartbeat(payload: dict = Body(...)):
         "client": state["remote_client"],
         "instance_id": APP_INSTANCE_ID,
     }
+
+
+@app.post("/api/agent/disconnect")
+def agent_disconnect(payload: dict = Body(...)):
+    session_id = payload.get("session_id")
+    if not session_id:
+        return JSONResponse({"ok": False, "error": "Missing session_id"}, status_code=400)
+
+    state = ensure_session_state(session_id)
+    agent_info = state["agent_info"]
+    agent_info["connected"] = False
+    agent_info["running"] = False
+    agent_info["last_seen"] = None
+    push_log_for_session(session_id, "Agent disconnected")
+    return {"ok": True, "instance_id": APP_INSTANCE_ID}
 
 
 @app.post("/api/agent/snapshot")
