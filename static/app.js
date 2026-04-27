@@ -1592,8 +1592,7 @@ async function loadAndRenderReleases() {
     const response = await apiGet("/api/releases/agent?refresh=1");
 
     if (!response.ok && response.releases && response.releases.length === 0) {
-      // No GitHub releases, show local fallback
-      container.innerHTML = '<div class="info-message">GitHub releases not available. Using local copies.</div>';
+      container.innerHTML = '<div class="info-message">GitHub releases not available. You can still try generating a package from the latest release endpoint.</div>';
       document.querySelector(".download-fallback")?.classList.remove("hidden");
       return;
     }
@@ -1608,9 +1607,13 @@ async function loadAndRenderReleases() {
 
     let html = "";
     for (const release of releases) {
+      const compatible = release.compatible_with_server !== false;
       const releaseType = release.type === "development" 
         ? '<span class="badge-dev">DEV</span>' 
         : '<span class="badge-stable">STABLE</span>';
+      const compatibilityBadge = compatible
+        ? ""
+        : '<span class="badge-dev">BUILDING</span>';
       
       const releaseDateRaw = release.updated_at || release.published_at;
       const publishDate = releaseDateRaw
@@ -1620,25 +1623,28 @@ async function loadAndRenderReleases() {
       html += `
         <div class="release-card">
           <div class="release-header">
-            <h4>${release.tag} ${releaseType}</h4>
+            <h4>${release.tag} ${releaseType} ${compatibilityBadge}</h4>
             <div class="release-date">Updated: ${publishDate}</div>
           </div>
           <div class="release-downloads">
       `;
 
       const assets = release.assets || {};
+      if (!compatible) {
+        html += '<div class="info-message">Agent binaries for this web build are still being published. Retry after the GitHub build finishes.</div>';
+      }
       
-      if (assets.windows) {
+      if (compatible && assets.windows) {
         html += `<a class="download-link" href="${getBundleDownloadUrl("windows")}" download>
           <span class="os-icon">🪟</span> Windows Bundle ZIP (agent + install)
         </a>`;
       }
-      if (assets.macos) {
+      if (compatible && assets.macos) {
         html += `<a class="download-link" href="${getBundleDownloadUrl("macos")}" download>
           <span class="os-icon">🍎</span> macOS Bundle ZIP (agent + install)
         </a>`;
       }
-      if (assets.linux) {
+      if (compatible && assets.linux) {
         html += `<a class="download-link" href="${getBundleDownloadUrl("linux")}" download>
           <span class="os-icon">🐧</span> Linux Bundle ZIP (agent + install)
         </a>`;
@@ -1651,7 +1657,7 @@ async function loadAndRenderReleases() {
     }
 
     container.innerHTML = html;
-    document.querySelector(".download-fallback")?.classList.add("hidden");
+    document.querySelector(".download-fallback")?.classList.toggle("hidden", response.release_ready !== false);
 
   } catch (err) {
     console.error("Error loading releases:", err);

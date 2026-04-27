@@ -121,12 +121,12 @@ export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 ## Auto-Update Available
 
 We're working on automated updates. For now, download new versions from the dashboard:
-https://your-ot-lab-site.com/downloads
+Open the OT Lab App dashboard and use the Download Agent button
 
 ---
 
 ## Support
 
 For issues or questions:
-- Email: support@your-ot-lab-site.com
-- Issues: https://github.com/your-org/ot-lab/issues
+- Email: the project maintainer
+- Issues: https://github.com/BSalmazo/ot-lab-app/issues

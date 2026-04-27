@@ -1,0 +1,33 @@
+{
+  "package_name": "trp_package",
+  "version": "2026-04-02",
+  "language": "English",
+  "purpose": "Inputs for drafting a Thesis Research Plan (TRP) from validated checkpoint evidence and deployment discussions.",
+  "validated_run": {
+    "run_id": "checkpoint_20260331_182606",
+    "overall_result": "CHECKPOINT APROVADO",
+    "source_report": "studies/checkpoint/evidence/checkpoint_20260331_182606/REPORT.md",
+    "source_json": "studies/checkpoint/evidence/checkpoint_20260331_182606/checkpoint_result.json"
+  },
+  "core_files": [
+    "studies/checkpoint/trp_package/TRP_MASTER_BRIEF.md",
+    "studies/checkpoint/trp_package/TRP_RESEARCH_CONTEXT_AND_OBJECTIVES.md",
+    "studies/checkpoint/trp_package/TRP_STATE_OF_ART_AND_GAP_MAP.md",
+    "studies/checkpoint/trp_package/TRP_PRELIMINARY_WORK_AND_VALIDATION.md",
+    "studies/checkpoint/trp_package/TRP_DEPLOYMENT_ARCHITECTURE_OT.md",
+    "studies/checkpoint/trp_package/TRP_WORKPLAN_GANTT.md",
+    "studies/checkpoint/trp_package/TRP_WRITING_PROMPT.md",
+    "studies/checkpoint/trp_package/README_FOR_CHATGPT_TRP.md"
+  ],
+  "supporting_evidence": [
+    "studies/checkpoint/CHECKPOINT_SUPER_DETALHADO.md",
+    "studies/checkpoint/evidence/checkpoint_20260331_182606/REPORT.md",
+    "studies/checkpoint/evidence/checkpoint_20260331_182606/checkpoint_result.json",
+    "studies/checkpoint/evidence/checkpoint_20260331_182606/derived_metrics.json",
+    "studies/checkpoint/evidence/checkpoint_20260331_182606/metadata.json"
+  ],
+  "notes": [
+    "Conversation may happen in Portuguese, but exported TRP artifacts must stay in English.",
+    "Network visibility constraints (SPAN/TAP/inline) are treated as architectural research variables, not implementation noise."
+  ]
+}

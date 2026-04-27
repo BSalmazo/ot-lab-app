@@ -1,0 +1,42 @@
+{
+  "command_id": "9e8a88bc-a678-4c09-9bef-cd5b2e4ea5a6",
+  "started_at": 1774974717.879942,
+  "finished_at": 1774974718.2152388,
+  "duration_s": 0.335,
+  "final_status": "done",
+  "final_message": "Response received for FC6",
+  "history": [
+    {
+      "ts": 1774974717.8799481,
+      "http_ok": true,
+      "http_status": 200,
+      "command": {
+        "id": "9e8a88bc-a678-4c09-9bef-cd5b2e4ea5a6",
+        "status": "queued",
+        "protocol": "modbus",
+        "function_id": "fc06_write_single_register",
+        "function_name": "Write Single Register",
+        "code_label": "06",
+        "created_at": 1774974717.87318,
+        "updated_at": 1774974717.87318,
+        "message": "Queued for agent execution"
+      }
+    },
+    {
+      "ts": 1774974718.199651,
+      "http_ok": true,
+      "http_status": 200,
+      "command": {
+        "id": "9e8a88bc-a678-4c09-9bef-cd5b2e4ea5a6",
+        "status": "done",
+        "protocol": "modbus",
+        "function_id": "fc06_write_single_register",
+        "function_name": "Write Single Register",
+        "code_label": "06",
+        "created_at": 1774974717.87318,
+        "updated_at": 1774974718.082846,
+        "message": "Response received for FC6"
+      }
+    }
+  ]
+}

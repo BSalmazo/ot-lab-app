@@ -1,0 +1,51 @@
+{
+  "overall": "CHECKPOINT APROVADO",
+  "results": [
+    {
+      "case": "CT1 Detecao basica",
+      "status": "PASS",
+      "detail": "Transition observed in 0.879s (threshold: <=3.0s)."
+    },
+    {
+      "case": "CT2 Interface correta",
+      "status": "PASS",
+      "detail": "Detected interfaces=['en0', 'lo0']; require >=2 non-ALL interfaces."
+    },
+    {
+      "case": "CT3 Escritas",
+      "status": "PASS",
+      "detail": "writes_detected true or WRITE_* event observed."
+    },
+    {
+      "case": "CT4 Excecoes",
+      "status": "PASS",
+      "detail": "EXCEPTION_RESPONSE event/alert observed."
+    },
+    {
+      "case": "CT5 Estado conexao",
+      "status": "PASS",
+      "detail": "Active->Inactive observed in 2.201s (expected around 2s)."
+    },
+    {
+      "case": "CT6 Acoes remotas",
+      "status": "PASS",
+      "detail": "Action final_status=done duration=0.335s."
+    },
+    {
+      "case": "CT7 Estabilidade",
+      "status": "PASS",
+      "detail": "events_http_ok_ratio=1.0000, duration_actual_s=2158.912."
+    }
+  ],
+  "metadata": {
+    "base_url": "http://127.0.0.1:8000",
+    "session_id": "sess_92c7874bfe77418daa4e3e200ac629f4",
+    "started_at": 1774974718.239347,
+    "finished_at": 1774976877.1510458,
+    "duration_actual_s": 2158.912,
+    "duration_requested_s": 3600,
+    "interval_s": 0.5,
+    "samples": 2472,
+    "events_http_ok_ratio": 1.0
+  }
+}

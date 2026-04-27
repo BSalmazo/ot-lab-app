@@ -1,0 +1,37 @@
+{
+  "run_id": "checkpoint_20260331_182606",
+  "snapshots_total": 2786,
+  "snapshots_ok": 2786,
+  "status_samples_total": 2789,
+  "command_samples_total": 2786,
+  "summary_detected_counts": {
+    "True": 2786
+  },
+  "state_counts": {
+    "Inactive": 2380,
+    "Active": 406
+  },
+  "interface_counts": {
+    "lo0": 2070,
+    "en0": 716
+  },
+  "max_events_window": 300,
+  "max_connection_history_window": 60,
+  "event_type_counts": {
+    "READ_RESPONSE": 241187,
+    "READ_REQUEST": 246461,
+    "WRITE_REQUEST": 892,
+    "EXCEPTION_RESPONSE": 346
+  },
+  "alert_type_counts": {
+    "WRITE_REQUEST": 892
+  },
+  "latest_command_count": 3,
+  "latest_command_status_counts": {
+    "done": 3
+  },
+  "latest_command_function_counts": {
+    "fc05_write_single_coil": 1,
+    "fc06_write_single_register": 2
+  }
+}
