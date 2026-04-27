@@ -201,8 +201,8 @@ class HttpClientMixin:
                 "session_id": self.session_id,
                 "server": dict(self.server_runtime),
                 "client": dict(self.client_runtime),
-                "process_sim": self.get_process_sim_snapshot(),
             }
+        payload["process_sim"] = self.get_process_sim_snapshot()
 
         if server_ref and server_ref.running:
             try:
