@@ -1171,6 +1171,8 @@ def queue_command(session_id: str, command_type: str, payload: dict):
         "type": command_type,
         "payload": payload,
         "created_at": time.time(),
+        "dispatched_at": None,
+        "dispatch_count": 0,
     }
     with lock:
         if "action_commands" not in state:
@@ -2374,10 +2376,36 @@ def agent_client_stop(request: Request):
 @app.get("/api/agent/commands")
 def get_agent_commands(session_id: str):
     state = ensure_session_state(session_id)
+    now = time.time()
     runtime_entries_to_log = []
     with lock:
-        commands = list(state["pending_commands"])
-        state["pending_commands"].clear()
+        commands = []
+        retained = []
+        for cmd in state["pending_commands"]:
+            cmd_type = cmd.get("type")
+            dispatched_at = cmd.get("dispatched_at")
+            dispatch_count = int(cmd.get("dispatch_count") or 0)
+
+            # Retry window for runtime/process commands in case the poll reply timed out.
+            retryable = cmd_type in {"START_PROCESS_SIM", "STOP_PROCESS_SIM", "WRITE_PROCESS_SIM"}
+            min_redelivery_s = 8 if retryable else 60
+            max_dispatches = 3 if retryable else 1
+
+            should_send = False
+            if dispatched_at is None:
+                should_send = True
+            elif retryable and dispatch_count < max_dispatches and (now - float(dispatched_at)) >= min_redelivery_s:
+                should_send = True
+
+            if should_send:
+                cmd["dispatched_at"] = now
+                cmd["dispatch_count"] = dispatch_count + 1
+                commands.append(cmd)
+
+            # Keep command until agent confirms via /api/agent/command_result.
+            retained.append(cmd)
+
+        state["pending_commands"] = retained
         for cmd in commands:
             if cmd.get("id") in (state.get("runtime_commands") or {}):
                 runtime_entry = update_runtime_command_status(
@@ -2425,6 +2453,7 @@ def agent_command_result(payload: dict = Body(...)):
 
     state = ensure_session_state(session_id)
     with lock:
+        state["pending_commands"] = [cmd for cmd in state.get("pending_commands", []) if cmd.get("id") != command_id]
         runtime_updated = update_runtime_command_status(
             state,
             command_id=command_id,
