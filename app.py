@@ -1305,12 +1305,22 @@ def expire_stale_runtime_commands(state: dict, session_id: str, now_ts=None):
         command_type = entry.get("type")
         if command_type == "START_PROCESS_SIM":
             current = state.get("process_sim") or default_process_sim()
-            current["running"] = False
-            current["server"]["running"] = False
-            current["client"]["running"] = False
-            current["client"]["last_error"] = entry["message"]
-            state["process_sim"] = current
-        push_log_for_session(session_id, f"{command_type} failed: {entry['message']}")
+            # If runtime telemetry already reports process running, do not flip UI to stopped
+            # just because explicit command confirmation was lost.
+            if bool(current.get("running")):
+                entry["status"] = "done"
+                entry["updated_at"] = now_ts
+                entry["message"] = "Confirmed by runtime telemetry (command result timeout)"
+                push_log_for_session(session_id, "START_PROCESS_SIM confirmed by runtime telemetry after command-result timeout")
+            else:
+                current["running"] = False
+                current["server"]["running"] = False
+                current["client"]["running"] = False
+                current["client"]["last_error"] = entry["message"]
+                state["process_sim"] = current
+                push_log_for_session(session_id, f"{command_type} failed: {entry['message']}")
+        else:
+            push_log_for_session(session_id, f"{command_type} failed: {entry['message']}")
 
 
 def build_process_control_status(state: dict, now_ts=None):
