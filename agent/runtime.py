@@ -329,7 +329,6 @@ class SimpleModbusClient:
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._thread.start()
-        time.sleep(2.0)
         return self.running
 
     def stop(self):

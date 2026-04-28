@@ -1260,7 +1260,7 @@ def has_pending_process_start(state: dict, now_ts=None):
         if entry.get("status") not in {"queued", "sent"}:
             continue
         updated_at = float(entry.get("updated_at") or entry.get("created_at") or 0)
-        if now_ts - updated_at <= 12:
+        if now_ts - updated_at <= 20:
             return True
     return False
 
@@ -1292,7 +1292,7 @@ def expire_stale_runtime_commands(state: dict, session_id: str, now_ts=None):
         if entry.get("status") not in {"queued", "sent"}:
             continue
         updated_at = float(entry.get("updated_at") or entry.get("created_at") or 0)
-        if now_ts - updated_at <= 12:
+        if now_ts - updated_at <= 20:
             continue
         entry["status"] = "error"
         entry["updated_at"] = now_ts

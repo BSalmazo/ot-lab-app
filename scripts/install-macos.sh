@@ -1,23 +1,34 @@
 #!/bin/bash
-# macOS Installation Script for OT Lab Local Runtime
-# This script removes the quarantine flag and sets proper permissions
+# OT Lab Local Runtime - macOS setup & launch
 
 set -e
 
-SCRIPT_VERSION="install-macos.sh 2026-04-24r5"
+SCRIPT_VERSION="install-macos.sh 2026-04-28r1"
 AGENT_NAME="otlab-agent-macos-amd64"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENT_PATH="$SCRIPT_DIR/$AGENT_NAME"
 CHECK_LOG="$SCRIPT_DIR/.otlab-agent-check.log"
 MANIFEST_PATH="$SCRIPT_DIR/otlab-bundle-manifest.json"
 
-echo "=================================================="
-echo "  OT Lab Local Runtime - macOS Installation"
-echo "=================================================="
-echo "  Script version: $SCRIPT_VERSION"
-echo ""
+VERBOSE=0
+for arg in "$@"; do
+    case "$arg" in
+        -v|--verbose) VERBOSE=1 ;;
+    esac
+done
 
-if [ -f "$MANIFEST_PATH" ]; then
+if [ $VERBOSE -eq 1 ]; then
+    echo "=================================================="
+    echo "  OT Lab Local Runtime - macOS Setup & Launch"
+    echo "=================================================="
+    echo "  Script version: $SCRIPT_VERSION"
+    echo ""
+else
+    echo ""
+    echo "  OT Lab Local Runtime"
+fi
+
+if [ $VERBOSE -eq 1 ] && [ -f "$MANIFEST_PATH" ]; then
     echo "📦 Bundle manifest found:"
     if command -v python3 >/dev/null 2>&1; then
         python3 - "$MANIFEST_PATH" <<'PY'
@@ -44,115 +55,83 @@ PY
     echo ""
 fi
 
-# Check if agent exists
 if [ ! -f "$AGENT_PATH" ]; then
     echo "❌ Error: Runtime binary not found at $AGENT_PATH"
-    echo ""
-    echo "Please download the Local Runtime first from the OT Lab dashboard:"
-    echo "  Open the OT Lab App dashboard and use the Download button"
+    echo "   Download it from the OT Lab dashboard."
     exit 1
 fi
 
-echo "✓ Found Local Runtime at: $AGENT_PATH"
-echo ""
+if [ $VERBOSE -eq 1 ]; then
+    echo "✓ Found Local Runtime at: $AGENT_PATH"
+    echo ""
+fi
 
-# Optional integrity check against manifest hash
 if [ -f "$MANIFEST_PATH" ] && command -v shasum >/dev/null 2>&1; then
     EXPECTED_SHA="$(grep -E '"binary_sha256"' "$MANIFEST_PATH" | head -n1 | sed -E 's/.*"binary_sha256"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
     if [ -n "$EXPECTED_SHA" ]; then
         CURRENT_SHA="$(shasum -a 256 "$AGENT_PATH" | awk '{print $1}')"
-        echo "🔐 Integrity check (SHA256):"
-        echo "   expected: $EXPECTED_SHA"
-        echo "   current : $CURRENT_SHA"
-        if [ "$EXPECTED_SHA" = "$CURRENT_SHA" ]; then
-            echo "   ✓ Hash match"
-        else
-            echo "   ❌ Hash mismatch! This binary does not match the downloaded bundle."
+        if [ "$EXPECTED_SHA" != "$CURRENT_SHA" ]; then
+            echo "❌ Integrity check failed: hash mismatch."
+            if [ $VERBOSE -eq 1 ]; then
+                echo "   expected: $EXPECTED_SHA"
+                echo "   current : $CURRENT_SHA"
+            fi
             exit 1
         fi
-        echo ""
+        if [ $VERBOSE -eq 1 ]; then
+            echo "🔐 Integrity check (SHA256):"
+            echo "   expected: $EXPECTED_SHA"
+            echo "   current : $CURRENT_SHA"
+            echo "   ✓ Hash match"
+            echo ""
+        fi
     fi
 fi
 
-# Step 1: Remove quarantine flag
-echo "📋 Step 1: Removing macOS quarantine flag..."
-if xattr -d com.apple.quarantine "$AGENT_PATH" 2>/dev/null; then
-    echo "   ✓ Quarantine flag removed"
-else
-    echo "   ℹ No quarantine flag found (may already be clean)"
+echo "  ✓ Integrity verified"
+
+if [ $VERBOSE -eq 1 ]; then
+    echo "📋 Removing macOS quarantine flag..."
 fi
-echo ""
-
-# Step 2: Set executable permissions
-echo "📋 Step 2: Setting executable permissions..."
-chmod +x "$AGENT_PATH"
-echo "   ✓ Permissions set"
-echo ""
-
-# Step 3: Verify it works
-echo "📋 Step 3: Verifying installation..."
-if [ -x "$AGENT_PATH" ]; then
-    echo "   ✓ Local Runtime is ready to use"
+if xattr -d com.apple.quarantine "$AGENT_PATH" 2>/dev/null; then
+    [ $VERBOSE -eq 1 ] && echo "   ✓ Quarantine flag removed"
 else
-    echo "   ❌ Error: Local Runtime is not executable"
+    [ $VERBOSE -eq 1 ] && echo "   ℹ No quarantine flag found"
+fi
+
+chmod +x "$AGENT_PATH"
+
+if [ ! -x "$AGENT_PATH" ]; then
+    echo "❌ Error: Runtime is not executable after chmod."
     exit 1
 fi
-echo ""
 
-# Step 4: Optional - Check Npcap/libpcap
-echo "📋 Step 4: Checking packet capture runtime..."
 set +e
 "$AGENT_PATH" --help >"$CHECK_LOG" 2>&1
 CHECK_RC=$?
 set -e
 
-if [ $CHECK_RC -eq 0 ]; then
-    echo "   ✓ Packet capture runtime is available"
-else
-    echo "   ⚠ Local Runtime check failed (possible libpcap issue)"
+if [ $CHECK_RC -ne 0 ]; then
     if command -v brew &> /dev/null; then
-        echo "   ↻ Trying automatic install: brew install libpcap"
-        if brew install libpcap; then
+        [ $VERBOSE -eq 1 ] && echo "   ↻ Trying: brew install libpcap"
+        if brew install libpcap >/dev/null 2>&1; then
             set +e
             "$AGENT_PATH" --help >"$CHECK_LOG" 2>&1
             CHECK_RC=$?
             set -e
-            if [ $CHECK_RC -eq 0 ]; then
-                echo "   ✓ libpcap installed and runtime check passed"
-            else
-                echo "   ❌ Runtime check still failing after install attempt"
-                echo "   See details in: $CHECK_LOG"
-                cat "$CHECK_LOG"
-                exit 1
-            fi
-        else
-            echo "   ❌ Failed to install libpcap via Homebrew"
-            echo "   See details in: $CHECK_LOG"
-            cat "$CHECK_LOG"
-            exit 1
         fi
-    else
-        echo "   ❌ Homebrew not found and runtime check failed"
-        echo "   Install Homebrew + libpcap, then retry:"
-        echo "     /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
-        echo "     brew install libpcap"
-        echo "   See details in: $CHECK_LOG"
-        cat "$CHECK_LOG"
+    fi
+    if [ $CHECK_RC -ne 0 ]; then
+        echo "❌ Runtime check failed (possible libpcap issue)."
+        echo "   Fix: brew install libpcap"
+        echo "   Details: $CHECK_LOG"
+        [ $VERBOSE -eq 1 ] && cat "$CHECK_LOG"
         exit 1
     fi
 fi
-echo ""
 
-echo "=================================================="
-echo "  Installation Complete! 🎉"
-echo "=================================================="
+echo "  ✓ Runtime ready"
 echo ""
-echo "To run the Local Runtime:"
-echo "  $AGENT_PATH"
+echo "  Starting Local Runtime UI..."
 echo ""
-echo "For more information, visit:"
-echo "  Open the OT Lab App dashboard"
-echo ""
-
-echo "Starting Local Runtime UI now..."
 exec "$AGENT_PATH" --gui
