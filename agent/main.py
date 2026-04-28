@@ -398,7 +398,7 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
                 runtime["server"]["registers_preview"] = server_ref.get_registers_preview(start=0, quantity=16)
             except Exception:
                 pass
-        if client_running:
+        if client_ref:
             try:
                 snap = client_ref.get_snapshot()
                 runtime["client"]["last_values"] = list(snap.get("last_values") or [])
@@ -407,6 +407,16 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
                 runtime["client"]["last_success_at"] = snap.get("last_success_at")
             except Exception:
                 pass
+
+        # If process was expected to be running but a worker thread died, surface a deterministic reason.
+        if bool(self.process_sim_runtime.get("running")) and not runtime["running"]:
+            if not runtime["client"].get("last_error"):
+                if not server_running and not client_running:
+                    runtime["client"]["last_error"] = "process server and client threads are not running"
+                elif not server_running:
+                    runtime["client"]["last_error"] = "process server thread is not running"
+                elif not client_running:
+                    runtime["client"]["last_error"] = "process client thread is not running"
         return runtime
 
     def start_process_sim(self, host, port, poll_interval, poll_start, poll_quantity, process_type):
@@ -788,6 +798,7 @@ def main():
     try:
         last_config_poll = 0.0
         last_heartbeat = 0.0
+        last_runtime_update = 0.0
         while True:
             try:
                 # Prioritize command processing to reduce UI-to-execution latency.
@@ -802,6 +813,10 @@ def main():
                 if now - last_heartbeat >= 1.0:
                     agent.send_heartbeat()
                     last_heartbeat = now
+
+                if now - last_runtime_update >= 1.0:
+                    agent.send_runtime_update()
+                    last_runtime_update = now
 
             except Exception as e:
                 print(f"[agent] error in control loop: {e}")
