@@ -2602,6 +2602,21 @@ def agent_runtime_update(payload: dict = Body(...)):
 
         state["process_sim"] = process_snapshot
 
+        # Auto-confirm a pending START_PROCESS_SIM if the runtime reports running=True.
+        # This handles cases where send_command_result failed but the process did start.
+        if process_snapshot["running"]:
+            commands = state.get("runtime_commands") or {}
+            for cmd_entry in commands.values():
+                if (
+                    cmd_entry.get("type") == "START_PROCESS_SIM"
+                    and cmd_entry.get("status") in {"queued", "sent"}
+                ):
+                    cmd_entry["status"] = "done"
+                    cmd_entry["updated_at"] = time.time()
+                    cmd_entry["message"] = "Confirmed via runtime update"
+                    push_log_for_session(session_id, "Process simulation start confirmed by local runtime")
+                    break
+
     current_server_running = state["remote_server"]["running"]
     current_client_running = state["remote_client"]["running"]
 
