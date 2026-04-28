@@ -1054,7 +1054,7 @@ button:disabled {
 }
 
 #processPlcWindow .window-body {
-  padding: 0;
+  padding: 4px;
   display: flex;
   align-items: flex-start;
   justify-content: center;
@@ -1971,8 +1971,6 @@ button:disabled {
 .plc-visual-shell {
   width: 100%;
   margin: 0;
-  padding: 4px;
-  box-sizing: border-box;
 }
 
 .plc-faceplate {
