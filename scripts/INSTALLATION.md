@@ -121,7 +121,7 @@ export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 ## Auto-Update Available
 
 We're working on automated updates. For now, download new versions from the dashboard:
-Open the OT Lab App dashboard and use the Download Runtime button
+Open the OT Lab App dashboard and use the Download button
 
 ---
 

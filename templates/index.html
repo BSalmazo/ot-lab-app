@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OT Lab App</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260427b" />
+  <link rel="stylesheet" href="/static/style.css?v=20260428a" />
 </head>
 <body>
   <div class="page">
@@ -28,7 +28,7 @@
               <h2>Local Runtime</h2>
               <div class="card-tools">
                 <button class="secondary small" id="openMonitorConfigBtn" type="button">Configure</button>
-                <button id="openAgentDownloadBtn" class="download-btn" type="button">Download Runtime</button>
+                <button id="openAgentDownloadBtn" class="download-btn" type="button">Download</button>
               </div>
             </div>
             <div id="agentStatus" class="status slim">-</div>
@@ -177,7 +177,6 @@
             </select>
           </div>
           <div class="window-tools hmi-window-tools">
-            <button id="openHmiAlarmBtn" class="small secondary" type="button">Alarms</button>
             <button id="openProcessConfigBtn" class="small secondary" type="button">Config</button>
             <button class="window-close" type="button" data-close-window="processHmiWindow">✕</button>
           </div>
@@ -197,6 +196,9 @@
                 </div>
                 <div class="stage-right-bottom">
                   <button id="hmiValveSwitchBtn" class="small hmi-switch" type="button">VALVE</button>
+                </div>
+                <div class="stage-left-bottom">
+                  <button id="openHmiAlarmBtn" class="small hmi-switch alarm" type="button">ALARMS</button>
                 </div>
               </div>
               <div id="hmiAlarmBanner" class="hmi-banner warning hidden">ALARM ACTIVE</div>
@@ -254,10 +256,9 @@
               </div>
             </div>
             <div class="hmi-config-row">
-              <label>Poll</label>
+              <label>Poll (s)</label>
               <div class="hmi-config-inline">
                 <input id="processPollIntervalInput" type="number" min="0.1" step="0.1" value="0.5" />
-                <input id="processPollQuantityInput" type="number" min="1" max="125" value="16" />
               </div>
             </div>
             <div class="hmi-config-actions">
@@ -271,7 +272,7 @@
         <div class="window-head">
           <span>PLC State</span>
           <div class="window-tools">
-            <button id="plcRunSwitchBtn" class="small hmi-switch" type="button">START / STOP</button>
+            <button id="plcRunSwitchBtn" class="small hmi-switch" type="button">START</button>
             <button class="window-close" type="button" data-close-window="processPlcWindow">✕</button>
           </div>
         </div>
@@ -418,6 +419,6 @@
   <script src="/static/protocols/modbus/ModbusActionForm.js?v=20260330p"></script>
   <script src="/static/protocols/modbus/ModbusTab.js?v=20260331a"></script>
   <script src="/static/actions/ActionsWindow.js?v=20260330p"></script>
-  <script src="/static/app.js?v=20260427b"></script>
+  <script src="/static/app.js?v=20260428a"></script>
 </body>
 </html>

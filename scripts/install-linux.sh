@@ -18,7 +18,7 @@ if [ ! -f "$AGENT_PATH" ]; then
     echo "❌ Error: Runtime binary not found at $AGENT_PATH"
     echo ""
     echo "Please download the Local Runtime first from the OT Lab dashboard:"
-    echo "  Open the OT Lab App dashboard and use the Download Runtime button"
+    echo "  Open the OT Lab App dashboard and use the Download button"
     exit 1
 fi
 
@@ -58,7 +58,7 @@ elif command -v yum &> /dev/null; then
         echo ""
         echo "   To install on CentOS/RHEL:"
         echo "     sudo yum install libpcap"
-fi
+    fi
 elif command -v pacman &> /dev/null; then
     # Arch Linux
     if pacman -Q libpcap &> /dev/null; then

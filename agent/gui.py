@@ -35,8 +35,8 @@ class RuntimeGui:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("OT Lab Local Runtime")
-        self.root.geometry("760x520")
-        self.root.minsize(620, 420)
+        self.root.geometry("680x430")
+        self.root.minsize(560, 360)
 
         self.process = None
         self.output_queue = Queue()
@@ -57,34 +57,18 @@ class RuntimeGui:
         title = ttk.Label(outer, text="OT Lab Local Runtime", font=("TkDefaultFont", 16, "bold"))
         title.pack(anchor="w")
 
-        subtitle = ttk.Label(
-            outer,
-            text="Local bridge for packet capture, Modbus services, and process PLC/HMI runtime.",
-        )
-        subtitle.pack(anchor="w", pady=(2, 12))
-
         info = ttk.Frame(outer)
-        info.pack(fill="x", pady=(0, 10))
-        self._info_row(info, "Status", self.status_var, 0)
+        info.pack(fill="x", pady=(12, 10))
+        self.status_value_label = self._info_row(info, "Status", self.status_var, 0)
         self._info_row(info, "Session", self.session_var, 1)
         self._info_row(info, "Web", self.server_var, 2)
 
         actions = ttk.Frame(outer)
         actions.pack(fill="x", pady=(0, 10))
-        ttk.Button(actions, text="Start Runtime", command=self.start_runtime).pack(side="left")
-        ttk.Button(actions, text="Stop Runtime", command=self.stop_runtime).pack(side="left", padx=(8, 0))
+        self.runtime_switch = ttk.Button(actions, text="Start Runtime", command=self.toggle_runtime)
+        self.runtime_switch.pack(side="left")
         ttk.Button(actions, text="Open Web Interface", command=self.open_web).pack(side="left", padx=(8, 0))
         ttk.Button(actions, text="Reload Config", command=self.reload_config).pack(side="left", padx=(8, 0))
-
-        caps = ttk.LabelFrame(outer, text="Capabilities")
-        caps.pack(fill="x", pady=(0, 10))
-        for text in (
-            "Capture Agent / IDS monitor",
-            "Modbus Server and Client runtime",
-            "Process PLC and HMI runtime",
-            "Web control-plane connection",
-        ):
-            ttk.Label(caps, text=f"• {text}").pack(anchor="w", padx=8, pady=1)
 
         log_frame = ttk.LabelFrame(outer, text="Runtime Log")
         log_frame.pack(fill="both", expand=True)
@@ -96,8 +80,17 @@ class RuntimeGui:
 
     def _info_row(self, parent, label, var, row):
         ttk.Label(parent, text=f"{label}:").grid(row=row, column=0, sticky="w", pady=2)
-        ttk.Label(parent, textvariable=var).grid(row=row, column=1, sticky="w", padx=(8, 0), pady=2)
+        value_label = ttk.Label(parent, textvariable=var)
+        value_label.grid(row=row, column=1, sticky="w", padx=(8, 0), pady=2)
         parent.columnconfigure(1, weight=1)
+        return value_label
+
+    def _set_running(self, running):
+        self.status_var.set("Running" if running else "Stopped")
+        if hasattr(self, "runtime_switch"):
+            self.runtime_switch.configure(text="Stop Runtime" if running else "Start Runtime")
+        if hasattr(self, "status_value_label"):
+            self.status_value_label.configure(foreground="#16a34a" if running else "")
 
     def _append_log(self, text):
         self.log.configure(state="normal")
@@ -116,6 +109,12 @@ class RuntimeGui:
         if url:
             webbrowser.open(url)
 
+    def toggle_runtime(self):
+        if self.process and self.process.poll() is None:
+            self.stop_runtime()
+        else:
+            self.start_runtime()
+
     def start_runtime(self):
         if self.process and self.process.poll() is None:
             self._append_log("[runtime-ui] Runtime is already running\n")
@@ -130,12 +129,12 @@ class RuntimeGui:
             text=True,
             bufsize=1,
         )
-        self.status_var.set("Running")
+        self._set_running(True)
         threading.Thread(target=self._read_process_output, daemon=True).start()
 
     def stop_runtime(self):
         if not self.process or self.process.poll() is not None:
-            self.status_var.set("Stopped")
+            self._set_running(False)
             return
         self._append_log("[runtime-ui] Stopping runtime\n")
         self.process.terminate()
@@ -143,7 +142,7 @@ class RuntimeGui:
             self.process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             self.process.kill()
-        self.status_var.set("Stopped")
+        self._set_running(False)
 
     def _read_process_output(self):
         try:
@@ -162,7 +161,7 @@ class RuntimeGui:
             pass
 
         if self.process and self.process.poll() is not None:
-            self.status_var.set("Stopped")
+            self._set_running(False)
         self.root.after(150, self._poll_output)
 
     def _on_close(self):
