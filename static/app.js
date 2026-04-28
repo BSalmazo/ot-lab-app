@@ -530,8 +530,6 @@ function renderProcessPlc(data) {
             <div><strong>Alarm L/H:</strong> ${regs.alarmLoThreshold} / ${regs.alarmHiThreshold}</div>
             <div><strong>Limit L/H:</strong> ${regs.limitLoThreshold} / ${regs.limitHiThreshold}</div>
             <div><strong>Tick:</strong> ${escapeHtml(regs.tick)}</div>
-            ${plcStatusText ? `<div class="plc-command-status">${escapeHtml(plcStatusText)}</div>` : ""}
-            ${processError && !plcOnline ? `<div class="plc-error"><strong>Error:</strong> ${escapeHtml(processError)}</div>` : ""}
           </div>
         </div>
 
