@@ -933,8 +933,8 @@ const WINDOW_SIZE_RULES = {
   actionsHistoryWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   actionsPreviewWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   alertsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
-  processHmiWindow: { width: 392, height: 286, minWidth: 372, minHeight: 268, resizable: true, autoFit: true },
-  processConfigWindow: { width: 318, height: 208, minWidth: 300, minHeight: 188, resizable: true, autoFit: true },
+  processHmiWindow: { width: 330, height: 252, minWidth: 330, minHeight: 252, fixed: true },
+  processConfigWindow: { width: 260, height: 178, minWidth: 260, minHeight: 178, fixed: true },
   processPlcWindow: { width: 384, height: 236, minWidth: 384, minHeight: 236, fixed: true },
 };
 const openAlertDetails = new Set();
@@ -1399,7 +1399,6 @@ async function startProcessSimulation() {
     return;
   }
 
-  openWindow("processHmiWindow");
   openWindow("processPlcWindow");
   if (result.queued) {
     processCommandPendingUntil = Date.now() + 5000;
@@ -1945,7 +1944,7 @@ function bindAlertDetails(containerId) {
 }
 
 function windowStateStorageKey(id) {
-  const variant = id === "processHmiWindow" ? "hmi_v8_" : (id === "processConfigWindow" ? "cfg_v5_" : "");
+  const variant = id === "processHmiWindow" ? "hmi_v9_" : (id === "processConfigWindow" ? "cfg_v6_" : "");
   return `${WINDOW_STATE_KEY_PREFIX}${variant}${id}`;
 }
 
