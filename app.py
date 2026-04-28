@@ -1243,18 +1243,106 @@ def update_runtime_command_status(
     return entry
 
 
+def runtime_command_label(entry: dict):
+    command_type = entry.get("type") or "Runtime command"
+    status = entry.get("status") or "-"
+    message = entry.get("message") or ""
+    suffix = f": {message}" if message else ""
+    return f"{command_type} {status}{suffix}"
+
+
 def has_pending_process_start(state: dict, now_ts=None):
     now_ts = time.time() if now_ts is None else now_ts
     commands = state.get("runtime_commands") or {}
     for entry in commands.values():
         if entry.get("type") != "START_PROCESS_SIM":
             continue
-        if entry.get("status") not in {"queued", "sent", "done"}:
+        if entry.get("status") not in {"queued", "sent"}:
             continue
         updated_at = float(entry.get("updated_at") or entry.get("created_at") or 0)
         if now_ts - updated_at <= 12:
             return True
     return False
+
+
+def get_latest_runtime_command(state: dict, command_types=None):
+    commands = state.get("runtime_commands") or {}
+    if not commands:
+        return None
+    allowed = set(command_types or [])
+    candidates = []
+    for command_id, entry in commands.items():
+        if allowed and entry.get("type") not in allowed:
+            continue
+        item = dict(entry)
+        item["id"] = command_id
+        candidates.append(item)
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: float(item.get("updated_at") or item.get("created_at") or 0))
+
+
+def expire_stale_runtime_commands(state: dict, session_id: str, now_ts=None):
+    now_ts = time.time() if now_ts is None else now_ts
+    commands = state.get("runtime_commands") or {}
+    expired = []
+    for command_id, entry in commands.items():
+        if entry.get("type") not in {"START_PROCESS_SIM", "STOP_PROCESS_SIM", "WRITE_PROCESS_SIM"}:
+            continue
+        if entry.get("status") not in {"queued", "sent"}:
+            continue
+        updated_at = float(entry.get("updated_at") or entry.get("created_at") or 0)
+        if now_ts - updated_at <= 12:
+            continue
+        entry["status"] = "error"
+        entry["updated_at"] = now_ts
+        entry["message"] = "Local runtime did not confirm the command in time"
+        expired.append(entry)
+
+    for entry in expired:
+        command_type = entry.get("type")
+        if command_type == "START_PROCESS_SIM":
+            current = state.get("process_sim") or default_process_sim()
+            current["running"] = False
+            current["server"]["running"] = False
+            current["client"]["running"] = False
+            current["client"]["last_error"] = entry["message"]
+            state["process_sim"] = current
+        push_log_for_session(session_id, f"{command_type} failed: {entry['message']}")
+
+
+def build_process_control_status(state: dict, now_ts=None):
+    now_ts = time.time() if now_ts is None else now_ts
+    latest = get_latest_runtime_command(
+        state,
+        {"START_PROCESS_SIM", "STOP_PROCESS_SIM", "WRITE_PROCESS_SIM"},
+    )
+    pending = [
+        entry for entry in (state.get("runtime_commands") or {}).values()
+        if entry.get("type") in {"START_PROCESS_SIM", "STOP_PROCESS_SIM", "WRITE_PROCESS_SIM"}
+        and entry.get("status") in {"queued", "sent"}
+    ]
+    if not latest:
+        return {
+            "runtime": "agent" if should_run_process_on_agent(state) else "web",
+            "latest": None,
+            "pending_count": len(pending),
+        }
+
+    age_s = max(0.0, now_ts - float(latest.get("updated_at") or latest.get("created_at") or now_ts))
+    return {
+        "runtime": "agent" if should_run_process_on_agent(state) else "web",
+        "pending_count": len(pending),
+        "latest": {
+            "id": latest.get("id"),
+            "type": latest.get("type"),
+            "status": latest.get("status"),
+            "message": latest.get("message", ""),
+            "age_s": round(age_s, 1),
+            "created_at": latest.get("created_at"),
+            "updated_at": latest.get("updated_at"),
+        },
+    }
 
 
 def build_agent_config(request: Request, session_id: str, state: dict):
@@ -1635,6 +1723,7 @@ def api_status(request: Request):
     agent_info = state["agent_info"]
     connected = is_agent_connected(state, now)
     agent_info["connected"] = connected
+    expire_stale_runtime_commands(state, session_id, now)
     web_process_snapshot = process_sim.snapshot()
     if web_process_snapshot.get("running") or not should_run_process_on_agent(state):
         state["process_sim"] = web_process_snapshot
@@ -1650,6 +1739,7 @@ def api_status(request: Request):
         "server": state["remote_server"],
         "client": state["remote_client"],
         "process_sim": state["process_sim"],
+        "process_control": build_process_control_status(state, now),
         "agent_config": state["agent_config"],
         "session_id": session_id,
         "instance_id": APP_INSTANCE_ID,
@@ -1662,12 +1752,14 @@ def api_status(request: Request):
 @app.get("/api/events")
 def api_events(request: Request):
     session_id, state = get_session_state_from_request(request)
+    expire_stale_runtime_commands(state, session_id)
     response = JSONResponse({
         "events": list(state["events"]),
         "alerts": list(state["alerts"]),
         "logs": list(state["logs"]),
         "modbus_summary": build_modbus_summary(state),
         "connection_history": build_connection_history(state),
+        "process_control": build_process_control_status(state),
         "session_id": session_id,
     })
     set_session_cookie_if_needed(request, response, session_id)
@@ -2282,17 +2374,20 @@ def agent_client_stop(request: Request):
 @app.get("/api/agent/commands")
 def get_agent_commands(session_id: str):
     state = ensure_session_state(session_id)
+    runtime_entries_to_log = []
     with lock:
         commands = list(state["pending_commands"])
         state["pending_commands"].clear()
         for cmd in commands:
             if cmd.get("id") in (state.get("runtime_commands") or {}):
-                update_runtime_command_status(
+                runtime_entry = update_runtime_command_status(
                     state,
                     command_id=cmd.get("id"),
                     status="sent",
                     message="Delivered to runtime",
                 )
+                if runtime_entry:
+                    runtime_entries_to_log.append(dict(runtime_entry))
             if cmd.get("type") == "RUN_MODBUS_ACTION":
                 update_action_command_status(
                     state,
@@ -2300,6 +2395,8 @@ def get_agent_commands(session_id: str):
                     status="sent",
                     message="Delivered to agent",
                 )
+    for runtime_entry in runtime_entries_to_log:
+        push_log_for_session(session_id, runtime_command_label(runtime_entry))
     if commands:
         print(
             f"[app:{APP_INSTANCE_ID}] command poll hit "
@@ -2342,6 +2439,7 @@ def agent_command_result(payload: dict = Body(...)):
         )
 
     if runtime_updated:
+        push_log_for_session(session_id, runtime_command_label(runtime_updated))
         command_type = runtime_updated.get("type")
         if command_type == "START_PROCESS_SIM" and status == "error":
             current = state.get("process_sim") or default_process_sim()
