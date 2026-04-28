@@ -1020,17 +1020,15 @@ button:disabled {
   height: 252px;
   min-width: 330px;
   min-height: 252px;
-  max-width: 330px;
-  max-height: 252px;
 }
 
 #processConfigWindow {
   width: 260px;
-  height: 178px;
+  height: 198px;
   min-width: 260px;
-  min-height: 178px;
+  min-height: 198px;
   max-width: 260px;
-  max-height: 178px;
+  max-height: 198px;
 }
 
 #processConfigWindow .window-head {
@@ -1048,17 +1046,17 @@ button:disabled {
 
 #processPlcWindow {
   width: 384px;
-  height: 266px;
+  height: 210px;
   min-width: 384px;
-  min-height: 266px;
+  min-height: 210px;
   max-width: 384px;
-  max-height: 266px;
+  max-height: 210px;
 }
 
 #processPlcWindow .window-body {
   padding: 0;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   overflow: hidden;
 }
@@ -1845,7 +1843,15 @@ button:disabled {
 }
 
 #processConfigWindow .hmi-config-inline input[type="number"] {
-  width: 58px;
+  width: 64px;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+#processConfigWindow .hmi-config-inline input[type="number"]::-webkit-inner-spin-button,
+#processConfigWindow .hmi-config-inline input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .hmi-config-actions {
@@ -2091,6 +2097,13 @@ button:disabled {
   padding: 4px 6px;
   font-size: 9px;
   line-height: 1.25;
+}
+
+.plc-error {
+  color: #b91c1c;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @keyframes plcBlink {

@@ -453,6 +453,7 @@ function renderProcessPlc(data) {
   const processSim = data?.process_sim || {};
   const serverRunning = !!processSim?.server?.running;
   const clientRunning = !!processSim?.client?.running;
+  const processError = String(processSim?.client?.last_error || "").trim();
   const lastSuccessTs = Number(processSim?.client?.last_success_at || 0);
   const pollAgeS = lastSuccessTs > 0 ? (Date.now() / 1000 - lastSuccessTs) : Infinity;
   const pollFresh = Number.isFinite(pollAgeS) && pollAgeS <= 2.5;
@@ -519,6 +520,7 @@ function renderProcessPlc(data) {
             <div><strong>Alarm L/H:</strong> ${regs.alarmLoThreshold} / ${regs.alarmHiThreshold}</div>
             <div><strong>Limit L/H:</strong> ${regs.limitLoThreshold} / ${regs.limitHiThreshold}</div>
             <div><strong>Tick:</strong> ${escapeHtml(regs.tick)}</div>
+            ${processError && !plcOnline ? `<div class="plc-error"><strong>Error:</strong> ${escapeHtml(processError)}</div>` : ""}
           </div>
         </div>
 
@@ -933,9 +935,9 @@ const WINDOW_SIZE_RULES = {
   actionsHistoryWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   actionsPreviewWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   alertsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
-  processHmiWindow: { width: 330, height: 252, minWidth: 330, minHeight: 252, fixed: true },
-  processConfigWindow: { width: 260, height: 178, minWidth: 260, minHeight: 178, fixed: true },
-  processPlcWindow: { width: 384, height: 236, minWidth: 384, minHeight: 236, fixed: true },
+  processHmiWindow: { width: 330, height: 252, minWidth: 330, minHeight: 252, resizable: true },
+  processConfigWindow: { width: 260, height: 198, minWidth: 260, minHeight: 198, fixed: true },
+  processPlcWindow: { width: 384, height: 210, minWidth: 384, minHeight: 210, fixed: true },
 };
 const openAlertDetails = new Set();
 let lastAlertsFingerprint = "";
@@ -1944,7 +1946,7 @@ function bindAlertDetails(containerId) {
 }
 
 function windowStateStorageKey(id) {
-  const variant = id === "processHmiWindow" ? "hmi_v9_" : (id === "processConfigWindow" ? "cfg_v6_" : "");
+  const variant = id === "processHmiWindow" ? "hmi_v10_" : (id === "processConfigWindow" ? "cfg_v7_" : "");
   return `${WINDOW_STATE_KEY_PREFIX}${variant}${id}`;
 }
 
