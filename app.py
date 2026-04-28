@@ -1249,6 +1249,24 @@ def agent_supports_process_sim(state: dict) -> bool:
     return "process_sim_v1" in caps
 
 
+def should_run_process_on_agent(state: dict) -> bool:
+    return is_agent_connected(state) and agent_supports_process_sim(state)
+
+
+def sync_agent_filter_to_process_port(state: dict, port: int):
+    try:
+        port = int(port)
+    except Exception:
+        return
+    if port < 1 or port > 65535:
+        return
+    state["agent_config"]["iface"] = state["agent_config"].get("iface") or "ALL"
+    state["agent_config"]["mode"] = state["agent_config"].get("mode") or "MONITORING"
+    state["agent_config"]["port_mode"] = "CUSTOM"
+    state["agent_config"]["custom_ports"] = [port]
+    state["agent_config"]["updated_at"] = time.time()
+
+
 def should_log_agent_event(state: dict, payload: dict) -> bool:
     event_type = normalize_event_type(payload.get("type"))
     function_code = payload.get("function_code")
@@ -1575,7 +1593,9 @@ def api_status(request: Request):
     agent_info = state["agent_info"]
     connected = is_agent_connected(state, now)
     agent_info["connected"] = connected
-    state["process_sim"] = process_sim.snapshot()
+    web_process_snapshot = process_sim.snapshot()
+    if web_process_snapshot.get("running") or not should_run_process_on_agent(state):
+        state["process_sim"] = web_process_snapshot
 
     response = JSONResponse({
         "agent": agent_info,
@@ -1649,6 +1669,8 @@ async def api_process_sim_configure(request: Request):
         return response
 
     state["process_sim"] = snapshot
+    if should_run_process_on_agent(state):
+        sync_agent_filter_to_process_port(state, snapshot["server"]["port"])
     response = JSONResponse({"ok": True, "process_sim": snapshot, "session_id": session_id})
     set_session_cookie_if_needed(request, response, session_id)
     return response
@@ -1673,8 +1695,9 @@ async def api_process_sim_start(request: Request):
     poll_quantity = int(payload.get("poll_quantity") or 16)
     process_type = str(payload.get("process_type") or "tank_v1")
 
-    try:
-        snapshot = process_sim.start(
+    if should_run_process_on_agent(state):
+        process_sim.stop()
+        snapshot = process_sim.configure(
             host=host,
             port=port,
             hmi_host=hmi_host,
@@ -1684,14 +1707,42 @@ async def api_process_sim_start(request: Request):
             poll_quantity=poll_quantity,
             process_type=process_type,
         )
-    except Exception as e:
-        response = JSONResponse({"ok": False, "error": str(e)}, status_code=400)
-        set_session_cookie_if_needed(request, response, session_id)
-        return response
+        state["process_sim"] = snapshot
+        sync_agent_filter_to_process_port(state, port)
+        queue_command(
+            session_id,
+            "START_PROCESS_SIM",
+            {
+                "host": host,
+                "port": port,
+                "poll_interval": poll_interval,
+                "poll_start": poll_start,
+                "poll_quantity": poll_quantity,
+                "process_type": process_type,
+            },
+        )
+        push_log_for_session(session_id, f"Process simulation start requested on local agent (PLC={host}:{port})")
+        response = JSONResponse({"ok": True, "queued": True, "process_sim": state["process_sim"], "runtime": "agent"})
+    else:
+        try:
+            snapshot = process_sim.start(
+                host=host,
+                port=port,
+                hmi_host=hmi_host,
+                hmi_port=hmi_port,
+                poll_interval=poll_interval,
+                poll_start=poll_start,
+                poll_quantity=poll_quantity,
+                process_type=process_type,
+            )
+        except Exception as e:
+            response = JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+            set_session_cookie_if_needed(request, response, session_id)
+            return response
 
-    state["process_sim"] = snapshot
-    push_log_for_session(session_id, f"Process simulation started (PLC={host}:{port}, HMI target={hmi_host}:{hmi_port})")
-    response = JSONResponse({"ok": True, "queued": False, "process_sim": snapshot})
+        state["process_sim"] = snapshot
+        push_log_for_session(session_id, f"Process simulation started in web runtime (PLC={host}:{port}, HMI target={hmi_host}:{hmi_port})")
+        response = JSONResponse({"ok": True, "queued": False, "process_sim": snapshot, "runtime": "web"})
     set_session_cookie_if_needed(request, response, session_id)
     return response
 
@@ -1699,10 +1750,16 @@ async def api_process_sim_start(request: Request):
 @app.post("/api/process-sim/stop")
 def api_process_sim_stop(request: Request):
     session_id, state = get_session_state_from_request(request)
-    snapshot = process_sim.stop()
-    state["process_sim"] = snapshot
-    push_log_for_session(session_id, "Process simulation stopped")
-    response = JSONResponse({"ok": True, "queued": False, "process_sim": snapshot})
+    if should_run_process_on_agent(state):
+        queue_command(session_id, "STOP_PROCESS_SIM", {})
+        snapshot = state.get("process_sim") or process_sim.snapshot()
+        push_log_for_session(session_id, "Process simulation stop requested on local agent")
+        response = JSONResponse({"ok": True, "queued": True, "process_sim": snapshot, "runtime": "agent"})
+    else:
+        snapshot = process_sim.stop()
+        state["process_sim"] = snapshot
+        push_log_for_session(session_id, "Process simulation stopped")
+        response = JSONResponse({"ok": True, "queued": False, "process_sim": snapshot, "runtime": "web"})
     set_session_cookie_if_needed(request, response, session_id)
     return response
 
@@ -1724,15 +1781,23 @@ async def api_process_sim_write(request: Request):
         set_session_cookie_if_needed(request, response, session_id)
         return response
 
-    try:
-        snapshot = process_sim.write_register(address=address, value=value, unit_id=unit_id)
-    except Exception as e:
-        response = JSONResponse({"ok": False, "error": str(e)}, status_code=400)
-        set_session_cookie_if_needed(request, response, session_id)
-        return response
+    if should_run_process_on_agent(state):
+        queue_command(
+            session_id,
+            "WRITE_PROCESS_SIM",
+            {"address": address, "value": value, "unit_id": unit_id},
+        )
+        response = JSONResponse({"ok": True, "queued": True, "process_sim": state.get("process_sim") or process_sim.snapshot(), "runtime": "agent"})
+    else:
+        try:
+            snapshot = process_sim.write_register(address=address, value=value, unit_id=unit_id)
+        except Exception as e:
+            response = JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+            set_session_cookie_if_needed(request, response, session_id)
+            return response
 
-    state["process_sim"] = snapshot
-    response = JSONResponse({"ok": True, "queued": False, "process_sim": snapshot})
+        state["process_sim"] = snapshot
+        response = JSONResponse({"ok": True, "queued": False, "process_sim": snapshot, "runtime": "web"})
     set_session_cookie_if_needed(request, response, session_id)
     return response
 

@@ -1,4 +1,5 @@
 import socket
+import signal
 import threading
 import time
 from collections import defaultdict, deque
@@ -788,6 +789,10 @@ def main():
 
             time.sleep(0.25)
     except KeyboardInterrupt:
+        try:
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+        except Exception:
+            pass
         print("\n[agent] stopping...")
     finally:
         cleanup_steps = [
