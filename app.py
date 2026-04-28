@@ -1833,6 +1833,24 @@ async def api_process_sim_start(request: Request):
     process_type = str(payload.get("process_type") or "tank_v1")
 
     if should_run_process_on_agent(state):
+        current = state.get("process_sim") or default_process_sim()
+        same_running_config = (
+            bool(current.get("running"))
+            and str((current.get("server") or {}).get("host")) == host
+            and int((current.get("server") or {}).get("port") or 0) == port
+            and str((current.get("client") or {}).get("host")) == hmi_host
+            and int((current.get("client") or {}).get("port") or 0) == hmi_port
+            and float((current.get("client") or {}).get("poll_interval") or 0) == poll_interval
+            and int((current.get("client") or {}).get("poll_start") or 0) == poll_start
+            and int((current.get("client") or {}).get("poll_quantity") or 0) == poll_quantity
+            and str(current.get("process_type") or "tank_v1") == process_type
+        )
+        if same_running_config:
+            push_log_for_session(session_id, "Process simulation start ignored: runtime already running with same config")
+            response = JSONResponse({"ok": True, "queued": False, "process_sim": current, "runtime": "agent"})
+            set_session_cookie_if_needed(request, response, session_id)
+            return response
+
         process_sim.stop()
         snapshot = process_sim.configure(
             host=host,

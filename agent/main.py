@@ -414,6 +414,25 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
         if process_type != "tank_v1":
             raise RuntimeError("unsupported process_type")
 
+        # Idempotent start: if runtime already matches, keep it running.
+        with self.runtime_lock:
+            already_running = bool(self.process_sim_runtime.get("running"))
+            current_server = self.process_sim_runtime.get("server") or {}
+            current_client = self.process_sim_runtime.get("client") or {}
+            if (
+                already_running
+                and str(current_server.get("host")) == str(host)
+                and int(current_server.get("port") or 0) == int(port)
+                and str(current_client.get("host")) == str(host)
+                and int(current_client.get("port") or 0) == int(port)
+                and float(current_client.get("poll_interval") or 0) == float(poll_interval)
+                and int(current_client.get("poll_start") or 0) == int(poll_start)
+                and int(current_client.get("poll_quantity") or 0) == int(poll_quantity)
+                and str(self.process_sim_runtime.get("process_type") or "tank_v1") == process_type
+            ):
+                print("[agent] process simulation already running with same config; ignoring duplicate START_PROCESS_SIM")
+                return
+
         self.stop_process_sim()
 
         server = SimpleModbusServer(host=host, port=port)
