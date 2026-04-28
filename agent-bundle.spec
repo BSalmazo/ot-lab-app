@@ -45,6 +45,7 @@ a = Analysis(
         'requests',
         'urllib3',
         'certifi',
+        'tkinter',
     ],
     hookspath=[],
     hooksconfig={},

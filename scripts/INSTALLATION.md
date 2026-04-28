@@ -1,6 +1,6 @@
-# OT Lab Agent - Installation Scripts
+# OT Lab Local Runtime - Installation Scripts
 
-These scripts handle platform-specific requirements for running the OT Lab Agent after download.
+These scripts handle platform-specific requirements for running the OT Lab Local Runtime after download.
 
 ## Why These Scripts?
 
@@ -121,7 +121,7 @@ export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 ## Auto-Update Available
 
 We're working on automated updates. For now, download new versions from the dashboard:
-Open the OT Lab App dashboard and use the Download Agent button
+Open the OT Lab App dashboard and use the Download Runtime button
 
 ---
 

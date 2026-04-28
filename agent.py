@@ -17,6 +17,15 @@ def ensure_dependencies():
 
 
 def run():
+    args = list(sys.argv[1:])
+    if "--gui" in args:
+        from agent.gui import main as gui_main
+        gui_main()
+        return
+
+    if "--cli" in args:
+        sys.argv = [sys.argv[0], *[arg for arg in args if arg != "--cli"]]
+
     from agent.main import main
     main()
 

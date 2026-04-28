@@ -1,5 +1,5 @@
 #!/bin/bash
-# macOS Installation Script for OT Lab Agent
+# macOS Installation Script for OT Lab Local Runtime
 # This script removes the quarantine flag and sets proper permissions
 
 set -e
@@ -12,7 +12,7 @@ CHECK_LOG="$SCRIPT_DIR/.otlab-agent-check.log"
 MANIFEST_PATH="$SCRIPT_DIR/otlab-bundle-manifest.json"
 
 echo "=================================================="
-echo "  OT Lab Agent - macOS Installation"
+echo "  OT Lab Local Runtime - macOS Installation"
 echo "=================================================="
 echo "  Script version: $SCRIPT_VERSION"
 echo ""
@@ -46,14 +46,14 @@ fi
 
 # Check if agent exists
 if [ ! -f "$AGENT_PATH" ]; then
-    echo "❌ Error: Agent not found at $AGENT_PATH"
+    echo "❌ Error: Runtime binary not found at $AGENT_PATH"
     echo ""
-    echo "Please download the agent first from the OT Lab dashboard:"
-    echo "  Open the OT Lab App dashboard and use the Download Agent button"
+    echo "Please download the Local Runtime first from the OT Lab dashboard:"
+    echo "  Open the OT Lab App dashboard and use the Download Runtime button"
     exit 1
 fi
 
-echo "✓ Found agent at: $AGENT_PATH"
+echo "✓ Found Local Runtime at: $AGENT_PATH"
 echo ""
 
 # Optional integrity check against manifest hash
@@ -92,9 +92,9 @@ echo ""
 # Step 3: Verify it works
 echo "📋 Step 3: Verifying installation..."
 if [ -x "$AGENT_PATH" ]; then
-    echo "   ✓ Agent is ready to use"
+    echo "   ✓ Local Runtime is ready to use"
 else
-    echo "   ❌ Error: Agent is not executable"
+    echo "   ❌ Error: Local Runtime is not executable"
     exit 1
 fi
 echo ""
@@ -109,7 +109,7 @@ set -e
 if [ $CHECK_RC -eq 0 ]; then
     echo "   ✓ Packet capture runtime is available"
 else
-    echo "   ⚠ Agent runtime check failed (possible libpcap issue)"
+    echo "   ⚠ Local Runtime check failed (possible libpcap issue)"
     if command -v brew &> /dev/null; then
         echo "   ↻ Trying automatic install: brew install libpcap"
         if brew install libpcap; then
@@ -147,12 +147,12 @@ echo "=================================================="
 echo "  Installation Complete! 🎉"
 echo "=================================================="
 echo ""
-echo "To run the agent:"
+echo "To run the Local Runtime:"
 echo "  $AGENT_PATH"
 echo ""
 echo "For more information, visit:"
 echo "  Open the OT Lab App dashboard"
 echo ""
 
-echo "Starting agent now..."
-exec "$AGENT_PATH"
+echo "Starting Local Runtime UI now..."
+exec "$AGENT_PATH" --gui
