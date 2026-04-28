@@ -398,6 +398,11 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
                 runtime["server"]["registers_preview"] = server_ref.get_registers_preview(start=0, quantity=16)
             except Exception:
                 pass
+        if server_ref:
+            try:
+                runtime["server"]["last_error"] = getattr(server_ref, "last_error", None)
+            except Exception:
+                pass
         if client_ref:
             try:
                 snap = client_ref.get_snapshot()
@@ -411,6 +416,10 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
         # If process was expected to be running but a worker thread died, surface a deterministic reason.
         if bool(self.process_sim_runtime.get("running")) and not runtime["running"]:
             if not runtime["client"].get("last_error"):
+                server_last_error = runtime.get("server", {}).get("last_error")
+                if server_last_error:
+                    runtime["client"]["last_error"] = str(server_last_error)
+                    return runtime
                 if not server_running and not client_running:
                     runtime["client"]["last_error"] = "process server and client threads are not running"
                 elif not server_running:

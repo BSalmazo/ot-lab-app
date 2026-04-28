@@ -39,6 +39,7 @@ class SimpleModbusServer:
         self._stop_event = threading.Event()
         self._server_socket = None
         self._lock = threading.Lock()
+        self.last_error = None
 
         self.holding_registers = [0] * register_count
         self._seed_demo_data()
@@ -185,11 +186,15 @@ class SimpleModbusServer:
                 except socket.timeout:
                     continue
                 except OSError:
+                    if not self._stop_event.is_set():
+                        self.last_error = "server socket closed unexpectedly"
                     break
                 except Exception as e:
+                    self.last_error = f"accept error: {e}"
                     print(f"[modbus-server] accept error: {e}")
 
         except Exception as e:
+            self.last_error = f"failed to start: {e}"
             print(f"[modbus-server] failed to start: {e}")
         finally:
             if self._server_socket:
