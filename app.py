@@ -2382,6 +2382,10 @@ def get_agent_commands(session_id: str):
         commands = []
         retained = []
         for cmd in state["pending_commands"]:
+            runtime_entry = (state.get("runtime_commands") or {}).get(cmd.get("id"))
+            if runtime_entry and runtime_entry.get("status") in {"done", "error"}:
+                continue
+
             cmd_type = cmd.get("type")
             dispatched_at = cmd.get("dispatched_at")
             dispatch_count = int(cmd.get("dispatch_count") or 0)
@@ -2640,9 +2644,19 @@ def agent_runtime_update(payload: dict = Body(...)):
                     cmd_entry.get("type") == "START_PROCESS_SIM"
                     and cmd_entry.get("status") in {"queued", "sent"}
                 ):
+                    confirmed_id = None
+                    for command_id, raw in commands.items():
+                        if raw is cmd_entry:
+                            confirmed_id = command_id
+                            break
                     cmd_entry["status"] = "done"
                     cmd_entry["updated_at"] = time.time()
                     cmd_entry["message"] = "Confirmed via runtime update"
+                    if confirmed_id:
+                        state["pending_commands"] = [
+                            cmd for cmd in state.get("pending_commands", [])
+                            if cmd.get("id") != confirmed_id
+                        ]
                     push_log_for_session(session_id, "Process simulation start confirmed by local runtime")
                     break
 
