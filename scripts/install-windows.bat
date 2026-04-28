@@ -19,7 +19,7 @@ if not exist "%AGENT_PATH%" (
     echo Error: Runtime binary not found at %AGENT_PATH%
     echo.
     echo Please download the Local Runtime first from the OT Lab dashboard:
-    echo   Open the OT Lab App dashboard and use the Download Runtime button
+    echo   Open the OT Lab App dashboard and use the Download button
     pause
     exit /b 1
 )
@@ -39,7 +39,7 @@ echo.
 
 REM Step 2: Set file attributes
 echo 1/4 Step 2: Setting file attributes...
-attrib -H "%AGENT_PATH%" --gui
+attrib -H "%AGENT_PATH%"
 echo    + Attributes set
 echo.
 

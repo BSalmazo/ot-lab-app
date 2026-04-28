@@ -327,6 +327,10 @@ const PROCESS_REG_MAP = {
   limitHiActive: 12,
   limitLoActive: 13,
 };
+const PROCESS_POLL_QUANTITY = 16;
+let processCommandPendingUntil = 0;
+let processCommandPendingLabel = "";
+let processCommandTargetRunning = null;
 
 function toSafeInt(value, fallback = 0) {
   const parsed = Number(value);
@@ -374,6 +378,17 @@ function setSwitchState(id, on) {
   el.classList.toggle("hmi-switch-off", !on);
 }
 
+function setProcessRunButton(running, pending = false, label = "") {
+  const btn = byId("plcRunSwitchBtn");
+  if (!btn) return;
+  if (pending) {
+    btn.textContent = label || "WORKING...";
+  } else {
+    btn.textContent = running ? "STOP" : "START";
+  }
+  setSwitchState("plcRunSwitchBtn", running);
+}
+
 function renderProcessHmi(data) {
   const regs = getProcessRegistersFromStatus(data);
   const processSim = data?.process_sim || {};
@@ -388,7 +403,13 @@ function renderProcessHmi(data) {
   const alarmActive = regs.alarmHi > 0 || regs.alarmLo > 0;
   const limitActive = regs.limitHiActive > 0 || regs.limitLoActive > 0;
 
-  setSwitchState("plcRunSwitchBtn", simRunning);
+  const commandPending = Date.now() < processCommandPendingUntil;
+  if (!commandPending || processCommandTargetRunning === simRunning) {
+    processCommandPendingUntil = 0;
+    processCommandPendingLabel = "";
+    processCommandTargetRunning = null;
+  }
+  setProcessRunButton(simRunning, Date.now() < processCommandPendingUntil, processCommandPendingLabel);
   setSwitchState("hmiPumpSwitchBtn", regs.pump > 0);
   setSwitchState("hmiValveSwitchBtn", regs.valve > 0);
 
@@ -732,7 +753,7 @@ async function refreshStatus() {
   setDisabled("openMonitorConfigBtn", !agentConnected);
   setDisabled("openServerConfigBtn", !agentConnected);
   setDisabled("openClientConfigBtn", !agentConnected);
-  setDisabled("plcRunSwitchBtn", false);
+  setDisabled("plcRunSwitchBtn", Date.now() < processCommandPendingUntil);
 
   const simRunning = !!data?.process_sim?.running;
   setDisabled("hmiPumpSwitchBtn", !simRunning);
@@ -740,7 +761,7 @@ async function refreshStatus() {
   setDisabled("applyAlarmLimitBtn", false);
   setDisabled("processTypeSelect", simRunning);
 
-  // Só atualizar inputs se NÃO estão em um modal aberto
+  // Only refresh inputs when the configuration modal is not open.
   const serverModal = byId("serverModal");
   const clientModal = byId("clientModal");
   
@@ -764,7 +785,6 @@ async function refreshStatus() {
     if (byId("hmiHostInput")) byId("hmiHostInput").value = data.process_sim?.client?.host || "127.0.0.1";
     if (byId("hmiPortInput")) byId("hmiPortInput").value = data.process_sim?.client?.port || 15020;
     if (byId("processPollIntervalInput")) byId("processPollIntervalInput").value = data.process_sim?.client?.poll_interval ?? 0.5;
-    if (byId("processPollQuantityInput")) byId("processPollQuantityInput").value = data.process_sim?.client?.poll_quantity ?? 16;
   }
 
   setText("monitorSnapshot", buildReadableSnapshot(data.monitor?.snapshot || {}));
@@ -913,8 +933,8 @@ const WINDOW_SIZE_RULES = {
   actionsHistoryWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   actionsPreviewWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   alertsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
-  processHmiWindow: { width: 420, height: 330, minWidth: 360, minHeight: 280, resizable: true, autoFit: true },
-  processConfigWindow: { width: 360, height: 240, minWidth: 320, minHeight: 220, resizable: true, autoFit: true },
+  processHmiWindow: { width: 392, height: 286, minWidth: 372, minHeight: 268, resizable: true, autoFit: true },
+  processConfigWindow: { width: 318, height: 208, minWidth: 300, minHeight: 188, resizable: true, autoFit: true },
   processPlcWindow: { width: 384, height: 236, minWidth: 384, minHeight: 236, fixed: true },
 };
 const openAlertDetails = new Set();
@@ -1363,7 +1383,6 @@ async function startProcessSimulation() {
   const hmiHost = byId("hmiHostInput")?.value || plcHost;
   const hmiPort = parseProcessInput("hmiPortInput", plcPort);
   const pollInterval = Number(byId("processPollIntervalInput")?.value || 0.5);
-  const pollQuantity = parseProcessInput("processPollQuantityInput", 16);
   const result = await apiPost("/api/process-sim/start", {
     plc_host: plcHost,
     plc_port: plcPort,
@@ -1371,7 +1390,7 @@ async function startProcessSimulation() {
     hmi_port: hmiPort,
     poll_interval: pollInterval,
     poll_start: 0,
-    poll_quantity: pollQuantity,
+    poll_quantity: PROCESS_POLL_QUANTITY,
     process_type: processType,
   });
 
@@ -1382,7 +1401,16 @@ async function startProcessSimulation() {
 
   openWindow("processHmiWindow");
   openWindow("processPlcWindow");
+  if (result.queued) {
+    processCommandPendingUntil = Date.now() + 5000;
+    processCommandPendingLabel = "STARTING...";
+    processCommandTargetRunning = true;
+  }
   await refreshAll();
+  if (result.queued) {
+    window.setTimeout(refreshAll, 1200);
+    window.setTimeout(refreshAll, 2600);
+  }
 }
 
 async function stopProcessSimulation() {
@@ -1391,7 +1419,16 @@ async function stopProcessSimulation() {
     alert(result.error || "Failed to stop simulation");
     return;
   }
+  if (result.queued) {
+    processCommandPendingUntil = Date.now() + 5000;
+    processCommandPendingLabel = "STOPPING...";
+    processCommandTargetRunning = false;
+  }
   await refreshAll();
+  if (result.queued) {
+    window.setTimeout(refreshAll, 1200);
+    window.setTimeout(refreshAll, 2600);
+  }
 }
 
 async function toggleProcessSimulation() {
@@ -1422,7 +1459,6 @@ async function saveProcessConfig() {
   const hmiHost = byId("hmiHostInput")?.value || plcHost;
   const hmiPort = parseProcessInput("hmiPortInput", plcPort);
   const pollInterval = Number(byId("processPollIntervalInput")?.value || 0.5);
-  const pollQuantity = parseProcessInput("processPollQuantityInput", 16);
   const processType = byId("processTypeSelect")?.value || "tank_v1";
 
   const result = await apiPost("/api/process-sim/configure", {
@@ -1432,7 +1468,7 @@ async function saveProcessConfig() {
     hmi_port: hmiPort,
     poll_interval: pollInterval,
     poll_start: 0,
-    poll_quantity: pollQuantity,
+    poll_quantity: PROCESS_POLL_QUANTITY,
     process_type: processType,
   });
 
@@ -1466,7 +1502,7 @@ async function applyAlarmLimitConfig() {
   for (const [addr, value, note] of writes) {
     const result = await sendProcessWrite(addr, value, note);
     if (!result.ok) {
-      alert(`Falha ao salvar (${note}).`);
+      alert(`Failed to save (${note}).`);
       return;
     }
   }
@@ -1909,7 +1945,7 @@ function bindAlertDetails(containerId) {
 }
 
 function windowStateStorageKey(id) {
-  const variant = id === "processHmiWindow" ? "hmi_v7_" : (id === "processConfigWindow" ? "cfg_v4_" : "");
+  const variant = id === "processHmiWindow" ? "hmi_v8_" : (id === "processConfigWindow" ? "cfg_v5_" : "");
   return `${WINDOW_STATE_KEY_PREFIX}${variant}${id}`;
 }
 
