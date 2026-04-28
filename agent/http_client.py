@@ -289,17 +289,18 @@ class HttpClientMixin:
             self._flush_event_batch(force=True)
 
     def send_command_result(self, command_id: str, status: str, message: str = ""):
-        self._post(
-            "/api/agent/command_result",
-            {
-                "session_id": self.session_id,
-                "command_id": command_id,
-                "status": status,
-                "message": message,
-            },
-            timeout=(1.0, 2.0),
-            critical=True,
-        )
+        payload = {
+            "session_id": self.session_id,
+            "command_id": command_id,
+            "status": status,
+            "message": message,
+        }
+        for attempt in range(3):
+            result = self._post_sync("/api/agent/command_result", payload, timeout=(2.0, 8.0))
+            if result is not None:
+                return
+            if attempt < 2:
+                time.sleep(1.0)
 
     def send_disconnect(self):
         self._post(

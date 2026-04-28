@@ -2450,6 +2450,14 @@ def agent_command_result(payload: dict = Body(...)):
             state["process_sim"] = current
             push_log_for_session(session_id, f"Process simulation failed to start on local runtime: {current['client']['last_error']}")
         elif command_type == "START_PROCESS_SIM" and status == "done":
+            current = state.get("process_sim") or default_process_sim()
+            current["running"] = True
+            current["server"]["running"] = True
+            current["client"]["running"] = True
+            current.pop("last_error", None)
+            if current.get("client"):
+                current["client"].pop("last_error", None)
+            state["process_sim"] = current
             push_log_for_session(session_id, "Process simulation start confirmed by local runtime")
         elif command_type == "STOP_PROCESS_SIM" and status == "done":
             push_log_for_session(session_id, "Process simulation stop confirmed by local runtime")
