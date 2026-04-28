@@ -1636,8 +1636,9 @@ def api_events(request: Request):
 def api_process_sim_status(request: Request):
     session_id, state = get_session_state_from_request(request)
     snapshot = process_sim.snapshot()
-    state["process_sim"] = snapshot
-    response = JSONResponse({"ok": True, "process_sim": snapshot, "session_id": session_id})
+    if snapshot.get("running") or not should_run_process_on_agent(state):
+        state["process_sim"] = snapshot
+    response = JSONResponse({"ok": True, "process_sim": state["process_sim"], "session_id": session_id})
     set_session_cookie_if_needed(request, response, session_id)
     return response
 
@@ -1707,6 +1708,9 @@ async def api_process_sim_start(request: Request):
             poll_quantity=poll_quantity,
             process_type=process_type,
         )
+        snapshot["running"] = True
+        snapshot["server"]["running"] = True
+        snapshot["client"]["running"] = True
         state["process_sim"] = snapshot
         sync_agent_filter_to_process_port(state, port)
         queue_command(
@@ -1753,6 +1757,10 @@ def api_process_sim_stop(request: Request):
     if should_run_process_on_agent(state):
         queue_command(session_id, "STOP_PROCESS_SIM", {})
         snapshot = state.get("process_sim") or process_sim.snapshot()
+        snapshot["running"] = False
+        snapshot["server"]["running"] = False
+        snapshot["client"]["running"] = False
+        state["process_sim"] = snapshot
         push_log_for_session(session_id, "Process simulation stop requested on local agent")
         response = JSONResponse({"ok": True, "queued": True, "process_sim": snapshot, "runtime": "agent"})
     else:

@@ -1016,17 +1016,21 @@ button:disabled {
 }
 
 #processHmiWindow {
-  width: 392px;
-  height: 286px;
-  min-width: 372px;
-  min-height: 268px;
+  width: 330px;
+  height: 252px;
+  min-width: 330px;
+  min-height: 252px;
+  max-width: 330px;
+  max-height: 252px;
 }
 
 #processConfigWindow {
-  width: 318px;
-  height: 208px;
-  min-width: 300px;
-  min-height: 188px;
+  width: 260px;
+  height: 178px;
+  min-width: 260px;
+  min-height: 178px;
+  max-width: 260px;
+  max-height: 178px;
 }
 
 #processConfigWindow .window-head {
@@ -1714,7 +1718,8 @@ button:disabled {
 }
 
 .hmi-head-main select {
-  width: 120px;
+  width: 94px;
+  padding: 4px 8px;
 }
 
 .hmi-process-panel {
@@ -1735,11 +1740,12 @@ button:disabled {
 }
 
 #processHmiWindow .window-body {
-  padding: 6px;
+  padding: 5px;
+  overflow: hidden;
 }
 
 #processHmiWindow .window-head {
-  padding: 8px 10px;
+  padding: 6px 8px;
 }
 
 .hmi-switch.hmi-switch-on {
@@ -1752,24 +1758,17 @@ button:disabled {
   border-color: rgba(59, 130, 246, 0.7);
 }
 
-.hmi-switch.alarm {
-  background: #f59e0b;
-  border-color: rgba(245, 158, 11, 0.75);
-  color: #111827;
-  font-weight: 800;
-}
-
 .tank-stage {
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 8px;
   background: rgba(2, 6, 23, 0.58);
-  min-height: 176px;
+  min-height: 166px;
   display: grid;
-  grid-template-columns: 82px 128px 82px;
+  grid-template-columns: 72px 112px 72px;
   grid-template-rows: 1fr 1fr;
   gap: 6px;
   padding: 8px;
-  width: 100%;
+  width: max-content;
   margin: 0 auto;
 }
 
@@ -1817,7 +1816,7 @@ button:disabled {
 
 .hmi-config-row {
   display: grid;
-  grid-template-columns: 58px 1fr;
+  grid-template-columns: 48px 1fr;
   align-items: center;
   gap: 3px;
 }
@@ -1838,11 +1837,15 @@ button:disabled {
 }
 
 #processConfigWindow .hmi-config-inline input {
-  width: 104px;
+  width: 106px;
 }
 
 #processConfigWindow .hmi-config-inline input#processPollIntervalInput {
-  width: 72px;
+  width: 58px;
+}
+
+#processConfigWindow .hmi-config-inline input[type="number"] {
+  width: 58px;
 }
 
 .hmi-config-actions {
@@ -1885,8 +1888,8 @@ button:disabled {
 }
 
 .tank-body {
-  width: 108px;
-  height: 168px;
+  width: 104px;
+  height: 154px;
   border: 2px solid rgba(148, 163, 184, 0.7);
   border-radius: 10px;
   background: rgba(30, 41, 59, 0.72);
