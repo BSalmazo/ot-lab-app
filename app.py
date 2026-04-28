@@ -2533,6 +2533,8 @@ def agent_runtime_update(payload: dict = Body(...)):
 
     previous_server_running = state["remote_server"]["running"]
     previous_client_running = state["remote_client"]["running"]
+    previous_process = state.get("process_sim") or default_process_sim()
+    previous_process_running = bool(previous_process.get("running"))
 
     # Only update running status from agent; configuration is managed via /api/agent/server/configure and /api/agent/client/configure
     if server_data:
@@ -2677,6 +2679,25 @@ def agent_runtime_update(payload: dict = Body(...)):
                         ]
                     push_log_for_session(session_id, "Process simulation start confirmed by local runtime")
                     break
+
+        current_process_running = bool(process_snapshot.get("running"))
+        if not previous_process_running and current_process_running:
+            push_log_for_session(
+                session_id,
+                "Process runtime reported RUNNING "
+                f"(server={process_snapshot['server']['host']}:{process_snapshot['server']['port']}, "
+                f"client={process_snapshot['client']['host']}:{process_snapshot['client']['port']}, "
+                f"poll={process_snapshot['client']['poll_interval']}s)"
+            )
+        elif previous_process_running and not current_process_running:
+            reason = process_snapshot.get("client", {}).get("last_error") or "no runtime error provided"
+            push_log_for_session(
+                session_id,
+                "Process runtime reported STOPPED "
+                f"(server={process_snapshot['server']['host']}:{process_snapshot['server']['port']}, "
+                f"client={process_snapshot['client']['host']}:{process_snapshot['client']['port']}, "
+                f"reason={reason})"
+            )
 
     current_server_running = state["remote_server"]["running"]
     current_client_running = state["remote_client"]["running"]
