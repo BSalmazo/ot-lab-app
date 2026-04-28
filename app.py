@@ -2700,7 +2700,18 @@ def agent_runtime_update(payload: dict = Body(...)):
                 f"poll={process_snapshot['client']['poll_interval']}s)"
             )
         elif previous_process_running and not current_process_running:
-            reason = process_snapshot.get("client", {}).get("last_error") or "no runtime error provided"
+            reason = process_snapshot.get("client", {}).get("last_error")
+            if not reason:
+                server_running = bool(process_snapshot.get("server", {}).get("running"))
+                client_running = bool(process_snapshot.get("client", {}).get("running"))
+                if (not server_running) and (not client_running):
+                    reason = "process server and client are not running"
+                elif not server_running:
+                    reason = "process server is not running"
+                elif not client_running:
+                    reason = "process client is not running"
+                else:
+                    reason = "runtime reported stopped without explicit error"
             push_log_for_session(
                 session_id,
                 "Process runtime reported STOPPED "
