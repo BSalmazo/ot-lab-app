@@ -642,6 +642,7 @@ def ensure_session_state(session_id: str):
                 "modbus_summary": default_modbus_summary(),
                 "connection_history": deque(maxlen=80),
                 "pending_commands": [],
+                "runtime_commands": {},
                 "action_commands": deque(maxlen=80),
                 "event_log_signatures": deque(maxlen=600),
                 "recent_event_signatures": {},
@@ -1174,7 +1175,17 @@ def queue_command(session_id: str, command_type: str, payload: dict):
     with lock:
         if "action_commands" not in state:
             state["action_commands"] = deque(maxlen=80)
+        if "runtime_commands" not in state:
+            state["runtime_commands"] = {}
         state["pending_commands"].append(cmd)
+        if command_type in {"START_PROCESS_SIM", "STOP_PROCESS_SIM", "WRITE_PROCESS_SIM"}:
+            state["runtime_commands"][cmd["id"]] = {
+                "type": command_type,
+                "payload": payload,
+                "status": "queued",
+                "created_at": cmd["created_at"],
+                "updated_at": cmd["created_at"],
+            }
         if command_type == "RUN_MODBUS_ACTION":
             state["action_commands"].appendleft({
                 "id": cmd["id"],
@@ -1213,6 +1224,37 @@ def update_action_command_status(
             entry["message"] = message
         return entry
     return None
+
+
+def update_runtime_command_status(
+    state: dict,
+    command_id: str,
+    status: str,
+    message: str = "",
+):
+    commands = state.get("runtime_commands") or {}
+    entry = commands.get(command_id)
+    if not entry:
+        return None
+    entry["status"] = status
+    entry["updated_at"] = time.time()
+    if message:
+        entry["message"] = message
+    return entry
+
+
+def has_pending_process_start(state: dict, now_ts=None):
+    now_ts = time.time() if now_ts is None else now_ts
+    commands = state.get("runtime_commands") or {}
+    for entry in commands.values():
+        if entry.get("type") != "START_PROCESS_SIM":
+            continue
+        if entry.get("status") not in {"queued", "sent", "done"}:
+            continue
+        updated_at = float(entry.get("updated_at") or entry.get("created_at") or 0)
+        if now_ts - updated_at <= 12:
+            return True
+    return False
 
 
 def build_agent_config(request: Request, session_id: str, state: dict):
@@ -2244,6 +2286,13 @@ def get_agent_commands(session_id: str):
         commands = list(state["pending_commands"])
         state["pending_commands"].clear()
         for cmd in commands:
+            if cmd.get("id") in (state.get("runtime_commands") or {}):
+                update_runtime_command_status(
+                    state,
+                    command_id=cmd.get("id"),
+                    status="sent",
+                    message="Delivered to runtime",
+                )
             if cmd.get("type") == "RUN_MODBUS_ACTION":
                 update_action_command_status(
                     state,
@@ -2279,12 +2328,33 @@ def agent_command_result(payload: dict = Body(...)):
 
     state = ensure_session_state(session_id)
     with lock:
+        runtime_updated = update_runtime_command_status(
+            state,
+            command_id=command_id,
+            status=status,
+            message=message or ("Completed" if status == "done" else "Execution failed"),
+        )
         updated = update_action_command_status(
             state,
             command_id=command_id,
             status=status,
             message=message or ("Completed" if status == "done" else "Execution failed"),
         )
+
+    if runtime_updated:
+        command_type = runtime_updated.get("type")
+        if command_type == "START_PROCESS_SIM" and status == "error":
+            current = state.get("process_sim") or default_process_sim()
+            current["running"] = False
+            current["server"]["running"] = False
+            current["client"]["running"] = False
+            current["client"]["last_error"] = message or "Runtime failed to start process simulation"
+            state["process_sim"] = current
+            push_log_for_session(session_id, f"Process simulation failed to start on local runtime: {current['client']['last_error']}")
+        elif command_type == "START_PROCESS_SIM" and status == "done":
+            push_log_for_session(session_id, "Process simulation start confirmed by local runtime")
+        elif command_type == "STOP_PROCESS_SIM" and status == "done":
+            push_log_for_session(session_id, "Process simulation stop confirmed by local runtime")
 
     if updated and status == "error":
         push_log_for_session(session_id, f"Modbus action failed: {updated.get('code_label', '-') } {updated.get('function_name', '-') } | {updated.get('message', '-')}")
@@ -2417,6 +2487,13 @@ def agent_runtime_update(payload: dict = Body(...)):
             current_values = (current.get("client") or {}).get("last_values") or []
             process_snapshot["client"]["last_values"] = list(current_values)[:64]
 
+        if not process_snapshot["running"] and current.get("running") and has_pending_process_start(state):
+            process_snapshot["running"] = True
+            process_snapshot["server"]["running"] = True
+            process_snapshot["client"]["running"] = True
+            process_snapshot["client"]["last_error"] = current.get("client", {}).get("last_error")
+            process_snapshot["client"]["last_values"] = list((current.get("client") or {}).get("last_values") or [])[:64]
+
         state["process_sim"] = process_snapshot
 
     current_server_running = state["remote_server"]["running"]
@@ -2462,6 +2539,8 @@ def reset_system(request: Request):
         if "recent_alert_signatures" in state:
             state["recent_alert_signatures"].clear()
         state["pending_commands"].clear()
+        if "runtime_commands" in state:
+            state["runtime_commands"].clear()
         if "action_commands" in state:
             state["action_commands"].clear()
 
