@@ -177,7 +177,7 @@
             </select>
           </div>
           <div class="window-tools hmi-window-tools">
-            <button id="simRunSwitchBtn" class="small hmi-switch" type="button">START / STOP</button>
+            <button id="openHmiAlarmBtn" class="small secondary" type="button">Alarms</button>
             <button id="openProcessConfigBtn" class="small secondary" type="button">Config</button>
             <button class="window-close" type="button" data-close-window="processHmiWindow">✕</button>
           </div>
@@ -201,6 +201,29 @@
               </div>
               <div id="hmiAlarmBanner" class="hmi-banner warning hidden">ALARM ACTIVE</div>
               <div id="hmiLimitBanner" class="hmi-banner danger hidden">PROCESS STOPPED BY LIMIT</div>
+            </div>
+            <div class="hmi-alarm-popup hidden" id="hmiAlarmPopup">
+              <div class="hmi-popup-head">
+                <span>Alarm Settings</span>
+                <button class="window-close" type="button" id="closeHmiAlarmBtn">✕</button>
+              </div>
+              <div class="hmi-popup-body">
+                <div class="hmi-config-row">
+                  <label>Alarm L/H</label>
+                  <div class="hmi-config-inline">
+                    <input id="alarmLowInput" type="number" min="0" max="100" value="0" />
+                    <input id="alarmHighInput" type="number" min="0" max="100" value="0" />
+                  </div>
+                </div>
+                <div class="hmi-config-row">
+                  <label>Limit L/H</label>
+                  <div class="hmi-config-inline">
+                    <input id="limitLowInput" type="number" min="0" max="100" value="0" />
+                    <input id="limitHighInput" type="number" min="0" max="100" value="0" />
+                  </div>
+                </div>
+                <button id="applyAlarmLimitBtn" class="small" type="button">Apply</button>
+              </div>
             </div>
           </div>
         </div>
@@ -237,24 +260,8 @@
                 <input id="processPollQuantityInput" type="number" min="1" max="125" value="16" />
               </div>
             </div>
-            <div class="hmi-config-section">Alarm / Limit</div>
-            <div class="hmi-config-row">
-              <label>AL L/H</label>
-              <div class="hmi-config-inline">
-                <input id="alarmLowInput" type="number" min="0" max="100" value="0" />
-                <input id="alarmHighInput" type="number" min="0" max="100" value="0" />
-              </div>
-            </div>
-            <div class="hmi-config-row">
-              <label>LIM L/H</label>
-              <div class="hmi-config-inline">
-                <input id="limitLowInput" type="number" min="0" max="100" value="0" />
-                <input id="limitHighInput" type="number" min="0" max="100" value="0" />
-              </div>
-            </div>
             <div class="hmi-config-actions">
               <button id="saveProcessConfigBtn" class="small secondary" type="button">Save Config</button>
-              <button id="applyAlarmLimitBtn" class="small" type="button">Salvar</button>
             </div>
           </div>
         </div>
@@ -263,7 +270,10 @@
       <div class="floating-window hidden" id="processPlcWindow">
         <div class="window-head">
           <span>PLC State</span>
-          <button class="window-close" type="button" data-close-window="processPlcWindow">✕</button>
+          <div class="window-tools">
+            <button id="plcRunSwitchBtn" class="small hmi-switch" type="button">START / STOP</button>
+            <button class="window-close" type="button" data-close-window="processPlcWindow">✕</button>
+          </div>
         </div>
         <div class="window-body">
           <div class="plc-visual-shell" id="plcVisualShell"></div>

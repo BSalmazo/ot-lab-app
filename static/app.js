@@ -388,7 +388,7 @@ function renderProcessHmi(data) {
   const alarmActive = regs.alarmHi > 0 || regs.alarmLo > 0;
   const limitActive = regs.limitHiActive > 0 || regs.limitLoActive > 0;
 
-  setSwitchState("simRunSwitchBtn", simRunning);
+  setSwitchState("plcRunSwitchBtn", simRunning);
   setSwitchState("hmiPumpSwitchBtn", regs.pump > 0);
   setSwitchState("hmiValveSwitchBtn", regs.valve > 0);
 
@@ -732,7 +732,7 @@ async function refreshStatus() {
   setDisabled("openMonitorConfigBtn", !agentConnected);
   setDisabled("openServerConfigBtn", !agentConnected);
   setDisabled("openClientConfigBtn", !agentConnected);
-  setDisabled("simRunSwitchBtn", false);
+  setDisabled("plcRunSwitchBtn", false);
 
   const simRunning = !!data?.process_sim?.running;
   setDisabled("hmiPumpSwitchBtn", !simRunning);
@@ -913,8 +913,8 @@ const WINDOW_SIZE_RULES = {
   actionsHistoryWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   actionsPreviewWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   alertsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
-  processHmiWindow: { width: 500, height: 390, minWidth: 280, minHeight: 220, resizable: true, autoFit: true },
-  processConfigWindow: { width: 360, height: 320, minWidth: 320, minHeight: 260, resizable: true, autoFit: true },
+  processHmiWindow: { width: 420, height: 330, minWidth: 360, minHeight: 280, resizable: true, autoFit: true },
+  processConfigWindow: { width: 360, height: 240, minWidth: 320, minHeight: 220, resizable: true, autoFit: true },
   processPlcWindow: { width: 384, height: 236, minWidth: 384, minHeight: 236, fixed: true },
 };
 const openAlertDetails = new Set();
@@ -1447,7 +1447,7 @@ async function saveProcessConfig() {
 async function applyAlarmLimitConfig() {
   const status = await apiGet("/api/status");
   if (!status?.process_sim?.running) {
-    alert("Inicie a simulacao antes de salvar.");
+    alert("Start the PLC before applying alarm settings.");
     return;
   }
 
@@ -1471,7 +1471,7 @@ async function applyAlarmLimitConfig() {
     }
   }
 
-  closeWindow("processConfigWindow");
+  byId("hmiAlarmPopup")?.classList.add("hidden");
   await refreshAll();
 }
 
@@ -1481,9 +1481,11 @@ function openProcessSimulationWindows() {
 }
 
 function bindProcessSimulationControls() {
-  byId("simRunSwitchBtn")?.addEventListener("click", toggleProcessSimulation);
+  byId("plcRunSwitchBtn")?.addEventListener("click", toggleProcessSimulation);
   byId("openProcessSimulationBtn")?.addEventListener("click", openProcessSimulationWindows);
   byId("openProcessConfigBtn")?.addEventListener("click", () => openWindow("processConfigWindow"));
+  byId("openHmiAlarmBtn")?.addEventListener("click", () => byId("hmiAlarmPopup")?.classList.remove("hidden"));
+  byId("closeHmiAlarmBtn")?.addEventListener("click", () => byId("hmiAlarmPopup")?.classList.add("hidden"));
   byId("saveProcessConfigBtn")?.addEventListener("click", saveProcessConfig);
   byId("hmiPumpSwitchBtn")?.addEventListener("click", async () => {
     await toggleProcessActuator("pump", "pump");

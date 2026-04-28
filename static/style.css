@@ -1016,17 +1016,17 @@ button:disabled {
 }
 
 #processHmiWindow {
-  width: 500px;
-  height: 390px;
-  min-width: 280px;
-  min-height: 220px;
+  width: 420px;
+  height: 330px;
+  min-width: 360px;
+  min-height: 280px;
 }
 
 #processConfigWindow {
-  width: 286px;
-  height: 150px;
-  min-width: 240px;
-  min-height: 120px;
+  width: 360px;
+  height: 240px;
+  min-width: 320px;
+  min-height: 220px;
 }
 
 #processConfigWindow .window-head {
@@ -1038,17 +1038,17 @@ button:disabled {
 }
 
 #processConfigWindow .window-body {
-  padding: 4px;
+  padding: 8px;
   overflow: hidden;
 }
 
 #processPlcWindow {
   width: 384px;
-  height: 236px;
+  height: 266px;
   min-width: 384px;
-  min-height: 236px;
+  min-height: 266px;
   max-width: 384px;
-  max-height: 236px;
+  max-height: 266px;
 }
 
 #processPlcWindow .window-body {
@@ -1697,6 +1697,7 @@ button:disabled {
 
 .hmi-layout {
   display: block;
+  position: relative;
 }
 
 .hmi-window-tools {
@@ -1717,10 +1718,8 @@ button:disabled {
 }
 
 .hmi-process-panel {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 6px;
-  background: rgba(15, 23, 42, 0.72);
+  padding: 0;
+  background: transparent;
 }
 
 .hmi-process-panel-centered {
@@ -1736,7 +1735,7 @@ button:disabled {
 }
 
 #processHmiWindow .window-body {
-  padding: 3px;
+  padding: 6px;
 }
 
 #processHmiWindow .window-head {
@@ -1755,16 +1754,44 @@ button:disabled {
 
 .tank-stage {
   border: 1px solid rgba(148, 163, 184, 0.22);
-  border-radius: 10px;
-  background: rgba(2, 6, 23, 0.35);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.58);
   min-height: 180px;
   display: grid;
   grid-template-columns: 90px 140px 90px;
   grid-template-rows: 1fr 1fr;
   gap: 6px;
-  padding: 6px;
-  width: max-content;
+  padding: 10px;
+  width: 100%;
   margin: 0 auto;
+}
+
+.hmi-alarm-popup {
+  position: absolute;
+  top: 12px;
+  left: 16px;
+  width: 260px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  z-index: 20;
+}
+
+.hmi-popup-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+  font-weight: 700;
+}
+
+.hmi-popup-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
 }
 
 .hmi-config-panel {
