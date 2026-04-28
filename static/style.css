@@ -1016,10 +1016,10 @@ button:disabled {
 }
 
 #processHmiWindow {
-  width: 330px;
-  height: 252px;
-  min-width: 330px;
-  min-height: 252px;
+  width: 306px;
+  height: 236px;
+  min-width: 306px;
+  min-height: 236px;
 }
 
 #processConfigWindow {
@@ -2101,6 +2101,13 @@ button:disabled {
 
 .plc-error {
   color: #b91c1c;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plc-command-status {
+  color: #475569;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

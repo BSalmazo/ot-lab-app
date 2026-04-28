@@ -451,13 +451,23 @@ function renderProcessHmi(data) {
 function renderProcessPlc(data) {
   const regs = getProcessRegistersFromStatus(data);
   const processSim = data?.process_sim || {};
+  const processControl = data?.process_control || {};
+  const latestCommand = processControl?.latest || null;
+  const commandStatus = String(latestCommand?.status || "").toLowerCase();
+  const commandType = String(latestCommand?.type || "");
+  const startPending = commandType === "START_PROCESS_SIM" && ["queued", "sent"].includes(commandStatus);
   const serverRunning = !!processSim?.server?.running;
   const clientRunning = !!processSim?.client?.running;
   const processError = String(processSim?.client?.last_error || "").trim();
   const lastSuccessTs = Number(processSim?.client?.last_success_at || 0);
   const pollAgeS = lastSuccessTs > 0 ? (Date.now() / 1000 - lastSuccessTs) : Infinity;
   const pollFresh = Number.isFinite(pollAgeS) && pollAgeS <= 2.5;
-  const plcOnline = !!processSim?.running;
+  const plcOnline = !!processSim?.running && !startPending;
+  const plcStarting = !!processSim?.running && startPending;
+  const plcLabel = plcStarting ? "STARTING" : (plcOnline ? "RUNNING" : "OFFLINE");
+  const plcStatusText = latestCommand
+    ? `${latestCommand.type || "COMMAND"} ${latestCommand.status || "-"}${latestCommand.message ? ` | ${latestCommand.message}` : ""}`
+    : "";
 
   const inputSignalsInUse = [
     { label: "LEVEL_AI", on: plcOnline },
@@ -511,8 +521,8 @@ function renderProcessPlc(data) {
           <div class="plc-brand-box">
             <div class="plc-brand-title">PLC</div>
             <div class="plc-run-row">
-              <span class="plc-run-led ${plcOnline ? "on blink" : "off"}"></span>
-              <span class="plc-run-label">${plcOnline ? "RUNNING" : "OFFLINE"}</span>
+              <span class="plc-run-led ${(plcOnline || plcStarting) ? "on blink" : "off"}"></span>
+              <span class="plc-run-label">${plcLabel}</span>
             </div>
           </div>
           <div class="plc-center-values">
@@ -520,6 +530,7 @@ function renderProcessPlc(data) {
             <div><strong>Alarm L/H:</strong> ${regs.alarmLoThreshold} / ${regs.alarmHiThreshold}</div>
             <div><strong>Limit L/H:</strong> ${regs.limitLoThreshold} / ${regs.limitHiThreshold}</div>
             <div><strong>Tick:</strong> ${escapeHtml(regs.tick)}</div>
+            ${plcStatusText ? `<div class="plc-command-status">${escapeHtml(plcStatusText)}</div>` : ""}
             ${processError && !plcOnline ? `<div class="plc-error"><strong>Error:</strong> ${escapeHtml(processError)}</div>` : ""}
           </div>
         </div>
@@ -758,8 +769,12 @@ async function refreshStatus() {
   setDisabled("plcRunSwitchBtn", Date.now() < processCommandPendingUntil);
 
   const simRunning = !!data?.process_sim?.running;
-  setDisabled("hmiPumpSwitchBtn", !simRunning);
-  setDisabled("hmiValveSwitchBtn", !simRunning);
+  const latestProcessCommand = data?.process_control?.latest || null;
+  const processStarting =
+    latestProcessCommand?.type === "START_PROCESS_SIM" &&
+    ["queued", "sent"].includes(String(latestProcessCommand?.status || "").toLowerCase());
+  setDisabled("hmiPumpSwitchBtn", !simRunning || processStarting);
+  setDisabled("hmiValveSwitchBtn", !simRunning || processStarting);
   setDisabled("applyAlarmLimitBtn", false);
   setDisabled("processTypeSelect", simRunning);
 
@@ -935,7 +950,7 @@ const WINDOW_SIZE_RULES = {
   actionsHistoryWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   actionsPreviewWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
   alertsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
-  processHmiWindow: { width: 330, height: 252, minWidth: 330, minHeight: 252, resizable: true },
+  processHmiWindow: { width: 306, height: 236, minWidth: 306, minHeight: 236, resizable: true },
   processConfigWindow: { width: 260, height: 198, minWidth: 260, minHeight: 198, fixed: true },
   processPlcWindow: { width: 384, height: 210, minWidth: 384, minHeight: 210, fixed: true },
 };
