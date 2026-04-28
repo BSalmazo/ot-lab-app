@@ -1,5 +1,5 @@
 #!/bin/bash
-# Linux Installation Script for OT Lab Agent
+# Linux Installation Script for OT Lab Local Runtime
 # This script sets proper permissions and verifies libpcap
 
 set -e
@@ -9,20 +9,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENT_PATH="$SCRIPT_DIR/$AGENT_NAME"
 
 echo "=================================================="
-echo "  OT Lab Agent - Linux Installation"
+echo "  OT Lab Local Runtime - Linux Installation"
 echo "=================================================="
 echo ""
 
 # Check if agent exists
 if [ ! -f "$AGENT_PATH" ]; then
-    echo "❌ Error: Agent not found at $AGENT_PATH"
+    echo "❌ Error: Runtime binary not found at $AGENT_PATH"
     echo ""
-    echo "Please download the agent first from the OT Lab dashboard:"
-    echo "  Open the OT Lab App dashboard and use the Download Agent button"
+    echo "Please download the Local Runtime first from the OT Lab dashboard:"
+    echo "  Open the OT Lab App dashboard and use the Download Runtime button"
     exit 1
 fi
 
-echo "✓ Found agent at: $AGENT_PATH"
+echo "✓ Found Local Runtime at: $AGENT_PATH"
 echo ""
 
 # Step 1: Set executable permissions
@@ -84,9 +84,9 @@ echo ""
 # Step 3: Verify it works
 echo "📋 Step 3: Verifying installation..."
 if [ -x "$AGENT_PATH" ]; then
-    echo "   ✓ Agent is ready to use"
+    echo "   ✓ Local Runtime is ready to use"
 else
-    echo "   ❌ Error: Agent is not executable"
+    echo "   ❌ Error: Local Runtime is not executable"
     exit 1
 fi
 echo ""
@@ -95,12 +95,12 @@ echo "=================================================="
 echo "  Installation Complete! 🎉"
 echo "=================================================="
 echo ""
-echo "To run the agent:"
+echo "To run the Local Runtime:"
 echo "  $AGENT_PATH"
 echo ""
 echo "For more information, visit:"
 echo "  Open the OT Lab App dashboard"
 echo ""
 
-echo "Starting agent now..."
-exec "$AGENT_PATH"
+echo "Starting Local Runtime UI now..."
+exec "$AGENT_PATH" --gui

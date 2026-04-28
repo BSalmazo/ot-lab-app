@@ -3,35 +3,35 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>OT Lab Agent Downloads</title>
+  <title>OT Lab Local Runtime Downloads</title>
   <link rel="stylesheet" href="/static/style.css?v=20260424n" />
 </head>
 <body class="downloads-body">
   <main class="downloads-page">
     <section class="downloads-hero">
       <a class="back-link" href="/">Back to dashboard</a>
-      <h1>OT Lab Agent Downloads</h1>
-      <p>Download the local capture agent package for your operating system. Each package includes the agent binary, install helper, runtime config, and bundle manifest.</p>
+      <h1>OT Lab Local Runtime Downloads</h1>
+      <p>Download the Local Runtime package for your operating system. It provides packet capture, Modbus services, and process PLC/HMI control for the web dashboard.</p>
     </section>
 
     <section class="downloads-grid">
       <article class="download-card">
         <h2>Windows</h2>
-        <p>64-bit executable package. Requires Npcap for packet capture.</p>
+        <p>64-bit runtime package. Requires Npcap for packet capture.</p>
         <a class="download-btn" href="/downloads/agent/windows" download>Download Windows package</a>
         <a class="secondary small" href="/downloads/script/windows" download>Install script only</a>
       </article>
 
       <article class="download-card">
         <h2>macOS</h2>
-        <p>Intel/Apple Silicon package. The install helper validates libpcap and removes quarantine metadata.</p>
+        <p>Intel/Apple Silicon runtime package. The install helper validates libpcap and removes quarantine metadata.</p>
         <a class="download-btn" href="/downloads/agent/macos" download>Download macOS package</a>
         <a class="secondary small" href="/downloads/script/macos" download>Install script only</a>
       </article>
 
       <article class="download-card">
         <h2>Linux</h2>
-        <p>64-bit executable package. Requires libpcap and packet-capture permissions.</p>
+        <p>64-bit runtime package. Requires libpcap and packet-capture permissions.</p>
         <a class="download-btn" href="/downloads/agent/linux" download>Download Linux package</a>
         <a class="secondary small" href="/downloads/script/linux" download>Install script only</a>
       </article>
@@ -41,8 +41,8 @@
       <h2>Setup Notes</h2>
       <ul>
         <li>Use the package download first; it is generated from the GitHub release asset that matches the deployed web build.</li>
-        <li>Run the included install script before starting the agent.</li>
-        <li>The generated <code>agent-config.json</code> binds the agent to your current web session.</li>
+        <li>Run the included install script before starting the Local Runtime.</li>
+        <li>The generated <code>agent-config.json</code> binds the runtime to your current web session.</li>
       </ul>
       <a class="secondary small" href="/downloads/docs" download>Download full installation guide</a>
     </section>

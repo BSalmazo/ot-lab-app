@@ -50,7 +50,7 @@ def load_agent_config():
 
 
 def build_arg_parser(bundled_config):
-    parser = argparse.ArgumentParser(description="OT Lab Agent")
+    parser = argparse.ArgumentParser(description="OT Lab Local Runtime")
     parser.add_argument("--server", default=bundled_config.get("server_url") or DEFAULT_SERVER_URL)
     parser.add_argument("--session-id", default=bundled_config.get("session_id") or DEFAULT_SESSION_ID)
     parser.add_argument("--iface", default=bundled_config.get("iface") or DEFAULT_IFACE)

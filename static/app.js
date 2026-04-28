@@ -1680,22 +1680,22 @@ async function loadAndRenderReleases() {
 
       const assets = release.assets || {};
       if (!compatible) {
-        html += '<div class="info-message">Agent binaries for this web build are still being published. Retry after the GitHub build finishes.</div>';
+        html += '<div class="info-message">Local Runtime binaries for this web build are still being published. Retry after the GitHub build finishes.</div>';
       }
       
       if (compatible && assets.windows) {
         html += `<a class="download-link" href="${getBundleDownloadUrl("windows")}" download>
-          <span class="os-icon">🪟</span> Windows Bundle ZIP (agent + install)
+          <span class="os-icon">🪟</span> Windows Runtime ZIP
         </a>`;
       }
       if (compatible && assets.macos) {
         html += `<a class="download-link" href="${getBundleDownloadUrl("macos")}" download>
-          <span class="os-icon">🍎</span> macOS Bundle ZIP (agent + install)
+          <span class="os-icon">🍎</span> macOS Runtime ZIP
         </a>`;
       }
       if (compatible && assets.linux) {
         html += `<a class="download-link" href="${getBundleDownloadUrl("linux")}" download>
-          <span class="os-icon">🐧</span> Linux Bundle ZIP (agent + install)
+          <span class="os-icon">🐧</span> Linux Runtime ZIP
         </a>`;
       }
       
