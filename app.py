@@ -44,7 +44,7 @@ app.add_middleware(
 
 BASE_DIR = Path(__file__).resolve().parent
 SESSION_COOKIE = "scada_session_id"
-AGENT_LIVENESS_WINDOW_SECONDS = 15
+AGENT_LIVENESS_WINDOW_SECONDS = 45
 SESSION_ID_PATTERN = re.compile(r"^sess_[A-Za-z0-9_-]{8,128}$")
 
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
@@ -1760,7 +1760,9 @@ def api_status(request: Request):
     agent_info["connected"] = connected
     expire_stale_runtime_commands(state, session_id, now)
     web_process_snapshot = process_sim.snapshot()
-    if web_process_snapshot.get("running") or not should_run_process_on_agent(state):
+    # Do not overwrite remote runtime state during transient agent disconnects.
+    # Only use web snapshot when web runtime is actually running.
+    if web_process_snapshot.get("running"):
         state["process_sim"] = web_process_snapshot
 
     response = JSONResponse({
@@ -1805,7 +1807,7 @@ def api_events(request: Request):
 def api_process_sim_status(request: Request):
     session_id, state = get_session_state_from_request(request)
     snapshot = process_sim.snapshot()
-    if snapshot.get("running") or not should_run_process_on_agent(state):
+    if snapshot.get("running"):
         state["process_sim"] = snapshot
     response = JSONResponse({"ok": True, "process_sim": state["process_sim"], "session_id": session_id})
     set_session_cookie_if_needed(request, response, session_id)
