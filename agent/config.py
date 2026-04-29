@@ -69,6 +69,11 @@ def build_arg_parser(bundled_config):
         default=bundled_config.get("mode") or DEFAULT_MODE,
         choices=["LEARNING", "MONITORING"],
     )
+    parser.add_argument(
+        "--runtime-only",
+        action="store_true",
+        help="Run local runtime control-plane only (process/server/client commands) without packet monitoring/sniffing",
+    )
     return parser
 
 
