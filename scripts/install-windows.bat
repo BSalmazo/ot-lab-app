@@ -57,4 +57,8 @@ echo   + Runtime ready
 echo.
 echo   Starting Local Runtime UI...
 echo.
-"%AGENT_PATH%" --gui
+if "%VERBOSE%"=="1" (
+    "%AGENT_PATH%" --gui --verbose
+) else (
+    "%AGENT_PATH%" --gui
+)
