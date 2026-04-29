@@ -326,7 +326,15 @@ def get_github_releases(force_refresh: bool = False):
     
     try:
         # Try to fetch from GitHub API
-        response = requests.get(GITHUB_API_URL, timeout=5)
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "ot-lab-app-release-fetcher",
+        }
+        github_token = str(os.getenv("GITHUB_TOKEN") or "").strip()
+        if github_token:
+            headers["Authorization"] = f"Bearer {github_token}"
+
+        response = requests.get(GITHUB_API_URL, headers=headers, timeout=5)
         response.raise_for_status()
         
         releases = response.json()
@@ -1572,7 +1580,8 @@ def download_agent_file(platform: str, request: Request):
     agent_release_tag = None
     selected_release = None
     try:
-        releases = get_github_releases(force_refresh=True) or []
+        # Do not force-refresh on every download request to avoid GitHub API rate-limit flaps.
+        releases = get_github_releases(force_refresh=False) or []
 
         def _release_sort_key(rel: dict):
             return str(rel.get("updated_at") or rel.get("published_at") or "")
