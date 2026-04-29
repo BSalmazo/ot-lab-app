@@ -103,6 +103,7 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
                 "last_success_at": None,
             },
         }
+        self._process_sim_auto_restart_after = 0.0
 
         self.last_applied_config = {
             "iface": iface,
@@ -532,8 +533,52 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
             self.process_sim_runtime["running"] = False
             self.process_sim_runtime["server"]["running"] = False
             self.process_sim_runtime["client"]["running"] = False
+            self._process_sim_auto_restart_after = 0.0
 
         print("[agent] process simulation stopped")
+
+    def ensure_process_sim_alive(self):
+        now = time.time()
+        with self.runtime_lock:
+            expected_running = bool(self.process_sim_runtime.get("running"))
+            cfg_server = dict(self.process_sim_runtime.get("server") or {})
+            cfg_client = dict(self.process_sim_runtime.get("client") or {})
+            process_type = str(self.process_sim_runtime.get("process_type") or "tank_v1")
+            next_retry_at = float(self._process_sim_auto_restart_after or 0.0)
+
+        if not expected_running or now < next_retry_at:
+            return
+
+        snapshot = self.get_process_sim_snapshot()
+        if snapshot.get("running"):
+            return
+
+        host = str(cfg_server.get("host") or "127.0.0.1")
+        port = int(cfg_server.get("port") or 15020)
+        poll_interval = float(cfg_client.get("poll_interval") or 0.5)
+        poll_start = int(cfg_client.get("poll_start") or 0)
+        poll_quantity = int(cfg_client.get("poll_quantity") or 16)
+
+        try:
+            print(
+                "[agent] process simulation dropped; attempting auto-restart "
+                f"host={host} port={port} poll={poll_interval}s start={poll_start} qty={poll_quantity}"
+            )
+            self.start_process_sim(
+                host=host,
+                port=port,
+                poll_interval=poll_interval,
+                poll_start=poll_start,
+                poll_quantity=poll_quantity,
+                process_type=process_type,
+            )
+        except Exception as exc:
+            with self.runtime_lock:
+                self._process_sim_auto_restart_after = now + 3.0
+            print(f"[agent] process simulation auto-restart failed: {exc}")
+        else:
+            with self.runtime_lock:
+                self._process_sim_auto_restart_after = 0.0
 
     def write_process_register(self, address: int, value: int, unit_id: int = 1):
         snapshot = self.get_process_sim_snapshot()
@@ -826,6 +871,8 @@ def main():
                 if now - last_runtime_update >= 1.0:
                     agent.send_runtime_update()
                     last_runtime_update = now
+
+                agent.ensure_process_sim_alive()
 
             except Exception as e:
                 print(f"[agent] error in control loop: {e}")
