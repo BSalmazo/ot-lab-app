@@ -1179,6 +1179,29 @@ def queue_command(session_id: str, command_type: str, payload: dict):
             state["action_commands"] = deque(maxlen=80)
         if "runtime_commands" not in state:
             state["runtime_commands"] = {}
+
+        # Keep process runtime queue coherent: a new START supersedes stale STOP/WRITE
+        # and a new STOP supersedes stale START/WRITE to avoid delayed inversions.
+        if command_type in {"START_PROCESS_SIM", "STOP_PROCESS_SIM"}:
+            opposite = "STOP_PROCESS_SIM" if command_type == "START_PROCESS_SIM" else "START_PROCESS_SIM"
+            superseded_ids = []
+            retained_pending = []
+            for pending in state.get("pending_commands", []):
+                p_type = pending.get("type")
+                p_id = pending.get("id")
+                if p_type in {opposite, "WRITE_PROCESS_SIM"}:
+                    superseded_ids.append(p_id)
+                    continue
+                retained_pending.append(pending)
+            state["pending_commands"] = retained_pending
+            for old_id in superseded_ids:
+                old_entry = state["runtime_commands"].get(old_id)
+                if not old_entry:
+                    continue
+                old_entry["status"] = "error"
+                old_entry["updated_at"] = time.time()
+                old_entry["message"] = f"Superseded by {command_type}"
+
         state["pending_commands"].append(cmd)
         if command_type in {"START_PROCESS_SIM", "STOP_PROCESS_SIM", "WRITE_PROCESS_SIM"}:
             state["runtime_commands"][cmd["id"]] = {
