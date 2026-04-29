@@ -4,6 +4,7 @@ import sys
 import threading
 import time
 import webbrowser
+import requests
 from pathlib import Path
 from queue import Empty, Queue
 
@@ -197,12 +198,41 @@ class RuntimeGui:
     def toggle_monitor(self):
         if not self.process or self.process.poll() is not None:
             return
+        try:
+            status = self._fetch_status()
+        except Exception:
+            status = None
+        if status:
+            process_running = bool((status.get("process_sim") or {}).get("running"))
+            server_running = bool((status.get("server") or {}).get("running"))
+            client_running = bool((status.get("client") or {}).get("running"))
+            if process_running or server_running or client_running:
+                self._append_log(
+                    "[runtime-ui] Stop process/server/client before switching monitor mode\n"
+                )
+                return
         next_mode = not self.monitor_enabled
         self._append_log(
             f"[runtime-ui] Switching monitor {'ON' if next_mode else 'OFF'} (restarting runtime)\n"
         )
         self.stop_runtime()
         self.start_runtime(with_monitoring=next_mode)
+
+    def _fetch_status(self):
+        server = str(self.config.get("server_url") or "").strip().rstrip("/")
+        session = str(self.config.get("session_id") or "").strip()
+        if not server or not session:
+            return None
+        resp = requests.get(
+            f"{server}/api/status",
+            params={"session_id": session},
+            timeout=2,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if not isinstance(data, dict):
+            return None
+        return data
 
     def stop_runtime(self):
         if not self.process or self.process.poll() is not None:

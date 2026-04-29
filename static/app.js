@@ -723,7 +723,7 @@ function buildReadableSnapshot(snapshot) {
       : "-";
 
   return [
-    `Agent ID: ${snapshot.agent_id || "-"}`,
+    `Monitor ID: ${snapshot.agent_id || "-"}`,
     `Host: ${snapshot.hostname || "-"}`,
     `Interface: ${snapshot.iface || "-"}`,
     `Mode: ${snapshot.mode || "-"}`,
@@ -1255,7 +1255,7 @@ function simplifyLogLine(log) {
   if (!line) return "-";
 
   if (line.startsWith("Alert: ")) return line;
-  if (line.startsWith("Agent connected")) return line;
+  if (line.startsWith("Agent connected")) return line.replace("Agent connected", "Monitor connected");
   if (line.startsWith("Monitor configuration updated")) return line;
   if (line.startsWith("Modbus server")) return line;
   if (line.startsWith("Modbus client")) return line;
