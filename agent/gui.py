@@ -25,10 +25,14 @@ def _load_config():
     return {}, None
 
 
-def _runtime_command():
+def _runtime_command(with_monitoring=False):
     if getattr(sys, "frozen", False):
-        return [sys.executable, "--cli"]
-    return [sys.executable, str(Path(__file__).resolve().parent.parent / "agent.py"), "--cli"]
+        cmd = [sys.executable, "--cli"]
+    else:
+        cmd = [sys.executable, str(Path(__file__).resolve().parent.parent / "agent.py"), "--cli"]
+    if not with_monitoring:
+        cmd.append("--runtime-only")
+    return cmd
 
 
 class RuntimeGui:
@@ -47,6 +51,7 @@ class RuntimeGui:
         self.server_var = tk.StringVar(value=self.config.get("server_url", "-"))
 
         self._build()
+        self._set_running(False)
         self._poll_output()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -65,8 +70,12 @@ class RuntimeGui:
 
         actions = ttk.Frame(outer)
         actions.pack(fill="x", pady=(0, 10))
-        self.runtime_switch = ttk.Button(actions, text="Start Runtime", command=self.toggle_runtime)
-        self.runtime_switch.pack(side="left")
+        self.runtime_start = ttk.Button(actions, text="Start Runtime", command=self.start_runtime_only)
+        self.runtime_start.pack(side="left")
+        self.runtime_start_agent = ttk.Button(actions, text="Start Runtime + Agent", command=self.start_runtime_with_agent)
+        self.runtime_start_agent.pack(side="left", padx=(8, 0))
+        self.runtime_stop = ttk.Button(actions, text="Stop Runtime", command=self.stop_runtime)
+        self.runtime_stop.pack(side="left", padx=(8, 0))
         ttk.Button(actions, text="Open Web Interface", command=self.open_web).pack(side="left", padx=(8, 0))
         ttk.Button(actions, text="Reload Config", command=self.reload_config).pack(side="left", padx=(8, 0))
 
@@ -87,8 +96,12 @@ class RuntimeGui:
 
     def _set_running(self, running):
         self.status_var.set("Running" if running else "Stopped")
-        if hasattr(self, "runtime_switch"):
-            self.runtime_switch.configure(text="Stop Runtime" if running else "Start Runtime")
+        if hasattr(self, "runtime_start"):
+            self.runtime_start.configure(state="disabled" if running else "normal")
+        if hasattr(self, "runtime_start_agent"):
+            self.runtime_start_agent.configure(state="disabled" if running else "normal")
+        if hasattr(self, "runtime_stop"):
+            self.runtime_stop.configure(state="normal" if running else "disabled")
         if hasattr(self, "status_value_label"):
             self.status_value_label.configure(foreground="#16a34a" if running else "")
 
@@ -109,18 +122,18 @@ class RuntimeGui:
         if url:
             webbrowser.open(url)
 
-    def toggle_runtime(self):
-        if self.process and self.process.poll() is None:
-            self.stop_runtime()
-        else:
-            self.start_runtime()
+    def start_runtime_only(self):
+        self.start_runtime(with_monitoring=False)
 
-    def start_runtime(self):
+    def start_runtime_with_agent(self):
+        self.start_runtime(with_monitoring=True)
+
+    def start_runtime(self, with_monitoring=False):
         if self.process and self.process.poll() is None:
             self._append_log("[runtime-ui] Runtime is already running\n")
             return
 
-        cmd = _runtime_command()
+        cmd = _runtime_command(with_monitoring=with_monitoring)
         self._append_log(f"[runtime-ui] Starting: {' '.join(cmd)}\n")
         self.process = subprocess.Popen(
             cmd,

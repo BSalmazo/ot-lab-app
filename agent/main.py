@@ -38,6 +38,7 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
         custom_ports=None,
         server_url=DEFAULT_SERVER_URL,
         session_id=DEFAULT_SESSION_ID,
+        runtime_only=False,
     ):
         # Garante que NPCAP/libpcap está instalado antes de iniciar
         ensure_npcap_installed()
@@ -49,6 +50,7 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
         self.server_url = server_url.rstrip("/")
         self.session_id = session_id
         self.sniffer = None
+        self.runtime_only = bool(runtime_only)
 
         self.identity = load_or_create_local_identity()
         self.agent_id = self.identity["agent_id"]
@@ -820,6 +822,7 @@ def main():
         custom_ports=args.custom_ports,
         server_url=args.server,
         session_id=args.session_id,
+        runtime_only=args.runtime_only,
     )
 
     print(
@@ -841,10 +844,13 @@ def main():
     else:
         print("[agent] connectivity check failed: could not fetch remote config")
 
-    started = agent.start()
-
-    if not started:
-        print(f"[agent] started without active sniffing. iface={agent.iface}")
+    started = True
+    if not agent.runtime_only:
+        started = agent.start()
+        if not started:
+            print(f"[agent] started without active sniffing. iface={agent.iface}")
+    else:
+        print("[agent] runtime-only mode enabled (packet monitoring disabled)")
 
     agent.send_runtime_update()
     print("[agent] control loop started")
@@ -861,7 +867,8 @@ def main():
                 now = time.time()
                 if now - last_config_poll >= 2.0:
                     remote_config = agent.fetch_remote_config()
-                    agent.apply_config_if_needed(remote_config)
+                    if not agent.runtime_only:
+                        agent.apply_config_if_needed(remote_config)
                     last_config_poll = now
 
                 if now - last_heartbeat >= 1.0:

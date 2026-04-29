@@ -389,6 +389,14 @@ function setProcessRunButton(running, pending = false, label = "") {
   setSwitchState("plcRunSwitchBtn", running);
 }
 
+function isSimulationUsingRuntime(data) {
+  return !!data?.process_sim?.running;
+}
+
+function isManualModbusActive(data) {
+  return !!data?.server?.running || !!data?.client?.running;
+}
+
 function renderProcessHmi(data) {
   const regs = getProcessRegistersFromStatus(data);
   const processSim = data?.process_sim || {};
@@ -747,24 +755,30 @@ async function refreshStatus() {
   const data = await apiGet("/api/status");
 
   const agentConnected = !!data.agent?.connected;
+  const simulationActive = isSimulationUsingRuntime(data);
+  const manualModbusActive = isManualModbusActive(data);
+  const effectiveServerRunning = !!data.server?.running || !!data?.process_sim?.server?.running;
+  const effectiveClientRunning = !!data.client?.running || !!data?.process_sim?.client?.running;
+  const serverView = { ...(data.server || {}), running: effectiveServerRunning };
+  const clientView = { ...(data.client || {}), running: effectiveClientRunning };
 
   setText("agentStatus", formatAgentStatus(data));
-  setText("serverStatus", formatServerStatus(data.server));
-  setText("clientStatus", formatClientStatus(data.client));
+  setText("serverStatus", formatServerStatus(serverView));
+  setText("clientStatus", formatClientStatus(clientView));
 
   setBadge("globalMonitorBadge", "MONITOR", !!data.monitor?.running);
-  setBadge("globalServerBadge", "SERVER", !!data.server?.running);
-  setBadge("globalClientBadge", "CLIENT", !!data.client?.running);
+  setBadge("globalServerBadge", "SERVER", effectiveServerRunning);
+  setBadge("globalClientBadge", "CLIENT", effectiveClientRunning);
 
   setToggleButton("toggleServerBtn", !!data.server?.running);
   setToggleButton("toggleClientBtn", !!data.client?.running);
 
-  setDisabled("toggleServerBtn", !agentConnected);
-  setDisabled("toggleClientBtn", !agentConnected);
+  setDisabled("toggleServerBtn", !agentConnected || simulationActive);
+  setDisabled("toggleClientBtn", !agentConnected || simulationActive);
   setDisabled("openMonitorConfigBtn", !agentConnected);
   setDisabled("openServerConfigBtn", !agentConnected);
   setDisabled("openClientConfigBtn", !agentConnected);
-  setDisabled("plcRunSwitchBtn", Date.now() < processCommandPendingUntil);
+  setDisabled("plcRunSwitchBtn", Date.now() < processCommandPendingUntil || manualModbusActive);
 
   const simRunning = !!data?.process_sim?.running;
   const latestProcessCommand = data?.process_control?.latest || null;
@@ -1322,6 +1336,10 @@ async function toggleServer() {
     setText("serverStatus", "Agent disconnected.");
     return;
   }
+  if (!status.server?.running && isSimulationUsingRuntime(status)) {
+    alert("Process simulation is active. Stop simulation before starting manual Modbus server/client.");
+    return;
+  }
 
   if (status.server?.running) {
     await stopServer();
@@ -1363,6 +1381,10 @@ async function toggleClient() {
   const status = await apiGet("/api/status");
   if (!status.agent?.connected) {
     setText("clientStatus", "Agent disconnected.");
+    return;
+  }
+  if (!status.client?.running && isSimulationUsingRuntime(status)) {
+    alert("Process simulation is active. Stop simulation before starting manual Modbus server/client.");
     return;
   }
 
@@ -1447,6 +1469,10 @@ async function stopProcessSimulation() {
 
 async function toggleProcessSimulation() {
   const status = await apiGet("/api/status");
+  if (!status?.process_sim?.running && isManualModbusActive(status)) {
+    alert("Manual Modbus server/client is active. Stop it before starting process simulation.");
+    return;
+  }
   const running = !!status?.process_sim?.running;
   if (running) {
     await stopProcessSimulation();
