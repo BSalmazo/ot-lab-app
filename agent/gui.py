@@ -43,6 +43,8 @@ class RuntimeGui:
         self.root.minsize(560, 360)
 
         self.process = None
+        self.monitor_enabled = False
+        self.verbose = ("--verbose" in sys.argv) or ("-v" in sys.argv)
         self.output_queue = Queue()
         self.config, self.config_path = _load_config()
 
@@ -70,12 +72,10 @@ class RuntimeGui:
 
         actions = ttk.Frame(outer)
         actions.pack(fill="x", pady=(0, 10))
-        self.runtime_start = ttk.Button(actions, text="Start Runtime", command=self.start_runtime_only)
-        self.runtime_start.pack(side="left")
-        self.runtime_start_agent = ttk.Button(actions, text="Start Runtime + Agent", command=self.start_runtime_with_agent)
-        self.runtime_start_agent.pack(side="left", padx=(8, 0))
-        self.runtime_stop = ttk.Button(actions, text="Stop Runtime", command=self.stop_runtime)
-        self.runtime_stop.pack(side="left", padx=(8, 0))
+        self.runtime_switch = ttk.Button(actions, text="Start Runtime", command=self.toggle_runtime)
+        self.runtime_switch.pack(side="left")
+        self.monitor_switch = ttk.Button(actions, text="Start Monitor", command=self.toggle_monitor)
+        self.monitor_switch.pack(side="left", padx=(8, 0))
         ttk.Button(actions, text="Open Web Interface", command=self.open_web).pack(side="left", padx=(8, 0))
         ttk.Button(actions, text="Reload Config", command=self.reload_config).pack(side="left", padx=(8, 0))
 
@@ -96,16 +96,64 @@ class RuntimeGui:
 
     def _set_running(self, running):
         self.status_var.set("Running" if running else "Stopped")
-        if hasattr(self, "runtime_start"):
-            self.runtime_start.configure(state="disabled" if running else "normal")
-        if hasattr(self, "runtime_start_agent"):
-            self.runtime_start_agent.configure(state="disabled" if running else "normal")
-        if hasattr(self, "runtime_stop"):
-            self.runtime_stop.configure(state="normal" if running else "disabled")
+        if hasattr(self, "runtime_switch"):
+            self.runtime_switch.configure(text="Stop Runtime" if running else "Start Runtime")
+        if hasattr(self, "monitor_switch"):
+            self.monitor_switch.configure(
+                text="Stop Monitor" if self.monitor_enabled else "Start Monitor",
+                state="normal" if running else "disabled",
+            )
         if hasattr(self, "status_value_label"):
             self.status_value_label.configure(foreground="#16a34a" if running else "")
 
+    def _should_display_line(self, line: str) -> bool:
+        if self.verbose:
+            return True
+        text = str(line or "")
+        if not text.strip():
+            return False
+        important_tokens = (
+            "[runtime-ui]",
+            "control loop started",
+            "processing command",
+            "process simulation started",
+            "process simulation stopped",
+            "command result sent",
+            "command result failed",
+            "failed",
+            "error",
+            "stopping...",
+            "Runtime process exited",
+        )
+        if any(token in text for token in important_tokens):
+            return True
+        if "command poll" in text and "pending=0 received=0" in text:
+            return False
+        noisy_prefixes = (
+            "[agent] Verificando NPCAP/libpcap",
+            "[agent] ✓ NPCAP/libpcap",
+            "[agent] Interfaces encontradas",
+            "[agent] config encontrada",
+            "[agent] config lida",
+            "=== OT LAB AGENT ===",
+            "Interfaces disponíveis:",
+            "Interface pedida:",
+            "Port mode pedido:",
+            "Custom ports pedidos:",
+            "[agent] config carregada",
+            "[agent] using iface:",
+            "[agent] session=",
+            "[agent] ALL-mode selected",
+            "[agent] interface classification",
+            "[agent] capture filter:",
+            "[agent] attempting to start",
+            "[agent] sniffing successfully started",
+        )
+        return not text.startswith(noisy_prefixes)
+
     def _append_log(self, text):
+        if not self._should_display_line(text):
+            return
         self.log.configure(state="normal")
         self.log.insert("end", text)
         self.log.see("end")
@@ -122,17 +170,18 @@ class RuntimeGui:
         if url:
             webbrowser.open(url)
 
-    def start_runtime_only(self):
-        self.start_runtime(with_monitoring=False)
-
-    def start_runtime_with_agent(self):
-        self.start_runtime(with_monitoring=True)
+    def toggle_runtime(self):
+        if self.process and self.process.poll() is None:
+            self.stop_runtime()
+            return
+        self.start_runtime(with_monitoring=self.monitor_enabled)
 
     def start_runtime(self, with_monitoring=False):
         if self.process and self.process.poll() is None:
             self._append_log("[runtime-ui] Runtime is already running\n")
             return
 
+        self.monitor_enabled = bool(with_monitoring)
         cmd = _runtime_command(with_monitoring=with_monitoring)
         self._append_log(f"[runtime-ui] Starting: {' '.join(cmd)}\n")
         self.process = subprocess.Popen(
@@ -144,6 +193,16 @@ class RuntimeGui:
         )
         self._set_running(True)
         threading.Thread(target=self._read_process_output, daemon=True).start()
+
+    def toggle_monitor(self):
+        if not self.process or self.process.poll() is not None:
+            return
+        next_mode = not self.monitor_enabled
+        self._append_log(
+            f"[runtime-ui] Switching monitor {'ON' if next_mode else 'OFF'} (restarting runtime)\n"
+        )
+        self.stop_runtime()
+        self.start_runtime(with_monitoring=next_mode)
 
     def stop_runtime(self):
         if not self.process or self.process.poll() is not None:

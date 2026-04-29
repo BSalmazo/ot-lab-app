@@ -77,4 +77,8 @@ fi
 echo ""
 echo "  Starting Local Runtime UI..."
 echo ""
-exec "$AGENT_PATH" --gui
+if [ $VERBOSE -eq 1 ]; then
+  exec "$AGENT_PATH" --gui --verbose
+else
+  exec "$AGENT_PATH" --gui
+fi

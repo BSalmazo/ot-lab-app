@@ -276,7 +276,8 @@ function populateIfaceSelect(interfaces, selectedValue) {
 }
 
 function formatAgentStatus(data) {
-  const connected = !!data.agent?.connected;
+  const runtimeRunning = !!data.agent?.connected;
+  const monitorRunning = !!data.monitor?.running;
   const iface = data.agent_config?.iface || data.agent?.iface || "-";
   const mode = data.agent_config?.mode || data.agent?.mode || "-";
   const portMode = data.agent_config?.port_mode || data.agent?.port_mode || "-";
@@ -284,7 +285,8 @@ function formatAgentStatus(data) {
   const customPortText = Array.isArray(customPorts) && customPorts.length ? customPorts.join(",") : "-";
 
   return [
-    `STATUS: ${connected ? "CONNECTED" : "DISCONNECTED"}`,
+    `RUNTIME: ${runtimeRunning ? "RUNNING" : "STOPPED"}`,
+    `MONITOR: ${monitorRunning ? "RUNNING" : "STOPPED"}`,
     `INTERFACE: ${iface}`,
     `MODE: ${mode}`,
     `PORT FILTER: ${portMode}`,
@@ -766,6 +768,7 @@ async function refreshStatus() {
   setText("serverStatus", formatServerStatus(serverView));
   setText("clientStatus", formatClientStatus(clientView));
 
+  setBadge("globalRuntimeBadge", "RUNTIME", agentConnected);
   setBadge("globalMonitorBadge", "MONITOR", !!data.monitor?.running);
   setBadge("globalServerBadge", "SERVER", effectiveServerRunning);
   setBadge("globalClientBadge", "CLIENT", effectiveClientRunning);
@@ -1333,7 +1336,7 @@ async function stopServer() {
 async function toggleServer() {
   const status = await apiGet("/api/status");
   if (!status.agent?.connected) {
-    setText("serverStatus", "Agent disconnected.");
+    setText("serverStatus", "Runtime disconnected.");
     return;
   }
   if (!status.server?.running && isSimulationUsingRuntime(status)) {
@@ -1380,7 +1383,7 @@ async function stopClient() {
 async function toggleClient() {
   const status = await apiGet("/api/status");
   if (!status.agent?.connected) {
-    setText("clientStatus", "Agent disconnected.");
+    setText("clientStatus", "Runtime disconnected.");
     return;
   }
   if (!status.client?.running && isSimulationUsingRuntime(status)) {
