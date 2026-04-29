@@ -17,6 +17,12 @@ def ensure_dependencies():
 
 
 def run():
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+        sys.stderr.reconfigure(line_buffering=True)
+    except Exception:
+        pass
+
     args = list(sys.argv[1:])
     if "--gui" in args:
         from agent.gui import main as gui_main

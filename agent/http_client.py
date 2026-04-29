@@ -166,6 +166,7 @@ class HttpClientMixin:
 
     def fetch_pending_commands(self):
         try:
+            now = time.time()
             session = self._ensure_control_session()
             response = session.get(
                 f"{self.server_url}/api/agent/commands",
@@ -186,6 +187,14 @@ class HttpClientMixin:
                     f" pending={pending_before_drain} received={len(commands)}"
                 )
                 self._last_command_poll_diag = now
+            else:
+                last_diag = float(getattr(self, "_last_command_poll_diag", 0.0) or 0.0)
+                if (now - last_diag) >= 10.0:
+                    print(
+                        "[agent] command poll "
+                        f"instance={getattr(self, '_control_plane_instance', '-')} pending=0 received=0"
+                    )
+                    self._last_command_poll_diag = now
             return commands
         except Exception as e:
             print(f"[agent] failed to fetch commands: {e}")
@@ -298,9 +307,18 @@ class HttpClientMixin:
         for attempt in range(3):
             result = self._post_sync("/api/agent/command_result", payload, timeout=(2.0, 8.0))
             if result is not None:
+                print(
+                    f"[agent] command result sent id={command_id} status={status} "
+                    f"attempt={attempt + 1} message={message or '-'}"
+                )
                 return
             if attempt < 2:
+                print(
+                    f"[agent] command result retry id={command_id} status={status} "
+                    f"attempt={attempt + 1}"
+                )
                 time.sleep(1.0)
+        print(f"[agent] command result failed id={command_id} status={status}")
 
     def send_disconnect(self):
         self._post(
