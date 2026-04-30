@@ -16,6 +16,7 @@
       <div class="topbar-right">
         <div class="mini-badge" id="globalRuntimeBadge">RUNTIME: STOPPED</div>
         <div class="mini-badge" id="globalMonitorBadge">MONITOR: STOPPED</div>
+        <div class="mini-badge" id="globalDefenseBadge">DEFENSE: RUNNING</div>
         <div class="mini-badge" id="globalServerBadge">SERVER: STOPPED</div>
         <div class="mini-badge" id="globalClientBadge">CLIENT: STOPPED</div>
       </div>
@@ -89,6 +90,8 @@
           <button class="dock-btn" id="openConnectionsWindowBtn" type="button">Connections</button>
           <button class="dock-btn" id="openActionsWindowBtn" type="button">Actions</button>
           <button class="dock-btn" id="openProcessSimulationBtn" type="button">Process</button>
+          <button class="dock-btn" id="openScenarioWindowBtn" type="button">Scenarios</button>
+          <button class="dock-btn" id="openPolicyWindowBtn" type="button">Policy</button>
         </div>
       </section>
 
@@ -182,6 +185,7 @@
             <span>Process HMI</span>
             <select id="processTypeSelect">
               <option value="tank_v1">Tank</option>
+              <option value="pumping_line_v1">Pumping Line</option>
             </select>
           </div>
           <div class="window-tools hmi-window-tools">
@@ -287,6 +291,57 @@
         <div class="window-body">
           <div class="plc-visual-shell" id="plcVisualShell"></div>
         </div>
+      </div>
+
+      <div class="floating-window hidden" id="scenarioWindow">
+        <div class="window-head">
+          <span>Scenario Runner</span>
+          <button class="window-close" type="button" data-close-window="scenarioWindow">✕</button>
+        </div>
+        <div class="window-body">
+          <div class="hmi-config-panel">
+            <div class="hmi-config-row">
+              <label>Profile</label>
+              <select id="scenarioProfileSelect">
+                <option value="tank_v1">Tank v1</option>
+                <option value="pumping_line_v1">Pumping Line v1</option>
+              </select>
+            </div>
+            <div class="hmi-config-row">
+              <label>Attack</label>
+              <select id="scenarioAttackSelect"></select>
+            </div>
+            <div class="hmi-config-actions">
+              <button id="runBaselineScenarioBtn" class="small secondary" type="button">Run Baseline</button>
+              <button id="runProtectedScenarioBtn" class="small" type="button">Run Protected</button>
+            </div>
+            <pre id="scenarioResultPanel" class="log-panel floating-panel preview-panel"></pre>
+          </div>
+        </div>
+        <div class="window-resize-handle" aria-hidden="true"></div>
+      </div>
+
+      <div class="floating-window hidden" id="policyWindow">
+        <div class="window-head">
+          <span>Policy Decisions</span>
+          <div class="window-tools">
+            <button id="exportPolicyBtn" class="secondary small" type="button">Export</button>
+            <button class="window-close" type="button" data-close-window="policyWindow">✕</button>
+          </div>
+        </div>
+        <div class="window-body">
+          <div class="hmi-config-row">
+            <label>Filter</label>
+            <select id="policyDecisionFilter">
+              <option value="">All</option>
+              <option value="BLOCK">BLOCK</option>
+              <option value="ALLOW_WITH_ALERT">ALLOW_WITH_ALERT</option>
+              <option value="ALLOW">ALLOW</option>
+            </select>
+          </div>
+          <div id="policyDecisionPanel" class="log-panel floating-log"></div>
+        </div>
+        <div class="window-resize-handle" aria-hidden="true"></div>
       </div>
     </main>
   </div>
@@ -427,6 +482,6 @@
   <script src="/static/protocols/modbus/ModbusActionForm.js?v=20260330p"></script>
   <script src="/static/protocols/modbus/ModbusTab.js?v=20260331a"></script>
   <script src="/static/actions/ActionsWindow.js?v=20260330p"></script>
-  <script src="/static/app.js?v=20260430f"></script>
+  <script src="/static/app.js?v=20260430v2a"></script>
 </body>
 </html>

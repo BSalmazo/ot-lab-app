@@ -117,6 +117,9 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
             "modbus_actions_v1",
             "run_modbus_action_command",
             "process_sim_v1",
+            "process_profiles_v1",
+            "semantic_policy_v1",
+            "ethercat_mapping_v1",
         ]
 
     @staticmethod
@@ -433,7 +436,7 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
 
     def start_process_sim(self, host, port, poll_interval, poll_start, poll_quantity, process_type):
         process_type = str(process_type or "tank_v1").strip() or "tank_v1"
-        if process_type != "tank_v1":
+        if process_type not in {"tank_v1", "pumping_line_v1"}:
             raise RuntimeError("unsupported process_type")
 
         # Idempotent start: if runtime already matches, keep it running.
