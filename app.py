@@ -1599,7 +1599,10 @@ def download_agent_file(platform: str, request: Request):
         build_id = get_server_build_id()
         preferred_releases = dev_latest + others
         if build_id != "unknown":
-            preferred_releases = [r for r in preferred_releases if release_matches_build(r, build_id)]
+            matched = [r for r in preferred_releases if release_matches_build(r, build_id)]
+            # Fallback: if no exact build match exists yet, use newest available release assets.
+            # This avoids false "build not ready" when binaries are already published.
+            preferred_releases = matched or preferred_releases
 
         for release in preferred_releases:
             assets = release.get("assets") or {}

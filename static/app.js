@@ -1717,7 +1717,7 @@ async function loadAndRenderReleases() {
   container.innerHTML = '<div class="loading-spinner">Loading releases from GitHub...</div>';
 
   try {
-    const response = await apiGet("/api/releases/agent?refresh=1");
+    const response = await apiGet("/api/releases/agent");
 
     if (!response.ok && response.releases && response.releases.length === 0) {
       container.innerHTML = '<div class="info-message">GitHub releases not available. You can still try generating a package from the latest release endpoint.</div>';
@@ -1759,20 +1759,20 @@ async function loadAndRenderReleases() {
 
       const assets = release.assets || {};
       if (!compatible) {
-        html += '<div class="info-message">Local Runtime binaries for this web build are still being published. Retry after the GitHub build finishes.</div>';
+        html += '<div class="info-message">Using latest available runtime build (not exact web-build match).</div>';
       }
       
-      if (compatible && assets.windows) {
+      if (assets.windows) {
         html += `<a class="download-link" href="${getBundleDownloadUrl("windows")}" download>
           <span class="os-icon">🪟</span> Windows Runtime ZIP
         </a>`;
       }
-      if (compatible && assets.macos) {
+      if (assets.macos) {
         html += `<a class="download-link" href="${getBundleDownloadUrl("macos")}" download>
           <span class="os-icon">🍎</span> macOS Runtime ZIP
         </a>`;
       }
-      if (compatible && assets.linux) {
+      if (assets.linux) {
         html += `<a class="download-link" href="${getBundleDownloadUrl("linux")}" download>
           <span class="os-icon">🐧</span> Linux Runtime ZIP
         </a>`;
