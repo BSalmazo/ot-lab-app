@@ -40,51 +40,72 @@ This separation allows process simulation to run locally even when monitoring is
 
 ## 4. Installation and Usage
 
-See:
-`scripts/INSTALLATION.md`
+### 4.1 Access the platform
 
-This guide covers Windows, macOS, and Linux, including:
+Open:
+`https://otlab.salmazo.org`
 
-- Download flow
-- Runtime startup
-- Monitor mode behavior
-- Platform prerequisites (`Npcap` or `libpcap`)
-- Troubleshooting
+Then use the `Download` button in the Local Runtime card.
 
-## 5. Release and Deployment Flow
+### 4.2 macOS
 
-### 5.1 Build/Release
+```bash
+bash install-macos.sh
+```
 
-GitHub Actions workflow:
-`.github/workflows/build-and-release.yml`
+Verbose mode:
 
-On updates to `refactor/codex-setup`, the workflow:
+```bash
+bash install-macos.sh -v
+```
 
-1. builds runtime binaries for Windows, macOS, and Linux
-2. publishes assets to `dev-latest` release
-3. optionally triggers Railway deployment through a deploy hook
+### 4.3 Windows
 
-### 5.2 Railway
+```bat
+install-windows.bat
+```
 
-Recommended production flow:
+Verbose mode:
 
-- Configure Railway to deploy from `refactor/codex-setup`
-- Configure `RAILWAY_DEPLOY_HOOK_URL` in GitHub repository secrets
-- Keep runtime release generation before deployment to minimize binary/web mismatch windows
+```bat
+install-windows.bat -v
+```
 
-## 6. Branching Strategy (Current Baseline + Next Version)
+### 4.4 Linux
 
-Current stable baseline:
+```bash
+bash install-linux.sh
+```
 
-- `refactor/codex-setup`
+Verbose mode:
 
-Recommended next-step model:
+```bash
+bash install-linux.sh -v
+```
 
-1. Create a new branch for the next major cycle (for example `feature/v2`)
-2. Keep `refactor/codex-setup` as operational baseline
-3. Merge to baseline only after integrated validation (web + runtime + release pipeline)
+### 4.5 Runtime operation model
 
-## 7. Research Scope and Intended Use
+After startup, Local Runtime UI provides:
+
+- `Start Runtime` / `Stop Runtime`
+- `Start Monitor` / `Stop Monitor`
+
+Notes:
+
+- Runtime can execute PLC/HMI simulation and local Modbus operations.
+- Monitor mode enables packet-based traffic visibility.
+
+### 4.6 Platform prerequisites
+
+- Windows: install `Npcap` (https://nmap.org/npcap/)
+- macOS/Linux: ensure `libpcap` is available
+
+### 4.7 Full operator guide
+
+Detailed reference:
+[`scripts/INSTALLATION.md`](./scripts/INSTALLATION.md)
+
+## 5. Research Scope and Intended Use
 
 This repository is designed for:
 
@@ -94,6 +115,6 @@ This repository is designed for:
 
 It is not positioned as a certified industrial control product.
 
-## 8. Maintainer
+## 6. Maintainer
 
 Bruno Salmazo
