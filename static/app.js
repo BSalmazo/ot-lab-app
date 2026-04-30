@@ -964,14 +964,14 @@ const MODBUS_FUNCTION_NAME_MAP = {
 const WINDOW_STATE_KEY_PREFIX = "otlab_window_state_v1_";
 const WINDOW_SIZE_RULES = {
   default: { width: 620, height: 500, minWidth: 280, minHeight: 220 },
-  idsWindow: { width: 700, height: 560, minWidth: 280, minHeight: 220 },
+  idsWindow: { width: 700, height: 560, minWidth: 280, minHeight: 220, resizable: true },
   logsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240, resizable: true },
   connectionsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240, resizable: true },
   actionsWindow: { width: 980, height: 720, minWidth: 360, minHeight: 260, resizable: true },
   actionsHistoryWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240, resizable: true },
   actionsPreviewWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240, resizable: true },
   alertsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240, resizable: true },
-  processHmiWindow: { width: 306, height: 268, minWidth: 306, minHeight: 248, resizable: true },
+  processHmiWindow: { width: 306, height: 338, minWidth: 306, minHeight: 318, resizable: true },
   processConfigWindow: { width: 260, height: 198, minWidth: 260, minHeight: 198, fixed: true },
   processPlcWindow: { width: 384, height: 210, minWidth: 384, minHeight: 210, fixed: true },
 };
