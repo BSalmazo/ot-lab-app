@@ -1,132 +1,121 @@
-# OT Lab Local Runtime - Installation Scripts
+# OT Lab Local Runtime Installation and Operation
 
-These scripts handle platform-specific requirements for running the OT Lab Local Runtime after download.
+This guide explains how to run the Local Runtime package downloaded from:
+`https://otlab.salmazo.org`
 
-## Why These Scripts?
+The package contains:
 
-When you download binaries from the internet, operating systems add security restrictions:
+- runtime binary
+- startup script for your operating system
+- `agent-config.json` generated for your web session
 
-- **macOS**: Adds quarantine flag, requires `xattr` to remove
-- **Windows**: Windows Defender SmartScreen warns about unverified executables
-- **Linux**: File needs executable permissions set
+## 1. Quick Start
 
-These scripts automate the setup process.
-
-## Installation Instructions
-
-### macOS 🍎
+### 1.1 macOS
 
 ```bash
-# Option 1: Run the installation script
-bash ~/Downloads/install-macos.sh
-
-# Option 2: Manual commands
-xattr -d com.apple.quarantine ~/Downloads/otlab-agent-macos-amd64
-chmod +x ~/Downloads/otlab-agent-macos-amd64
-~/Downloads/otlab-agent-macos-amd64
+bash install-macos.sh
 ```
 
-**Requirements:**
-- libpcap (usually pre-installed, or: `brew install libpcap`)
-
----
-
-### Windows 🪟
-
-```batch
-# Run the batch file (double-click or in Command Prompt)
-"%USERPROFILE%\Downloads\install-windows.bat"
-
-# Or manually:
-# 1. Right-click agent.exe → Properties → Unblock → Apply
-# 2. Double-click to run
-```
-
-**Requirements:**
-- Npcap (download from https://nmap.org/npcap/)
-
----
-
-### Linux 🐧
+Verbose mode:
 
 ```bash
-# Option 1: Run the installation script
-bash ~/Downloads/install-linux.sh
-
-# Option 2: Manual commands
-chmod +x ~/Downloads/otlab-agent-linux-amd64
-~/Downloads/otlab-agent-linux-amd64
+bash install-macos.sh -v
 ```
 
-**Requirements:**
-- libpcap: 
-  - Ubuntu/Debian: `sudo apt-get install libpcap0.8`
-  - CentOS/RHEL: `sudo yum install libpcap`
-  - Arch: `sudo pacman -S libpcap`
+### 1.2 Windows
 
----
+```bat
+install-windows.bat
+```
 
-## What Each Script Does
+Verbose mode:
 
-### `install-macos.sh`
-1. ✓ Removes macOS quarantine flag
-2. ✓ Sets executable permissions
-3. ✓ Verifies installation
-4. ✓ Validates packet-capture runtime by running `agent --help`
-5. ✓ If needed, attempts `brew install libpcap` automatically
-6. ✓ Aborts with clear error if runtime is still unavailable
+```bat
+install-windows.bat -v
+```
 
-### `install-windows.bat`
-1. ✓ Removes Zone.Identifier (SmartScreen)
-2. ✓ Sets file attributes
-3. ✓ Verifies installation
-4. ℹ Checks Npcap status
+### 1.3 Linux
 
-### `install-linux.sh`
-1. ✓ Sets executable permissions
-2. ✓ Auto-detects package manager
-3. ✓ Checks libpcap status
-4. ✓ Provides installation commands if missing
-
----
-
-## Troubleshooting
-
-### "Permission Denied" (macOS/Linux)
 ```bash
-chmod +x ~/Downloads/install-macos.sh
-bash ~/Downloads/install-macos.sh
+bash install-linux.sh
 ```
 
-### "Cannot verify identity" (macOS)
-If you still see the warning after running the script:
-1. Click "Cancel" on the warning
-2. Open System Settings → Privacy & Security
-3. Scroll down and click "Open Anyway" next to the agent
-4. Click "Trust" when prompted
+Verbose mode:
 
-### "Npcap not installed" (Windows/macOS)
-The agent will show a clear error message on startup if Npcap/libpcap is missing.
-Follow the prompts to install the required driver.
-
-### "Command not found" (Linux)
-If `libpcap` is in a non-standard location, you may need to set:
 ```bash
-export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
-./otlab-agent-linux-amd64
+bash install-linux.sh -v
 ```
 
----
+## 2. Runtime UI Controls
 
-## Auto-Update Available
+The Local Runtime UI exposes:
 
-We're working on automated updates. For now, download new versions from the dashboard:
-Open the OT Lab App dashboard and use the Download button
+- `Start Runtime` / `Stop Runtime`
+- `Start Monitor` / `Stop Monitor` (enabled only while runtime is running)
 
----
+Behavior:
 
-## Support
+- Runtime can execute process simulation and local Modbus commands
+- Monitor mode enables packet-based traffic inspection in addition to runtime services
 
-For issues or questions:
-- Email: the project maintainer
-- Issues: https://github.com/BSalmazo/ot-lab-app/issues
+## 3. Platform Prerequisites
+
+### 3.1 Windows
+
+- `Npcap` must be installed:
+  - https://nmap.org/npcap/
+
+### 3.2 macOS and Linux
+
+- `libpcap` must be installed and available
+
+Common install commands:
+
+- macOS: `brew install libpcap`
+- Ubuntu/Debian: `sudo apt-get install libpcap0.8`
+- RHEL/CentOS: `sudo yum install libpcap`
+- Arch: `sudo pacman -S libpcap`
+
+## 4. What the Scripts Do
+
+### 4.1 macOS script
+
+- verifies binary integrity when bundle manifest is present
+- removes quarantine metadata
+- validates executable startup
+- launches runtime UI
+
+### 4.2 Windows script
+
+- clears `Zone.Identifier` metadata when present
+- checks runtime executable availability
+- launches runtime UI
+
+### 4.3 Linux script
+
+- sets executable permissions
+- checks runtime executable availability
+- launches runtime UI
+
+## 5. Troubleshooting
+
+### 5.1 Runtime does not start
+
+- confirm `agent-config.json` exists in the same folder
+- run script in verbose mode (`-v`) and inspect terminal output
+
+### 5.2 Monitor mode cannot inspect traffic
+
+- validate `Npcap`/`libpcap` installation
+- run monitor mode and verify capture interfaces are detected
+
+### 5.3 Download says build is not ready
+
+- refresh the web interface and retry download
+- verify latest release assets in:
+  - `https://github.com/BSalmazo/ot-lab-app/releases`
+
+## 6. Support
+
+- Issues: `https://github.com/BSalmazo/ot-lab-app/issues`
