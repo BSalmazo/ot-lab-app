@@ -333,6 +333,10 @@ const PROCESS_POLL_QUANTITY = 16;
 let processCommandPendingUntil = 0;
 let processCommandPendingLabel = "";
 let processCommandTargetRunning = null;
+let processConfigCache = {
+  poll_start: 0,
+  poll_quantity: PROCESS_POLL_QUANTITY,
+};
 
 function toSafeInt(value, fallback = 0) {
   const parsed = Number(value);
@@ -784,6 +788,8 @@ async function refreshStatus() {
   setDisabled("plcRunSwitchBtn", Date.now() < processCommandPendingUntil || manualModbusActive);
 
   const simRunning = !!data?.process_sim?.running;
+  processConfigCache.poll_start = Number(data?.process_sim?.client?.poll_start ?? 0);
+  processConfigCache.poll_quantity = Number(data?.process_sim?.client?.poll_quantity ?? PROCESS_POLL_QUANTITY);
   const latestProcessCommand = data?.process_control?.latest || null;
   const processStarting =
     latestProcessCommand?.type === "START_PROCESS_SIM" &&
@@ -1423,14 +1429,16 @@ async function startProcessSimulation() {
   const hmiHost = byId("hmiHostInput")?.value || plcHost;
   const hmiPort = parseProcessInput("hmiPortInput", plcPort);
   const pollInterval = Number(byId("processPollIntervalInput")?.value || 0.5);
+  const pollStart = Number(processConfigCache.poll_start ?? 0);
+  const pollQuantity = Number(processConfigCache.poll_quantity ?? PROCESS_POLL_QUANTITY);
   const result = await apiPost("/api/process-sim/start", {
     plc_host: plcHost,
     plc_port: plcPort,
     hmi_host: hmiHost,
     hmi_port: hmiPort,
     poll_interval: pollInterval,
-    poll_start: 0,
-    poll_quantity: PROCESS_POLL_QUANTITY,
+    poll_start: pollStart,
+    poll_quantity: pollQuantity,
     process_type: processType,
   });
 
@@ -1503,6 +1511,8 @@ async function saveProcessConfig() {
   const hmiPort = parseProcessInput("hmiPortInput", plcPort);
   const pollInterval = Number(byId("processPollIntervalInput")?.value || 0.5);
   const processType = byId("processTypeSelect")?.value || "tank_v1";
+  const pollStart = Number(processConfigCache.poll_start ?? 0);
+  const pollQuantity = Number(processConfigCache.poll_quantity ?? PROCESS_POLL_QUANTITY);
 
   const result = await apiPost("/api/process-sim/configure", {
     plc_host: plcHost,
@@ -1510,8 +1520,8 @@ async function saveProcessConfig() {
     hmi_host: hmiHost,
     hmi_port: hmiPort,
     poll_interval: pollInterval,
-    poll_start: 0,
-    poll_quantity: PROCESS_POLL_QUANTITY,
+    poll_start: pollStart,
+    poll_quantity: pollQuantity,
     process_type: processType,
   });
 
@@ -1821,7 +1831,10 @@ function initFloatingWindows() {
   byId("openLogsWindowBtn")?.addEventListener("click", () => openWindow("logsWindow"));
   byId("openConnectionsWindowBtn")?.addEventListener("click", () => openWindow("connectionsWindow"));
   byId("openActionsWindowBtn")?.addEventListener("click", () => openWindow("actionsWindow"));
-  byId("openAlertsWindowBtn")?.addEventListener("click", () => openWindow("alertsWindow"));
+  byId("clearAlertsBtn")?.addEventListener("click", async () => {
+    await apiPost("/api/alerts/clear");
+    await refreshEvents();
+  });
 
   document.querySelectorAll("[data-close-window]").forEach((btn) => {
     btn.addEventListener("click", () => closeWindow(btn.dataset.closeWindow));
