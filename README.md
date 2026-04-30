@@ -3,7 +3,7 @@
 OT Lab App is a web-based OT/ICS laboratory focused on Modbus/TCP visibility, local process simulation, and practical monitoring workflows for research and teaching.
 
 Official web interface:
-`https://otlab.salmazo.org`
+[https://otlab.salmazo.org](https://otlab.salmazo.org)
 
 ## 1. What This Platform Provides
 
@@ -43,45 +43,42 @@ This separation allows process simulation to run locally even when monitoring is
 ### 4.1 Access the platform
 
 Open:
-`https://otlab.salmazo.org`
+[https://otlab.salmazo.org](https://otlab.salmazo.org)
 
 Then use the `Download` button in the Local Runtime card.
+
+The downloaded file is a platform-specific `.zip` package.
+
+After download:
+
+1. unzip the package
+2. open a terminal
+3. navigate to the extracted folder
+4. run the installation/start script for your operating system
 
 ### 4.2 macOS
 
 ```bash
+cd /path/to/unzipped-folder
 bash install-macos.sh
-```
-
-Verbose mode:
-
-```bash
-bash install-macos.sh -v
 ```
 
 ### 4.3 Windows
 
 ```bat
+cd C:\path\to\unzipped-folder
 install-windows.bat
-```
-
-Verbose mode:
-
-```bat
-install-windows.bat -v
 ```
 
 ### 4.4 Linux
 
 ```bash
+cd /path/to/unzipped-folder
 bash install-linux.sh
 ```
 
-Verbose mode:
-
-```bash
-bash install-linux.sh -v
-```
+Optional verbose mode:
+append `-v` to the same command (for example `bash install-macos.sh -v`).
 
 ### 4.5 Runtime operation model
 
