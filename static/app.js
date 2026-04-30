@@ -1744,6 +1744,7 @@ async function loadAndRenderReleases() {
     }
 
     let html = "";
+    let hasDownloadableAssets = false;
     for (const release of releases) {
       const compatible = release.compatible_with_server !== false;
       const releaseType = release.type === "development" 
@@ -1773,16 +1774,19 @@ async function loadAndRenderReleases() {
       }
       
       if (assets.windows) {
+        hasDownloadableAssets = true;
         html += `<a class="download-link" href="${getBundleDownloadUrl("windows")}" download>
           <span class="os-icon">🪟</span> Windows Runtime ZIP
         </a>`;
       }
       if (assets.macos) {
+        hasDownloadableAssets = true;
         html += `<a class="download-link" href="${getBundleDownloadUrl("macos")}" download>
           <span class="os-icon">🍎</span> macOS Runtime ZIP
         </a>`;
       }
       if (assets.linux) {
+        hasDownloadableAssets = true;
         html += `<a class="download-link" href="${getBundleDownloadUrl("linux")}" download>
           <span class="os-icon">🐧</span> Linux Runtime ZIP
         </a>`;
@@ -1795,7 +1799,7 @@ async function loadAndRenderReleases() {
     }
 
     container.innerHTML = html;
-    document.querySelector(".download-fallback")?.classList.toggle("hidden", response.release_ready !== false);
+    document.querySelector(".download-fallback")?.classList.toggle("hidden", hasDownloadableAssets);
 
   } catch (err) {
     console.error("Error loading releases:", err);
