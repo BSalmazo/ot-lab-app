@@ -1017,9 +1017,9 @@ button:disabled {
 
 #processHmiWindow {
   width: 306px;
-  height: 236px;
+  height: 268px;
   min-width: 306px;
-  min-height: 236px;
+  min-height: 248px;
 }
 
 #processConfigWindow {
