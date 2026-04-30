@@ -2810,6 +2810,16 @@ def reset_system(request: Request):
     return response
 
 
+@app.post("/api/alerts/clear")
+def clear_alerts(request: Request):
+    session_id, state = get_session_state_from_request(request)
+    with lock:
+        state["alerts"].clear()
+    response = JSONResponse({"ok": True, "session_id": session_id})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
 @app.post("/api/agent/register")
 def agent_register(payload: dict = Body(...)):
     session_id = payload.get("session_id")
