@@ -1,70 +1,99 @@
 # OT Lab App
 
-OT Lab App is an in-progress OT/ICS cybersecurity lab platform designed to run as a web interface for Modbus/TCP visibility and experimentation.
+OT Lab App is a web-based OT/ICS laboratory focused on Modbus/TCP visibility, local process simulation, and practical monitoring workflows for research and teaching.
 
-It combines a web-based interface, protocol-aware backend logic, and a Local Runtime to monitor traffic, manage events and alerts, and interact with Modbus client/server components in a controlled lab setup.
+Official web interface:
+`https://otlab.salmazo.org`
 
-## Current scope
+## 1. What This Platform Provides
 
-- Modbus/TCP monitoring interface
-- Local Runtime download and configuration flow
-- Session-based event, alert, and log handling
-- Modbus client and server controls from the web UI
-- Traffic summaries focused on industrial communication behavior
-- Cross-platform Local Runtime distribution from GitHub release assets (Windows, macOS, Linux)
-- Local process simulation and HMI/PLC views for controlled testing
+- Web dashboard for OT lab operation
+- Local Runtime (Windows, macOS, Linux) distributed from GitHub Releases
+- Optional traffic monitoring mode (packet-based Modbus/TCP observation)
+- Local process simulation (PLC + HMI model) controlled from the web interface
+- Modbus server/client command and status control
+- Event, alert, and system log timeline
+- Session-based operation, including per-session runtime download configuration
 
-## Main goals
+## 2. Runtime Model
 
-- Provide a simple OT lab environment for Modbus/TCP testing
-- Support visibility into industrial communication flows
-- Help explore monitoring and detection logic in ICS environments
-- Serve as a base for future OT cybersecurity experiments and features
+The platform separates responsibilities between cloud and local execution:
 
-## Tech stack
+- **Web application (Railway)**:
+  - UI, session state, command orchestration, event/alert presentation
+- **Local Runtime (user machine)**:
+  - Executes PLC/HMI process simulation
+  - Executes local Modbus server/client actions
+  - Optionally enables monitoring mode for network packet inspection
 
-- Python
-- FastAPI
-- Jinja2 templates
-- JavaScript / HTML / CSS
-- Modbus/TCP-related parsing and validation components
+This separation allows process simulation to run locally even when monitoring is intentionally disabled.
 
-## Project structure
+## 3. Repository Structure
 
-- `app.py` — main FastAPI application and session/state handling
-- `agent/` — Local Runtime logic, capture agent, runtime services, sniffing, protocol-related modules
-- `templates/` — web interface templates
-- `static/` — frontend assets
-- `scripts/` — installer helpers used when packaging agent downloads
-- `studies/` — checkpoint reports, paper/TRP material, and research evidence
-- `.github/workflows/` — automation workflows
+- `app.py`: FastAPI backend, orchestration, API endpoints, state management
+- `agent/`: Local Runtime and monitoring implementation
+- `static/`: Frontend JavaScript/CSS
+- `templates/`: Jinja2 HTML templates
+- `scripts/`: Cross-platform runtime start/install scripts and operator guide
+- `studies/`: Research materials, checkpoint evidence, paper/TRP support content
+- `.github/workflows/`: Build/release/deploy automation
 
-## Deployment model
+## 4. Installation and Usage
 
-Railway runs the FastAPI web app from this repository. Users open the Railway URL, use the dashboard, download a Local Runtime package for their operating system, and connect that runtime back to their web session.
+See:
+`scripts/INSTALLATION.md`
 
-Local Runtime binaries are not stored in the repository. GitHub Actions builds them and publishes them as release assets under `dev-latest`; the web app downloads the release asset that matches the deployed commit and wraps it with the user/session-specific `agent-config.json`.
+This guide covers Windows, macOS, and Linux, including:
 
-For the safest Railway flow, configure a Railway deploy hook as the GitHub secret `RAILWAY_DEPLOY_HOOK_URL` and disable Railway's direct branch auto-deploy. The GitHub workflow will then build/publish the agent first and trigger Railway only after the matching binaries are available. If Railway deploys directly from GitHub before the workflow finishes, the app will temporarily block agent downloads for that build instead of serving an incompatible agent.
+- Download flow
+- Runtime startup
+- Monitor mode behavior
+- Platform prerequisites (`Npcap` or `libpcap`)
+- Troubleshooting
 
-## Status
+## 5. Release and Deployment Flow
 
-This project is currently **under development**.
+### 5.1 Build/Release
 
-It is being actively refactored and expanded, so features, structure, and workflows may change over time.
+GitHub Actions workflow:
+`.github/workflows/build-and-release.yml`
 
-## Notes
+On updates to `refactor/codex-setup`, the workflow:
 
-This repository is intended for lab, educational, and research-oriented use in OT/ICS contexts. It is not a finished production-ready platform.
+1. builds runtime binaries for Windows, macOS, and Linux
+2. publishes assets to `dev-latest` release
+3. optionally triggers Railway deployment through a deploy hook
 
-## Planned improvements
+### 5.2 Railway
 
-- Improved installation/setup documentation
-- Architecture overview
-- Better screenshots and usage examples
-- Expanded protocol analysis and detection features
-- More robust agent management and observability
+Recommended production flow:
 
-## Author
+- Configure Railway to deploy from `refactor/codex-setup`
+- Configure `RAILWAY_DEPLOY_HOOK_URL` in GitHub repository secrets
+- Keep runtime release generation before deployment to minimize binary/web mismatch windows
+
+## 6. Branching Strategy (Current Baseline + Next Version)
+
+Current stable baseline:
+
+- `refactor/codex-setup`
+
+Recommended next-step model:
+
+1. Create a new branch for the next major cycle (for example `feature/v2`)
+2. Keep `refactor/codex-setup` as operational baseline
+3. Merge to baseline only after integrated validation (web + runtime + release pipeline)
+
+## 7. Research Scope and Intended Use
+
+This repository is designed for:
+
+- doctoral/research environments
+- OT security experimentation and validation
+- teaching and laboratory demonstrations
+
+It is not positioned as a certified industrial control product.
+
+## 8. Maintainer
 
 Bruno Salmazo
