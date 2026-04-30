@@ -484,11 +484,11 @@ function renderProcessPlc(data) {
     : "";
 
   const inputSignalsInUse = [
-    { label: "LEVEL_AI", on: plcOnline },
-    ...(regs.alarmLoThreshold > 0 ? [{ label: "AL_LO_SP", on: regs.alarmLo > 0 }] : []),
-    ...(regs.alarmHiThreshold > 0 ? [{ label: "AL_HI_SP", on: regs.alarmHi > 0 }] : []),
-    ...(regs.limitLoThreshold > 0 ? [{ label: "LIM_LO_SP", on: regs.limitLoActive > 0 }] : []),
-    ...(regs.limitHiThreshold > 0 ? [{ label: "LIM_HI_SP", on: regs.limitHiActive > 0 }] : []),
+    { label: "LEVEL", on: plcOnline },
+    ...(regs.alarmLoThreshold > 0 ? [{ label: "AL", on: regs.alarmLo > 0 }] : []),
+    ...(regs.alarmHiThreshold > 0 ? [{ label: "AH", on: regs.alarmHi > 0 }] : []),
+    ...(regs.limitLoThreshold > 0 ? [{ label: "LL", on: regs.limitLoActive > 0 }] : []),
+    ...(regs.limitHiThreshold > 0 ? [{ label: "LH", on: regs.limitHiActive > 0 }] : []),
   ];
   const inputs = Array.from({ length: 8 }, (_, idx) => {
     const signal = inputSignalsInUse[idx] || null;
@@ -965,13 +965,13 @@ const WINDOW_STATE_KEY_PREFIX = "otlab_window_state_v1_";
 const WINDOW_SIZE_RULES = {
   default: { width: 620, height: 500, minWidth: 280, minHeight: 220 },
   idsWindow: { width: 700, height: 560, minWidth: 280, minHeight: 220 },
-  logsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
-  connectionsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
-  actionsWindow: { width: 980, height: 720, minWidth: 360, minHeight: 260 },
-  actionsHistoryWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
-  actionsPreviewWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240 },
-  alertsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240 },
-  processHmiWindow: { width: 306, height: 236, minWidth: 306, minHeight: 236, resizable: true },
+  logsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240, resizable: true },
+  connectionsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240, resizable: true },
+  actionsWindow: { width: 980, height: 720, minWidth: 360, minHeight: 260, resizable: true },
+  actionsHistoryWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240, resizable: true },
+  actionsPreviewWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240, resizable: true },
+  alertsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240, resizable: true },
+  processHmiWindow: { width: 306, height: 268, minWidth: 306, minHeight: 248, resizable: true },
   processConfigWindow: { width: 260, height: 198, minWidth: 260, minHeight: 198, fixed: true },
   processPlcWindow: { width: 384, height: 210, minWidth: 384, minHeight: 210, fixed: true },
 };
