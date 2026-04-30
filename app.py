@@ -31,6 +31,15 @@ from agent.protocols.modbus.modbus_validators import (
     validate_modbus_action_payload,
 )
 from agent.runtime import SimpleModbusClient, SimpleModbusServer
+from v2_engine import (
+    ATTACK_LIBRARY,
+    PROCESS_PROFILES,
+    SEMANTIC_POLICIES,
+    ai_support_for_decision,
+    evaluate_execution_impact,
+    evaluate_semantic_policy,
+    make_policy_trace_entry,
+)
 
 app = FastAPI(title="OT Lab App")
 
@@ -137,7 +146,7 @@ class ProcessSimulationManager:
         poll_quantity = int(poll_quantity if poll_quantity is not None else self._config["poll_quantity"])
         process_type = str(process_type or self._config["process_type"]).strip() or "tank_v1"
 
-        if process_type != "tank_v1":
+        if process_type not in {"tank_v1", "pumping_line_v1"}:
             raise ValueError("Unsupported process_type")
         if plc_port < 1 or plc_port > 65535 or hmi_port < 1 or hmi_port > 65535:
             raise ValueError("Ports must be between 1 and 65535")
@@ -614,6 +623,26 @@ def default_process_sim():
         },
     }
 
+
+def default_runtime_state():
+    return {
+        "runtime": {"running": False, "mode": "local_runtime_first", "last_updated": None},
+        "monitor": {"running": False, "last_updated": None},
+        "process": {"running": False, "profile_id": "tank_v1", "last_updated": None},
+        "defense": {"running": True, "mode": "semantic_policy_ai_assist", "last_updated": None},
+    }
+
+
+def default_defense_state():
+    return {
+        "enabled": True,
+        "policy_mode": "semantic_policy_ai_assist",
+        "profile_id": "tank_v1",
+        "last_decision": None,
+        "decision_counts": {"ALLOW": 0, "ALLOW_WITH_ALERT": 0, "BLOCK": 0},
+    }
+
+
 def default_modbus_summary():
     return {
         "detected": False,
@@ -655,6 +684,11 @@ def ensure_session_state(session_id: str):
                 "event_log_signatures": deque(maxlen=600),
                 "recent_event_signatures": {},
                 "recent_alert_signatures": {},
+                "runtime_state": default_runtime_state(),
+                "defense_state": default_defense_state(),
+                "policy_decisions": deque(maxlen=600),
+                "command_history": deque(maxlen=400),
+                "execution_reports": deque(maxlen=100),
             }
         return agents_by_session[session_id]
 
@@ -1440,6 +1474,112 @@ def sync_agent_filter_to_process_port(state: dict, port: int):
     state["agent_config"]["updated_at"] = time.time()
 
 
+def get_process_register_values(snapshot: dict) -> list[int]:
+    client_values = (((snapshot or {}).get("client") or {}).get("last_values") or [])
+    if isinstance(client_values, list) and client_values:
+        return [int(v) for v in client_values[:64] if str(v).strip() != ""]
+    server_values = ((((snapshot or {}).get("server") or {}).get("registers_preview") or {}).get("values") or [])
+    if isinstance(server_values, list):
+        return [int(v) for v in server_values[:64] if str(v).strip() != ""]
+    return []
+
+
+def refresh_runtime_state(state: dict):
+    runtime_state = state.get("runtime_state") or default_runtime_state()
+    now = time.time()
+    connected = is_agent_connected(state, now)
+    process_snapshot = state.get("process_sim") or default_process_sim()
+    runtime_state["runtime"]["running"] = connected
+    runtime_state["runtime"]["last_updated"] = now
+    runtime_state["monitor"]["running"] = bool(connected and (state.get("agent_info") or {}).get("running"))
+    runtime_state["monitor"]["last_updated"] = now
+    runtime_state["process"]["running"] = bool(process_snapshot.get("running"))
+    runtime_state["process"]["profile_id"] = str(process_snapshot.get("process_type") or "tank_v1")
+    runtime_state["process"]["last_updated"] = now
+    defense_state = state.get("defense_state") or default_defense_state()
+    runtime_state["defense"]["running"] = bool(defense_state.get("enabled", True))
+    runtime_state["defense"]["mode"] = str(defense_state.get("policy_mode") or "semantic_policy_ai_assist")
+    runtime_state["defense"]["last_updated"] = now
+    state["runtime_state"] = runtime_state
+    state["defense_state"] = defense_state
+
+
+def apply_process_write_with_semantic_control(
+    *,
+    session_id: str,
+    state: dict,
+    address: int,
+    value: int,
+    unit_id: int = 1,
+    enforce_defense: bool = True,
+):
+    now_ts = time.time()
+    process_snapshot = state.get("process_sim") or process_sim.snapshot()
+    profile_id = str((state.get("defense_state") or {}).get("profile_id") or process_snapshot.get("process_type") or "tank_v1")
+    registers = get_process_register_values(process_snapshot)
+    command = {"address": int(address), "value": int(value), "unit_id": int(unit_id), "timestamp": now_ts}
+    history = [item for item in list(state.get("command_history") or []) if isinstance(item, dict)]
+    decision_obj = evaluate_semantic_policy(
+        profile_id=profile_id,
+        process_running=bool(process_snapshot.get("running")),
+        register_values=registers,
+        address=int(address),
+        value=int(value),
+        now_ts=now_ts,
+        last_writes=history,
+    )
+    ai_meta = ai_support_for_decision(decision_obj)
+    trace_entry = make_policy_trace_entry(
+        profile_id=profile_id,
+        command=command,
+        decision=decision_obj,
+        ai_meta=ai_meta,
+    )
+    with lock:
+        state["policy_decisions"].append(trace_entry)
+        state["command_history"].append({"ts": now_ts, "address": int(address), "value": int(value)})
+        defense_state = state.get("defense_state") or default_defense_state()
+        counts = defense_state.get("decision_counts") or {"ALLOW": 0, "ALLOW_WITH_ALERT": 0, "BLOCK": 0}
+        if decision_obj.decision in counts:
+            counts[decision_obj.decision] += 1
+        defense_state["decision_counts"] = counts
+        defense_state["last_decision"] = trace_entry
+        state["defense_state"] = defense_state
+
+    blocked = enforce_defense and bool(defense_state.get("enabled", True)) and decision_obj.decision == "BLOCK"
+    if blocked:
+        push_log_for_session(
+            session_id,
+            f"Semantic policy BLOCKED command HR{address}={value} ({decision_obj.rule_id}: {decision_obj.reason})",
+        )
+        return {
+            "ok": False,
+            "blocked": True,
+            "error": decision_obj.reason,
+            "policy_decision": trace_entry,
+            "process_sim": process_snapshot,
+        }
+
+    if should_run_process_on_agent(state):
+        queue_command(
+            session_id,
+            "WRITE_PROCESS_SIM",
+            {"address": int(address), "value": int(value), "unit_id": int(unit_id)},
+        )
+        result = {"ok": True, "queued": True, "runtime": "agent", "process_sim": state.get("process_sim") or process_snapshot}
+    else:
+        snapshot = process_sim.write_register(address=int(address), value=int(value), unit_id=int(unit_id))
+        state["process_sim"] = snapshot
+        result = {"ok": True, "queued": False, "runtime": "web", "process_sim": snapshot}
+
+    if decision_obj.decision == "ALLOW_WITH_ALERT":
+        push_log_for_session(
+            session_id,
+            f"Semantic policy ALERT for HR{address}={value} ({decision_obj.rule_id}: {decision_obj.reason})",
+        )
+    return {**result, "policy_decision": trace_entry}
+
+
 def should_log_agent_event(state: dict, payload: dict) -> bool:
     event_type = normalize_event_type(payload.get("type"))
     function_code = payload.get("function_code")
@@ -1776,6 +1916,7 @@ def api_status(request: Request):
     # Only use web snapshot when web runtime is actually running.
     if web_process_snapshot.get("running"):
         state["process_sim"] = web_process_snapshot
+    refresh_runtime_state(state)
 
     response = JSONResponse({
         "agent": agent_info,
@@ -1789,7 +1930,10 @@ def api_status(request: Request):
         "client": state["remote_client"],
         "process_sim": state["process_sim"],
         "process_control": build_process_control_status(state, now),
+        "runtime_state": state.get("runtime_state") or default_runtime_state(),
+        "defense_state": state.get("defense_state") or default_defense_state(),
         "agent_config": state["agent_config"],
+        "supported_protocols": ["modbus", "ethercat"],
         "session_id": session_id,
         "instance_id": APP_INSTANCE_ID,
     })
@@ -1990,23 +2134,208 @@ async def api_process_sim_write(request: Request):
         set_session_cookie_if_needed(request, response, session_id)
         return response
 
-    if should_run_process_on_agent(state):
-        queue_command(
-            session_id,
-            "WRITE_PROCESS_SIM",
-            {"address": address, "value": value, "unit_id": unit_id},
+    try:
+        result = apply_process_write_with_semantic_control(
+            session_id=session_id,
+            state=state,
+            address=address,
+            value=value,
+            unit_id=unit_id,
+            enforce_defense=True,
         )
-        response = JSONResponse({"ok": True, "queued": True, "process_sim": state.get("process_sim") or process_sim.snapshot(), "runtime": "agent"})
-    else:
-        try:
-            snapshot = process_sim.write_register(address=address, value=value, unit_id=unit_id)
-        except Exception as e:
-            response = JSONResponse({"ok": False, "error": str(e)}, status_code=400)
-            set_session_cookie_if_needed(request, response, session_id)
-            return response
+    except Exception as e:
+        response = JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
 
-        state["process_sim"] = snapshot
-        response = JSONResponse({"ok": True, "queued": False, "process_sim": snapshot, "runtime": "web"})
+    if not result.get("ok") and result.get("blocked"):
+        response = JSONResponse(result, status_code=409)
+    else:
+        response = JSONResponse(result)
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.get("/api/v2/runtime/state")
+def api_v2_runtime_state(request: Request):
+    session_id, state = get_session_state_from_request(request)
+    refresh_runtime_state(state)
+    response = JSONResponse(
+        {
+            "ok": True,
+            "runtime_state": state.get("runtime_state") or default_runtime_state(),
+            "defense_state": state.get("defense_state") or default_defense_state(),
+            "session_id": session_id,
+        }
+    )
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.get("/api/v2/process-profiles")
+def api_v2_process_profiles(request: Request):
+    session_id, _state = get_session_state_from_request(request)
+    response = JSONResponse({"ok": True, "schemas": {"process_profile": "1.0.0"}, "profiles": list(PROCESS_PROFILES.values())})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.get("/api/v2/semantic-policy")
+def api_v2_semantic_policy(request: Request, profile_id: str = "tank_v1"):
+    session_id, _state = get_session_state_from_request(request)
+    policy = SEMANTIC_POLICIES.get(profile_id) or SEMANTIC_POLICIES["tank_v1"]
+    response = JSONResponse({"ok": True, "schemas": {"semantic_policy": "1.0.0"}, "profile_id": profile_id, "policy": policy})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.get("/api/v2/attacks")
+def api_v2_attacks(request: Request, profile_id: str | None = None):
+    session_id, _state = get_session_state_from_request(request)
+    attacks = list(ATTACK_LIBRARY.values())
+    if profile_id:
+        attacks = [a for a in attacks if str(a.get("profile")) == str(profile_id)]
+    response = JSONResponse({"ok": True, "schemas": {"attack_scenario": "1.0.0"}, "attacks": attacks})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.get("/api/v2/frameworks/traceability")
+def api_v2_frameworks_traceability(request: Request):
+    session_id, _state = get_session_state_from_request(request)
+    rows = []
+    for attack in ATTACK_LIBRARY.values():
+        profile_id = attack.get("profile")
+        policy = SEMANTIC_POLICIES.get(profile_id) or {}
+        for rule in policy.get("rules") or []:
+            rows.append(
+                {
+                    "scenario_id": attack.get("id"),
+                    "scenario_name": attack.get("name"),
+                    "attack_framework": attack.get("framework"),
+                    "attack_technique": attack.get("technique"),
+                    "policy_rule_id": rule.get("id"),
+                    "policy_rule_name": rule.get("name"),
+                    "purdue_zone": "Level 1/2 Control + Level 3 Operations",
+                    "dmz_relevance": "Control-plane orchestration only, no direct process commands across DMZ",
+                    "nist_reference": "NIST SP 800-82r3 (monitoring + control integrity)",
+                }
+            )
+    response = JSONResponse({"ok": True, "matrix": rows})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.get("/api/v2/policy-decisions")
+def api_v2_policy_decisions(request: Request, decision: str | None = None):
+    session_id, state = get_session_state_from_request(request)
+    entries = list(state.get("policy_decisions") or [])
+    if decision:
+        decision_norm = str(decision).upper().strip()
+        entries = [e for e in entries if str(e.get("decision")).upper() == decision_norm]
+    response = JSONResponse({"ok": True, "entries": entries, "count": len(entries)})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.get("/api/v2/execution-reports")
+def api_v2_execution_reports(request: Request):
+    session_id, state = get_session_state_from_request(request)
+    response = JSONResponse({"ok": True, "schemas": {"execution_report": "1.0.0"}, "reports": list(state.get("execution_reports") or [])})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.post("/api/v2/policy-decisions/export")
+def api_v2_policy_decisions_export(request: Request):
+    session_id, state = get_session_state_from_request(request)
+    payload = {
+        "session_id": session_id,
+        "generated_at": time.time(),
+        "entries": list(state.get("policy_decisions") or []),
+    }
+    response = JSONResponse({"ok": True, "export": payload})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.post("/api/v2/scenarios/execute")
+async def api_v2_scenarios_execute(request: Request):
+    session_id, state = get_session_state_from_request(request)
+    try:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            payload = {}
+    except Exception:
+        payload = {}
+
+    profile_id = str(payload.get("profile_id") or "tank_v1")
+    attack_id = str(payload.get("attack_id") or "")
+    mode = str(payload.get("mode") or "baseline").strip().lower()
+
+    attack = ATTACK_LIBRARY.get(attack_id)
+    if not attack:
+        response = JSONResponse({"ok": False, "error": "Unknown attack_id"}, status_code=404)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+    if attack.get("profile") != profile_id:
+        response = JSONResponse({"ok": False, "error": "Attack profile mismatch"}, status_code=400)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+
+    process_snapshot = state.get("process_sim") or process_sim.snapshot()
+    if not process_snapshot.get("running"):
+        response = JSONResponse({"ok": False, "error": "Process simulation must be running to execute scenario"}, status_code=409)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+
+    enforce = mode == "protected"
+    trace = []
+    for step in attack.get("steps") or []:
+        address = int(step.get("address"))
+        value = int(step.get("value"))
+        delay_s = float(step.get("delay_s") or 0.0)
+        try:
+            res = apply_process_write_with_semantic_control(
+                session_id=session_id,
+                state=state,
+                address=address,
+                value=value,
+                unit_id=1,
+                enforce_defense=enforce,
+            )
+        except Exception as exc:
+            trace.append({"ok": False, "address": address, "value": value, "error": str(exc)})
+            break
+        trace.append(res)
+        if delay_s > 0:
+            time.sleep(min(delay_s, 1.0))
+
+    end_snapshot = state.get("process_sim") or process_sim.snapshot()
+    trace_entries = [item.get("policy_decision") for item in trace if isinstance(item, dict) and item.get("policy_decision")]
+    final_registers = get_process_register_values(end_snapshot)
+    impact = evaluate_execution_impact(trace_entries, final_registers)
+    report = {
+        "id": f"rep_{uuid.uuid4().hex[:16]}",
+        "timestamp": time.time(),
+        "profile_id": profile_id,
+        "attack_id": attack_id,
+        "attack_name": attack.get("name"),
+        "mode": mode,
+        "framework": attack.get("framework"),
+        "technique": attack.get("technique"),
+        "trace": trace,
+        "policy_trace": trace_entries,
+        "impact": impact,
+    }
+    with lock:
+        state["execution_reports"].append(report)
+
+    push_log_for_session(
+        session_id,
+        f"Scenario executed ({attack_id}, mode={mode}) impact_score={impact.get('impact_score')}",
+    )
+    response = JSONResponse({"ok": True, "report": report, "session_id": session_id})
     set_session_cookie_if_needed(request, response, session_id)
     return response
 
@@ -2577,6 +2906,8 @@ def agent_runtime_update(payload: dict = Body(...)):
     server_data = payload.get("server") or {}
     client_data = payload.get("client") or {}
     process_data = payload.get("process_sim") or {}
+    runtime_data = payload.get("runtime") or {}
+    monitor_data = payload.get("monitor") or {}
 
     previous_server_running = state["remote_server"]["running"]
     previous_client_running = state["remote_client"]["running"]
@@ -2776,6 +3107,17 @@ def agent_runtime_update(payload: dict = Body(...)):
         )
     elif previous_client_running and not current_client_running:
         push_log_for_session(session_id, "Modbus client stopped")
+
+    runtime_state = state.get("runtime_state") or default_runtime_state()
+    now = time.time()
+    if runtime_data:
+        runtime_state["runtime"]["running"] = bool(runtime_data.get("running", runtime_state["runtime"]["running"]))
+        runtime_state["runtime"]["last_updated"] = now
+    if monitor_data:
+        runtime_state["monitor"]["running"] = bool(monitor_data.get("running", runtime_state["monitor"]["running"]))
+        runtime_state["monitor"]["last_updated"] = now
+    state["runtime_state"] = runtime_state
+    refresh_runtime_state(state)
 
     return {"ok": True, "instance_id": APP_INSTANCE_ID}
 

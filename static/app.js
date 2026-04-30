@@ -337,6 +337,7 @@ let processConfigCache = {
   poll_start: 0,
   poll_quantity: PROCESS_POLL_QUANTITY,
 };
+let cachedV2Attacks = [];
 
 function toSafeInt(value, fallback = 0) {
   const parsed = Number(value);
@@ -774,6 +775,7 @@ async function refreshStatus() {
 
   setBadge("globalRuntimeBadge", "RUNTIME", agentConnected);
   setBadge("globalMonitorBadge", "MONITOR", !!data.monitor?.running);
+  setBadge("globalDefenseBadge", "DEFENSE", !!data.runtime_state?.defense?.running);
   setBadge("globalServerBadge", "SERVER", effectiveServerRunning);
   setBadge("globalClientBadge", "CLIENT", effectiveClientRunning);
 
@@ -974,6 +976,8 @@ const WINDOW_SIZE_RULES = {
   processHmiWindow: { width: 306, height: 338, minWidth: 306, minHeight: 318, resizable: true },
   processConfigWindow: { width: 260, height: 198, minWidth: 260, minHeight: 198, fixed: true },
   processPlcWindow: { width: 384, height: 210, minWidth: 384, minHeight: 210, fixed: true },
+  scenarioWindow: { width: 560, height: 520, minWidth: 360, minHeight: 280, resizable: true },
+  policyWindow: { width: 760, height: 560, minWidth: 360, minHeight: 280, resizable: true },
 };
 const openAlertDetails = new Set();
 let lastAlertsFingerprint = "";
@@ -1317,9 +1321,77 @@ async function refreshAll() {
   try {
     await refreshStatus();
     await refreshEvents();
+    await refreshV2Panels();
   } catch (err) {
     console.error(err);
   }
+}
+
+function formatPolicyDecision(item) {
+  const cmd = item?.command || {};
+  const ai = item?.ai || {};
+  const risk = Number(ai.risk_score ?? 0);
+  return `
+    <div>
+      <strong>${escapeHtml(item?.decision || "-")}</strong> (${escapeHtml(item?.rule_id || "-")})<br>
+      <span>${escapeHtml(item?.reason || "-")}</span><br>
+      <span>CMD: HR${escapeHtml(cmd.address ?? "-")}=${escapeHtml(cmd.value ?? "-")} | risk=${escapeHtml(risk)}</span>
+    </div>
+  `;
+}
+
+function populateAttackSelect(profileId) {
+  const select = byId("scenarioAttackSelect");
+  if (!select) return;
+  const list = (cachedV2Attacks || []).filter((a) => String(a.profile) === String(profileId));
+  select.innerHTML = "";
+  list.forEach((attack) => {
+    const opt = document.createElement("option");
+    opt.value = attack.id;
+    opt.textContent = `${attack.name} (${attack.technique})`;
+    select.appendChild(opt);
+  });
+}
+
+async function refreshV2Panels() {
+  const filter = byId("policyDecisionFilter")?.value || "";
+  const policyUrl = filter ? `/api/v2/policy-decisions?decision=${encodeURIComponent(filter)}` : "/api/v2/policy-decisions";
+  const policy = await apiGet(policyUrl);
+  renderList("policyDecisionPanel", policy.entries || [], (item) => formatPolicyDecision(item));
+}
+
+async function loadV2Attacks() {
+  const data = await apiGet("/api/v2/attacks");
+  cachedV2Attacks = Array.isArray(data.attacks) ? data.attacks : [];
+  populateAttackSelect(byId("scenarioProfileSelect")?.value || "tank_v1");
+}
+
+async function executeScenario(mode) {
+  const profile_id = byId("scenarioProfileSelect")?.value || "tank_v1";
+  const attack_id = byId("scenarioAttackSelect")?.value;
+  if (!attack_id) {
+    alert("Select an attack scenario first.");
+    return;
+  }
+  const result = await apiPost("/api/v2/scenarios/execute", { profile_id, attack_id, mode });
+  if (!result.ok) {
+    alert(result.error || "Scenario execution failed");
+    return;
+  }
+  const report = result.report || {};
+  const impact = report.impact || {};
+  const txt = [
+    `Scenario: ${report.attack_name || report.attack_id}`,
+    `Mode: ${report.mode}`,
+    `Technique: ${report.technique || "-"}`,
+    `Blocked: ${impact.blocked ?? 0}`,
+    `Alerts: ${impact.warned ?? 0}`,
+    `Allowed: ${impact.allowed ?? 0}`,
+    `Final Level: ${impact.final_level ?? "-"}`,
+    `Impact Score: ${impact.impact_score ?? "-"}`,
+  ].join("\n");
+  setText("scenarioResultPanel", txt);
+  await refreshAll();
 }
 
 async function startServer() {
@@ -1835,6 +1907,8 @@ function initFloatingWindows() {
   byId("openLogsWindowBtn")?.addEventListener("click", () => openWindow("logsWindow"));
   byId("openConnectionsWindowBtn")?.addEventListener("click", () => openWindow("connectionsWindow"));
   byId("openActionsWindowBtn")?.addEventListener("click", () => openWindow("actionsWindow"));
+  byId("openScenarioWindowBtn")?.addEventListener("click", () => openWindow("scenarioWindow"));
+  byId("openPolicyWindowBtn")?.addEventListener("click", () => openWindow("policyWindow"));
   byId("clearAlertsBtn")?.addEventListener("click", async () => {
     await apiPost("/api/alerts/clear");
     await refreshEvents();
@@ -1855,6 +1929,8 @@ function initFloatingWindows() {
     "processHmiWindow",
     "processConfigWindow",
     "processPlcWindow",
+    "scenarioWindow",
+    "policyWindow",
   ].forEach((id, index) => {
     const el = byId(id);
     if (!el) return;
@@ -2105,6 +2181,17 @@ window.addEventListener("DOMContentLoaded", () => {
   byId("openServerConfigBtn")?.addEventListener("click", () => openModal("serverModal"));
   byId("openClientConfigBtn")?.addEventListener("click", () => openModal("clientModal"));
   byId("openAgentDownloadBtn")?.addEventListener("click", openAgentDownloadModal);
+  byId("scenarioProfileSelect")?.addEventListener("change", (e) => {
+    populateAttackSelect(e.target.value || "tank_v1");
+  });
+  byId("runBaselineScenarioBtn")?.addEventListener("click", () => executeScenario("baseline"));
+  byId("runProtectedScenarioBtn")?.addEventListener("click", () => executeScenario("protected"));
+  byId("policyDecisionFilter")?.addEventListener("change", () => refreshV2Panels());
+  byId("exportPolicyBtn")?.addEventListener("click", async () => {
+    const exp = await apiPost("/api/v2/policy-decisions/export");
+    const count = (exp?.export?.entries || []).length;
+    alert(`Policy decisions exported in JSON response (${count} entries).`);
+  });
 
   document.querySelectorAll("[data-close]").forEach((btn) => {
     btn.addEventListener("click", () => closeModal(btn.dataset.close));
@@ -2120,6 +2207,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   initFloatingWindows();
   bindProcessSimulationControls();
+  loadV2Attacks().catch((err) => console.error(err));
   if (window.OTLabActions?.mountActionsWindow) {
     window.OTLabActions.mountActionsWindow("actionsWindowBody").catch((err) => {
       console.error(err);

@@ -206,6 +206,13 @@ class HttpClientMixin:
             client_ref = self.modbus_client
             payload = {
                 "session_id": self.session_id,
+                "runtime": {
+                    "running": True,
+                    "mode": "local_runtime_first",
+                },
+                "monitor": {
+                    "running": bool(self.sniffer is not None) and not bool(getattr(self, "runtime_only", False)),
+                },
                 "server": dict(self.server_runtime),
                 "client": dict(self.client_runtime),
             }
