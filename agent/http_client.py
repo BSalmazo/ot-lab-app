@@ -215,6 +215,7 @@ class HttpClientMixin:
                 },
                 "server": dict(self.server_runtime),
                 "client": dict(self.client_runtime),
+                "proxy": dict(getattr(self, "proxy_runtime", {}) or {}),
             }
         payload["process_sim"] = self.get_process_sim_snapshot()
 

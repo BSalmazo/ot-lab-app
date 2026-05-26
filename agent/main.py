@@ -2,6 +2,7 @@ import socket
 import signal
 import threading
 import time
+import os
 from collections import defaultdict, deque
 
 from scapy.all import get_if_list
@@ -27,6 +28,7 @@ from .protocols.modbus.modbus_validators import (
 )
 from .runtime import SimpleModbusClient, SimpleModbusServer
 from .sniffer import SnifferMixin
+from .modbus_proxy import ModbusTcpProxy
 
 
 class AgentMonitor(HttpClientMixin, SnifferMixin):
@@ -69,6 +71,7 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
         self.modbus_client = None
         self.process_modbus_server = None
         self.process_modbus_client = None
+        self.modbus_proxy = None
 
         self.server_runtime = {
             "running": False,
@@ -120,7 +123,73 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
             "process_profiles_v1",
             "semantic_policy_v1",
             "ethercat_mapping_v1",
+            "modbus_proxy_v1",
+            "proxy_target_config_v1",
         ]
+        self.proxy_runtime = {
+            "running": False,
+            "listen_host": "0.0.0.0",
+            "listen_port": 15020,
+            "upstream_host": "openplc",
+            "upstream_port": 502,
+        }
+
+    def start_modbus_proxy(self, listen_host: str, listen_port: int, upstream_host: str, upstream_port: int):
+        with self.runtime_lock:
+            self.stop_modbus_proxy()
+            proxy = ModbusTcpProxy(
+                listen_host=listen_host,
+                listen_port=int(listen_port),
+                upstream_host=upstream_host,
+                upstream_port=int(upstream_port),
+                session_id=self.session_id,
+                agent_id=self.agent_id,
+                on_event=self._ingest_proxy_event,
+            )
+            proxy.start()
+            self.modbus_proxy = proxy
+            self.proxy_runtime = {
+                "running": True,
+                "listen_host": str(listen_host),
+                "listen_port": int(listen_port),
+                "upstream_host": str(upstream_host),
+                "upstream_port": int(upstream_port),
+            }
+
+    def stop_modbus_proxy(self):
+        with self.runtime_lock:
+            proxy = self.modbus_proxy
+            self.modbus_proxy = None
+            self.proxy_runtime["running"] = False
+        if proxy:
+            try:
+                proxy.stop()
+            except Exception as exc:
+                print(f"[agent] proxy stop warning: {exc}")
+
+    def configure_modbus_proxy_target(self, upstream_host: str, upstream_port: int):
+        with self.runtime_lock:
+            listen_host = str(self.proxy_runtime.get("listen_host") or "0.0.0.0")
+            listen_port = int(self.proxy_runtime.get("listen_port") or 15020)
+        self.start_modbus_proxy(
+            listen_host=listen_host,
+            listen_port=listen_port,
+            upstream_host=str(upstream_host),
+            upstream_port=int(upstream_port),
+        )
+        print(
+            "[agent] modbus proxy target updated "
+            f"-> {upstream_host}:{int(upstream_port)}"
+        )
+
+    def _ingest_proxy_event(self, event: dict):
+        try:
+            enriched = dict(event or {})
+            enriched["iface"] = self.iface
+            enriched["summary"] = self._build_event_summary(enriched)
+            self.send_event(enriched)
+        except Exception as exc:
+            print(f"[agent] proxy ingest warning: {exc}")
 
     @staticmethod
     def parse_custom_ports(value):
@@ -225,6 +294,11 @@ class AgentMonitor(HttpClientMixin, SnifferMixin):
                         address=int(payload.get("address")),
                         value=int(payload.get("value")),
                         unit_id=int(payload.get("unit_id", 1)),
+                    )
+                elif cmd_type == "CONFIGURE_PROXY_TARGET":
+                    self.configure_modbus_proxy_target(
+                        upstream_host=str(payload.get("upstream_host", self.proxy_runtime.get("upstream_host") or "openplc")),
+                        upstream_port=int(payload.get("upstream_port", self.proxy_runtime.get("upstream_port") or 502)),
                     )
                 else:
                     raise RuntimeError(f"unknown command: {cmd_type}")
@@ -858,6 +932,26 @@ def main():
     agent.send_runtime_update()
     print("[agent] control loop started")
 
+    proxy_enabled = str(os.getenv("OTLAB_PROXY_ENABLED", "0")).strip().lower() in {"1", "true", "yes", "on"}
+    if proxy_enabled:
+        proxy_listen_host = str(os.getenv("OTLAB_PROXY_LISTEN_HOST", "0.0.0.0"))
+        proxy_listen_port = int(os.getenv("OTLAB_PROXY_LISTEN_PORT", "15020"))
+        proxy_upstream_host = str(os.getenv("OTLAB_PROXY_UPSTREAM_HOST", "openplc"))
+        proxy_upstream_port = int(os.getenv("OTLAB_PROXY_UPSTREAM_PORT", "502"))
+        try:
+            agent.start_modbus_proxy(
+                listen_host=proxy_listen_host,
+                listen_port=proxy_listen_port,
+                upstream_host=proxy_upstream_host,
+                upstream_port=proxy_upstream_port,
+            )
+            print(
+                f"[agent] modbus proxy enabled {proxy_listen_host}:{proxy_listen_port} "
+                f"-> {proxy_upstream_host}:{proxy_upstream_port}"
+            )
+        except Exception as exc:
+            print(f"[agent] failed to start modbus proxy: {exc}")
+
     try:
         last_config_poll = 0.0
         last_heartbeat = 0.0
@@ -896,6 +990,7 @@ def main():
         print("\n[agent] stopping...")
     finally:
         cleanup_steps = [
+            agent.stop_modbus_proxy,
             agent.stop_process_sim,
             agent.stop_modbus_client,
             agent.stop_modbus_server,
