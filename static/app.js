@@ -1,7 +1,73 @@
-const SESSION_STORAGE_KEY = "otlab_session_id_v1";
+const SESSION_STORAGE_KEY = "otlab_session_id_v2";
 const SESSION_ID_REGEX = /^sess_[A-Za-z0-9_-]{8,128}$/;
 
 let pinnedSessionId = null;
+let cachedAttacks = [];
+let labLivePollHandle = null;
+let labSwitchPollHandle = null;
+let labSwitchValue = 0;
+let plcServiceRunning = false;
+let hmiServiceRunning = false;
+let latestTopology = [];
+let uiEndpoints = null;
+let monitorRouteEnabled = true;
+let latestNetworkHosts = [];
+let selectedNetworkHostIp = null;
+let latestNetworkArchitecture = null;
+let latestAlertsClipboardText = "";
+let monitorTagRows = [];
+const FLOW_ACTIVE_TTL_SEC = 3;
+const MONITORED_PROTOCOLS = new Set(["MODBUS/TCP", "MODBUS"]);
+const OT_EVENT_TYPES = new Set(["READ_REQUEST", "READ_RESPONSE", "WRITE_REQUEST", "WRITE_RESPONSE", "EXCEPTION_RESPONSE"]);
+const LINK_EVENT_TYPES = new Set(["LINK_OPEN", "LINK_ERROR", "LINK_CLOSE"]);
+let MODBUS_TAG_MAP = {
+  coil: {
+    0: "PUMP_CMD",
+    1: "VALVE_CMD",
+    2: "ALARM_HI_ACTIVE",
+    3: "ALARM_LO_ACTIVE",
+  },
+  register: {
+    1: "PUMP_FLOW_SP",
+    2: "VALVE_FLOW_SP",
+    3: "ALARM_HI_SP",
+    4: "ALARM_LO_SP",
+    6: "LEVEL_AI",
+  },
+};
+
+function applyTagMap(payloadMap) {
+  const incoming = payloadMap || {};
+  const next = { coil: {}, register: {} };
+  for (const bucket of ["coil", "register"]) {
+    const src = incoming[bucket] || {};
+    for (const [k, v] of Object.entries(src)) {
+      const key = Number(k);
+      if (!Number.isFinite(key)) continue;
+      const val = String(v || "").trim();
+      if (!val) continue;
+      next[bucket][key] = val;
+    }
+  }
+  MODBUS_TAG_MAP = next;
+}
+
+function normalizeTsSeconds(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  // Backends may emit seconds or milliseconds.
+  return n > 1e12 ? n / 1000 : n;
+}
+
+function byId(id) { return document.getElementById(id); }
+function setText(id, text) { const el = byId(id); if (el) el.textContent = text; }
+function setHtml(id, html) { const el = byId(id); if (el) el.innerHTML = html; }
+function flashButtonSaved(btn, label = "Saved", ms = 1000) {
+  if (!btn) return;
+  const prev = btn.textContent;
+  btn.textContent = label;
+  setTimeout(() => { btn.textContent = prev || "Save"; }, ms);
+}
 
 function isValidSessionId(value) {
   return SESSION_ID_REGEX.test(String(value || "").trim());
@@ -16,12 +82,9 @@ function loadPinnedSessionId() {
       return;
     }
   } catch (_) {}
-
   try {
     const saved = localStorage.getItem(SESSION_STORAGE_KEY);
-    if (isValidSessionId(saved)) {
-      pinnedSessionId = String(saved).trim();
-    }
+    if (isValidSessionId(saved)) pinnedSessionId = String(saved).trim();
   } catch (_) {}
 }
 
@@ -29,13 +92,8 @@ function bindSessionToUrl(url) {
   if (!isValidSessionId(pinnedSessionId)) return url;
   try {
     const u = new URL(url, window.location.origin);
-    if (!u.searchParams.get("session_id")) {
-      u.searchParams.set("session_id", pinnedSessionId);
-    }
-    if (u.origin === window.location.origin) {
-      return `${u.pathname}${u.search}${u.hash}`;
-    }
-    return u.toString();
+    if (!u.searchParams.get("session_id")) u.searchParams.set("session_id", pinnedSessionId);
+    return u.origin === window.location.origin ? `${u.pathname}${u.search}${u.hash}` : u.toString();
   } catch (_) {
     return url;
   }
@@ -44,19 +102,12 @@ function bindSessionToUrl(url) {
 function captureSessionId(payload) {
   const candidate = payload?.session_id;
   if (!isValidSessionId(candidate)) return;
-  const normalized = String(candidate).trim();
-  pinnedSessionId = normalized;
-  try {
-    localStorage.setItem(SESSION_STORAGE_KEY, normalized);
-  } catch (_) {}
+  pinnedSessionId = String(candidate).trim();
+  try { localStorage.setItem(SESSION_STORAGE_KEY, pinnedSessionId); } catch (_) {}
 }
 
-loadPinnedSessionId();
-
 async function apiGet(url) {
-  const res = await fetch(bindSessionToUrl(url), {
-    credentials: "same-origin",
-  });
+  const res = await fetch(bindSessionToUrl(url), { credentials: "same-origin" });
   const data = await res.json();
   captureSessionId(data);
   return data;
@@ -74,39 +125,6 @@ async function apiPost(url, data = {}) {
   return payload;
 }
 
-function byId(id) {
-  return document.getElementById(id);
-}
-
-function setText(id, text) {
-  const el = byId(id);
-  if (el) el.textContent = text;
-}
-
-function setHtml(id, html) {
-  const el = byId(id);
-  if (el) el.innerHTML = html;
-}
-
-function setBadge(id, label, running) {
-  const el = byId(id);
-  if (!el) return;
-  el.textContent = `${label}: ${running ? "RUNNING" : "STOPPED"}`;
-  el.style.color = running ? "var(--ok)" : "var(--muted)";
-}
-
-function setToggleButton(id, running) {
-  const btn = byId(id);
-  if (!btn) return;
-  btn.textContent = running ? "Stop" : "Start";
-  btn.classList.toggle("danger", running);
-}
-
-function setDisabled(id, disabled) {
-  const el = byId(id);
-  if (el) el.disabled = disabled;
-}
-
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -116,2104 +134,1185 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-function renderList(containerId, items, formatter) {
-  const container = byId(containerId);
-  if (!container) return;
-
-  container.innerHTML = "";
-
-  if (!items || items.length === 0) {
-    container.innerHTML = `<div class="log-item">No data available.</div>`;
-    return;
-  }
-
-  [...items].reverse().forEach((item) => {
-    const div = document.createElement("div");
-    div.className = "log-item";
-    // Avoid leading/trailing whitespace text nodes that add extra vertical gaps
-    // inside log containers (especially alerts/connections cards).
-    div.innerHTML = String(formatter(item) ?? "").trim();
-    container.appendChild(div);
-  });
+function endpointHost(v) {
+  const raw = String(v || "").trim();
+  if (!raw) return raw;
+  if (raw.includes(":") && raw.split(":").length === 2 && raw.includes(".")) return raw.split(":")[0];
+  return raw;
 }
 
-function openModal(id) {
-  const el = byId(id);
-  if (el) el.classList.remove("hidden");
-}
-
-function closeModal(id) {
-  const el = byId(id);
-  if (el) el.classList.add("hidden");
-}
-
-function openWindow(id) {
+function setBadge(id, label, running) {
   const el = byId(id);
   if (!el) return;
-  el.classList.remove("hidden");
-  const rule = getWindowSizeRule(id);
-  if (rule?.autoFit) {
-    fitWindowToContent(el, id);
-  }
-  bringWindowToFront(el);
+  el.textContent = `${label}: ${running ? "RUNNING" : "STOPPED"}`;
+  el.style.color = running ? "var(--ok)" : "var(--muted)";
 }
 
+function openModal(id) { const el = byId(id); if (el) el.classList.remove("hidden"); }
+function closeModal(id) { const el = byId(id); if (el) el.classList.add("hidden"); }
+function openWindow(id) { const el = byId(id); if (el) el.classList.remove("hidden"); }
 function closeWindow(id) {
   const el = byId(id);
-  if (!el) return;
-  el.classList.add("hidden");
+  if (!el || el.classList.contains("hidden")) return;
+  el.classList.add("closing");
+  setTimeout(() => {
+    el.classList.add("hidden");
+    el.classList.remove("closing");
+  }, 170);
 }
 
-let floatingZ = 1300;
-
-function bringWindowToFront(el) {
-  floatingZ += 1;
-  el.style.zIndex = String(floatingZ);
-}
-
-function makeWindowDraggable(windowEl) {
-  if (!windowEl) return;
-
-  const head = windowEl.querySelector(".window-head");
-  if (!head) return;
-
-  let dragging = false;
-  let offsetX = 0;
-  let offsetY = 0;
-
-  const startDrag = (clientX, clientY) => {
-    const rect = windowEl.getBoundingClientRect();
-    dragging = true;
-    offsetX = clientX - rect.left;
-    offsetY = clientY - rect.top;
-    bringWindowToFront(windowEl);
-  };
-
-  const onMove = (clientX, clientY) => {
-    if (!dragging) return;
-
-    const maxLeft = Math.max(0, window.innerWidth - windowEl.offsetWidth);
-    const maxTop = Math.max(0, window.innerHeight - windowEl.offsetHeight);
-
-    let left = clientX - offsetX;
-    let top = clientY - offsetY;
-
-    left = Math.max(0, Math.min(left, maxLeft));
-    top = Math.max(0, Math.min(top, maxTop));
-
-    windowEl.style.left = `${left}px`;
-    windowEl.style.top = `${top}px`;
-  };
-
-  const stopDrag = () => {
-    if (dragging && windowEl?.id) {
-      persistWindowState(windowEl, windowEl.id);
+function openQuickConfigWindow(windowId, anchorButtonId) {
+  const win = byId(windowId);
+  const btn = byId(anchorButtonId);
+  if (!win) return;
+  win.classList.remove("hidden");
+  win.classList.remove("closing");
+  if (!btn) return;
+  const rect = btn.getBoundingClientRect();
+  const preferredWidth = windowId === "networkScanWindow"
+    ? 860
+    : (win.classList.contains("attack-config-window") ? 460 : 360);
+  const w = Math.min(preferredWidth, Math.max(320, window.innerWidth - 24));
+  const gap = 12;
+  const measuredH = windowId === "networkScanWindow"
+    ? Math.max(300, Math.min(560, win.offsetHeight || 420))
+    : Math.max(220, Math.min(520, win.offsetHeight || 260));
+  const spaceBelow = window.innerHeight - rect.bottom;
+  const spaceAbove = rect.top;
+  let top;
+  if (windowId === "networkScanWindow") {
+    // Prefer opening above button for dock actions.
+    if (spaceAbove >= (measuredH + gap)) {
+      top = rect.top - measuredH - gap;
+    } else if (spaceBelow >= (measuredH + gap)) {
+      top = rect.bottom + gap;
+    } else {
+      top = Math.max(8, rect.top - measuredH - gap);
     }
-    dragging = false;
-  };
-
-  head.addEventListener("mousedown", (e) => {
-    if (e.target.closest("button")) return;
-    startDrag(e.clientX, e.clientY);
-    e.preventDefault();
-  });
-
-  document.addEventListener("mousemove", (e) => {
-    onMove(e.clientX, e.clientY);
-  });
-
-  document.addEventListener("mouseup", stopDrag);
-
-  head.addEventListener(
-    "touchstart",
-    (e) => {
-      if (e.target.closest("button")) return;
-      const touch = e.touches[0];
-      if (!touch) return;
-      startDrag(touch.clientX, touch.clientY);
-    },
-    { passive: true }
-  );
-
-  document.addEventListener(
-    "touchmove",
-    (e) => {
-      const touch = e.touches[0];
-      if (!touch) return;
-      onMove(touch.clientX, touch.clientY);
-    },
-    { passive: true }
-  );
-
-  document.addEventListener("touchend", stopDrag);
-
-  windowEl.addEventListener("mousedown", () => bringWindowToFront(windowEl));
-}
-
-function populateIfaceSelect(interfaces, selectedValue) {
-  const select = byId("ifaceSelect");
-  if (!select) return;
-
-  select.innerHTML = "";
-
-  const allOption = document.createElement("option");
-  allOption.value = "ALL";
-  allOption.textContent = "ALL";
-  if ((selectedValue || "ALL") === "ALL") {
-    allOption.selected = true;
+  } else {
+    if (spaceBelow >= (measuredH + gap) || spaceBelow >= spaceAbove) {
+      top = rect.bottom + gap; // open below button
+    } else {
+      top = rect.top - measuredH - gap; // open above button
+    }
   }
-  select.appendChild(allOption);
+  const centeredLeft = rect.left + (rect.width / 2) - (w / 2);
+  const left = Math.max(12, Math.min(window.innerWidth - w - 12, centeredLeft));
+  top = Math.max(8, Math.min(window.innerHeight - measuredH - 8, top));
+  win.style.width = `${w}px`;
+  win.style.left = `${left}px`;
+  win.style.top = `${top}px`;
+  win.style.height = "auto";
+}
 
-  (interfaces || []).forEach((iface) => {
-    const option = document.createElement("option");
-    option.value = iface;
-    option.textContent = iface;
-    if (iface === selectedValue) {
-      option.selected = true;
-    }
-    select.appendChild(option);
+function toggleQuickConfigWindow(windowId, anchorButtonId, beforeOpen) {
+  const win = byId(windowId);
+  if (!win) return;
+  if (!win.classList.contains("hidden")) {
+    closeWindow(windowId);
+    return;
+  }
+  if (typeof beforeOpen === "function") beforeOpen();
+  openQuickConfigWindow(windowId, anchorButtonId);
+}
+
+function enableWindowDragging() {
+  let active = null;
+  let startX = 0;
+  let startY = 0;
+  let startLeft = 0;
+  let startTop = 0;
+
+  const onMove = (ev) => {
+    if (!active) return;
+    const dx = ev.clientX - startX;
+    const dy = ev.clientY - startY;
+    const width = active.offsetWidth || 320;
+    const height = active.offsetHeight || 220;
+    const nextLeft = Math.max(8, Math.min(window.innerWidth - width - 8, startLeft + dx));
+    const nextTop = Math.max(8, Math.min(window.innerHeight - height - 8, startTop + dy));
+    active.style.left = `${nextLeft}px`;
+    active.style.top = `${nextTop}px`;
+  };
+
+  const onUp = () => {
+    active = null;
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", onUp);
+  };
+
+  document.querySelectorAll(".floating-window .window-head").forEach((head) => {
+    head.addEventListener("pointerdown", (ev) => {
+      const target = ev.target;
+      if (target && (target.closest(".window-close") || target.closest("button") || target.closest("input") || target.closest("select"))) {
+        return;
+      }
+      const win = head.closest(".floating-window");
+      if (!win) return;
+      active = win;
+      startX = ev.clientX;
+      startY = ev.clientY;
+      startLeft = parseFloat(win.style.left || "120") || 120;
+      startTop = parseFloat(win.style.top || "120") || 120;
+      document.addEventListener("pointermove", onMove);
+      document.addEventListener("pointerup", onUp);
+    });
   });
+}
+
+function renderList(containerId, items, formatter, emptyText = "No data available.") {
+  const container = byId(containerId);
+  if (!container) return;
+  if (!items?.length) {
+    container.innerHTML = `<div class="log-item">${escapeHtml(emptyText)}</div>`;
+    return;
+  }
+  container.innerHTML = items.slice().reverse().map((item) =>
+    `<div class="log-item">${String(formatter(item) || "").trim()}</div>`
+  ).join("");
 }
 
 function formatAgentStatus(data) {
-  const runtimeRunning = !!data.agent?.connected;
-  const monitorRunning = !!data.monitor?.running;
-  const iface = data.agent_config?.iface || data.agent?.iface || "-";
-  const mode = data.agent_config?.mode || data.agent?.mode || "-";
-  const portMode = data.agent_config?.port_mode || data.agent?.port_mode || "-";
-  const customPorts = data.agent_config?.custom_ports || data.agent?.custom_ports || [];
-  const customPortText = Array.isArray(customPorts) && customPorts.length ? customPorts.join(",") : "-";
-
+  const a = data?.agent || {};
+  const opMode = String(data?.monitor_operating_mode || "observe").toUpperCase();
+  const ports = a.port_mode === "CUSTOM" ? ((a.custom_ports || []).join(",") || "-") : String(a.port_mode || "-");
   return [
-    `RUNTIME: ${runtimeRunning ? "RUNNING" : "STOPPED"}`,
-    `MONITOR: ${monitorRunning ? "RUNNING" : "STOPPED"}`,
-    `INTERFACE: ${iface}`,
-    `MODE: ${mode}`,
-    `PORT FILTER: ${portMode}`,
-    `CUSTOM PORTS: ${customPortText}`
+    `MODE: ${opMode}`,
+    `INTERFACE: ${a.iface || "-"}`,
+    `PORTS: ${ports}`,
   ].join("\n");
 }
 
-function formatServerStatus(server) {
-  return [
-    `STATUS: ${server?.running ? "RUNNING" : "STOPPED"}`,
-    `HOST: ${server?.host || "-"}`,
-    `PORT: ${server?.port || "-"}`
-  ].join("\n");
+function formatEvent(item) {
+  const rawTs = item?.ts_iso || item?.timestamp || "-";
+  const ts = Number.isFinite(Number(rawTs)) ? new Date(Number(rawTs) * 1000).toLocaleTimeString() : String(rawTs);
+  const type = String(item?.type || "EVENT");
+  const summary = String(item?.summary || item?.message || item?.text || "").trim();
+  return `<strong>[${escapeHtml(type)}] ${escapeHtml(ts)}</strong><br>${escapeHtml(summary || "Event detected")}`;
 }
 
-function formatClientStatus(client) {
-  return [
-    `STATUS: ${client?.running ? "RUNNING" : "STOPPED"}`,
-    `HOST: ${client?.host || "-"}`,
-    `PORT: ${client?.port || "-"}`,
-    `POLL: ${client?.poll_interval ?? "-"}s`,
-    `START: ${client?.poll_start ?? "-"}`,
-    `QTY: ${client?.poll_quantity ?? "-"}`
-  ].join("\n");
-}
+function formatAlert(item) {
+  const severity = String(item?.severity || "info").toUpperCase();
+  const title = String(item?.event_type || item?.event || "Alert");
+  const rawSummary = String(item?.summary || item?.message || "-");
+  const summary = rawSummary.replace(/\s*\|\s*rtt=[^|]+/gi, "").trim();
 
-const PROCESS_REG_MAP = {
-  level: 0,
-  _reserved: 1,
-  pump: 2,
-  valve: 3,
-  _auto: 4,
-  alarmHi: 5,
-  alarmLo: 6,
-  tick: 7,
-  alarmHiThreshold: 8,
-  alarmLoThreshold: 9,
-  limitHiThreshold: 10,
-  limitLoThreshold: 11,
-  limitHiActive: 12,
-  limitLoActive: 13,
-};
-const PROCESS_POLL_QUANTITY = 16;
-let processCommandPendingUntil = 0;
-let processCommandPendingLabel = "";
-let processCommandTargetRunning = null;
-let processConfigCache = {
-  poll_start: 0,
-  poll_quantity: PROCESS_POLL_QUANTITY,
-};
-let cachedV2Attacks = [];
-
-function toSafeInt(value, fallback = 0) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.trunc(parsed);
-}
-
-function getProcessRegistersFromStatus(data) {
-  const processSim = data?.process_sim || {};
-  const clientValues = Array.isArray(processSim?.client?.last_values) ? processSim.client.last_values : [];
-  const serverValues = Array.isArray(processSim?.server?.registers_preview?.values)
-    ? processSim.server.registers_preview.values
-    : [];
-  const values = clientValues.length ? clientValues : serverValues;
-
-  return {
-    raw: values,
-    level: toSafeInt(values[PROCESS_REG_MAP.level], 0),
-    pump: toSafeInt(values[PROCESS_REG_MAP.pump], 0),
-    valve: toSafeInt(values[PROCESS_REG_MAP.valve], 0),
-    alarmHi: toSafeInt(values[PROCESS_REG_MAP.alarmHi], 0),
-    alarmLo: toSafeInt(values[PROCESS_REG_MAP.alarmLo], 0),
-    tick: toSafeInt(values[PROCESS_REG_MAP.tick], 0),
-    alarmHiThreshold: toSafeInt(values[PROCESS_REG_MAP.alarmHiThreshold], 0),
-    alarmLoThreshold: toSafeInt(values[PROCESS_REG_MAP.alarmLoThreshold], 0),
-    limitHiThreshold: toSafeInt(values[PROCESS_REG_MAP.limitHiThreshold], 0),
-    limitLoThreshold: toSafeInt(values[PROCESS_REG_MAP.limitLoThreshold], 0),
-    limitHiActive: toSafeInt(values[PROCESS_REG_MAP.limitHiActive], 0),
-    limitLoActive: toSafeInt(values[PROCESS_REG_MAP.limitLoActive], 0),
-  };
-}
-
-function formatRelativeTimestamp(ts) {
-  if (!ts) return "-";
-  const delta = Date.now() / 1000 - Number(ts);
-  if (!Number.isFinite(delta)) return "-";
-  if (delta < 1) return "now";
-  return `${delta.toFixed(1)}s ago`;
-}
-
-function setSwitchState(id, on) {
-  const el = byId(id);
-  if (!el) return;
-  el.classList.toggle("hmi-switch-on", !!on);
-  el.classList.toggle("hmi-switch-off", !on);
-}
-
-function setProcessRunButton(running, pending = false, label = "") {
-  const btn = byId("plcRunSwitchBtn");
-  if (!btn) return;
-  if (pending) {
-    btn.textContent = label || "WORKING...";
-  } else {
-    btn.textContent = running ? "STOP" : "START";
-  }
-  setSwitchState("plcRunSwitchBtn", running);
-}
-
-function isSimulationUsingRuntime(data) {
-  return !!data?.process_sim?.running;
-}
-
-function isManualModbusActive(data) {
-  return !!data?.server?.running || !!data?.client?.running;
-}
-
-function renderProcessHmi(data) {
-  const regs = getProcessRegistersFromStatus(data);
-  const processSim = data?.process_sim || {};
-  const fill = byId("tankLevelFill");
-  const levelText = byId("tankLevelText");
-
-  const pct = Math.max(0, Math.min(100, regs.level));
-  if (fill) fill.style.height = `${pct}%`;
-  if (levelText) levelText.textContent = `Level: ${regs.level} / 100 (${pct.toFixed(1)}%)`;
-
-  const simRunning = !!processSim?.running;
-  const alarmActive = regs.alarmHi > 0 || regs.alarmLo > 0;
-  const limitActive = regs.limitHiActive > 0 || regs.limitLoActive > 0;
-
-  const commandPending = Date.now() < processCommandPendingUntil;
-  if (!commandPending || processCommandTargetRunning === simRunning) {
-    processCommandPendingUntil = 0;
-    processCommandPendingLabel = "";
-    processCommandTargetRunning = null;
-  }
-  setProcessRunButton(simRunning, Date.now() < processCommandPendingUntil, processCommandPendingLabel);
-  setSwitchState("hmiPumpSwitchBtn", regs.pump > 0);
-  setSwitchState("hmiValveSwitchBtn", regs.valve > 0);
-
-  const processTypeSelect = byId("processTypeSelect");
-  if (
-    processTypeSelect &&
-    document.activeElement !== processTypeSelect &&
-    processSim?.process_type
-  ) {
-    processTypeSelect.value = processSim.process_type;
-  }
-
-  const alarmBanner = byId("hmiAlarmBanner");
-  if (alarmBanner) {
-    alarmBanner.classList.toggle("hidden", !alarmActive);
-    if (alarmActive) {
-      const reasons = [
-        regs.alarmHi > 0 ? "HIGH" : null,
-        regs.alarmLo > 0 ? "LOW" : null,
-      ].filter(Boolean).join(" / ");
-      alarmBanner.textContent = `ALARM ${reasons}`;
-    }
-  }
-
-  const limitBanner = byId("hmiLimitBanner");
-  if (limitBanner) {
-    limitBanner.classList.toggle("hidden", !limitActive);
-    if (limitActive) {
-      const reasons = [
-        regs.limitHiActive > 0 ? "HIGH LIMIT" : null,
-        regs.limitLoActive > 0 ? "LOW LIMIT" : null,
-      ].filter(Boolean).join(" / ");
-      limitBanner.textContent = `PROCESS STOPPED BY ${reasons}`;
-    }
-  }
-
-}
-
-function renderProcessPlc(data) {
-  const regs = getProcessRegistersFromStatus(data);
-  const processSim = data?.process_sim || {};
-  const processControl = data?.process_control || {};
-  const latestCommand = processControl?.latest || null;
-  const commandStatus = String(latestCommand?.status || "").toLowerCase();
-  const commandType = String(latestCommand?.type || "");
-  const startPending = commandType === "START_PROCESS_SIM" && ["queued", "sent"].includes(commandStatus);
-  const serverRunning = !!processSim?.server?.running;
-  const clientRunning = !!processSim?.client?.running;
-  const processError = String(processSim?.client?.last_error || "").trim();
-  const lastSuccessTs = Number(processSim?.client?.last_success_at || 0);
-  const pollAgeS = lastSuccessTs > 0 ? (Date.now() / 1000 - lastSuccessTs) : Infinity;
-  const pollFresh = Number.isFinite(pollAgeS) && pollAgeS <= 2.5;
-  const plcOnline = !!processSim?.running && !startPending;
-  const plcStarting = !!processSim?.running && startPending;
-  const plcLabel = plcStarting ? "STARTING" : (plcOnline ? "RUNNING" : "OFFLINE");
-  const plcStatusText = latestCommand
-    ? `${latestCommand.type || "COMMAND"} ${latestCommand.status || "-"}${latestCommand.message ? ` | ${latestCommand.message}` : ""}`
-    : "";
-
-  const inputSignalsInUse = [
-    { label: "LEVEL", on: plcOnline },
-    ...(regs.alarmLoThreshold > 0 ? [{ label: "AL", on: regs.alarmLo > 0 }] : []),
-    ...(regs.alarmHiThreshold > 0 ? [{ label: "AH", on: regs.alarmHi > 0 }] : []),
-    ...(regs.limitLoThreshold > 0 ? [{ label: "LL", on: regs.limitLoActive > 0 }] : []),
-    ...(regs.limitHiThreshold > 0 ? [{ label: "LH", on: regs.limitHiActive > 0 }] : []),
-  ];
-  const inputs = Array.from({ length: 8 }, (_, idx) => {
-    const signal = inputSignalsInUse[idx] || null;
-    return {
-      code: `I0.${idx}`,
-      label: signal ? signal.label : "",
-      on: signal ? !!signal.on : false,
-    };
+  const monitorPort = Number(uiEndpoints?.monitor_proxy?.port || 15020);
+  const monitorAliasIps = new Set();
+  const directMonIp = String(uiEndpoints?.monitor_proxy?.ip || "").trim();
+  if (directMonIp) monitorAliasIps.add(directMonIp);
+  (latestNetworkHosts || []).forEach((h) => {
+    const ip = String(h?.ip || "").trim();
+    const role = String(h?.role || "").toLowerCase();
+    const ports = Array.isArray(h?.open_ports) ? h.open_ports.map((p) => Number(p)) : [];
+    if (!ip) return;
+    if (role === "monitor" || ports.includes(monitorPort)) monitorAliasIps.add(ip);
   });
 
-  const outputSignalsInUse = [
-    { label: "PUMP", on: regs.pump > 0 },
-    { label: "VALVE", on: regs.valve > 0 },
-  ];
-  const outputs = Array.from({ length: 8 }, (_, idx) => {
-    const signal = outputSignalsInUse[idx] || null;
-    return {
-      code: `Q0.${idx}`,
-      label: signal ? signal.label : "",
-      on: signal ? !!signal.on : false,
-    };
-  });
-
-  const buildIoRow = (items, kind) =>
-    items
-      .map((item) => `
-        <div class="plc-pin ${kind}">
-          <div class="plc-pin-terminal ${item.on ? "on" : "off"}"></div>
-          <div class="plc-io-label">${escapeHtml(item.code)}</div>
-          <div class="plc-io-name">${escapeHtml(item.label)}</div>
-        </div>
-      `)
-      .join("");
-
-  const shell = byId("plcVisualShell");
-  if (shell) {
-    shell.innerHTML = `
-      <div class="plc-faceplate">
-        <div class="plc-top-row">
-          <div class="plc-pin-row plc-pin-row-top">${buildIoRow(inputs, "in")}</div>
-        </div>
-
-        <div class="plc-body-main">
-          <div class="plc-brand-box">
-            <div class="plc-brand-title">PLC</div>
-            <div class="plc-run-row">
-              <span class="plc-run-led ${(plcOnline || plcStarting) ? "on blink" : "off"}"></span>
-              <span class="plc-run-label">${plcLabel}</span>
-            </div>
-          </div>
-          <div class="plc-center-values">
-            <div><strong>Level:</strong> ${escapeHtml(regs.level)}</div>
-            <div><strong>Alarm L/H:</strong> ${regs.alarmLoThreshold} / ${regs.alarmHiThreshold}</div>
-            <div><strong>Limit L/H:</strong> ${regs.limitLoThreshold} / ${regs.limitHiThreshold}</div>
-            <div><strong>Tick:</strong> ${escapeHtml(regs.tick)}</div>
-          </div>
-        </div>
-
-        <div class="plc-bottom-row">
-          <div class="plc-pin-row plc-pin-row-bottom">${buildIoRow(outputs, "out")}</div>
-        </div>
-      </div>
-    `;
-  }
-}
-
-function renderProcessSimulation(data) {
-  renderProcessHmi(data);
-  renderProcessPlc(data);
-}
-
-function formatPolling(value) {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
-  return `${Number(value).toFixed(1)} s`;
-}
-
-function formatFunctions(functionsSeen, exceptionFunctionsSeen = []) {
-  if ((!Array.isArray(functionsSeen) || functionsSeen.length === 0) && (!Array.isArray(exceptionFunctionsSeen) || exceptionFunctionsSeen.length === 0)) {
-    return `<div class="event-value">-</div>`;
-  }
-
-  const normal = new Set();
-  const exceptions = new Set();
-  for (const rawFc of functionsSeen || []) {
-    const fc = Number(rawFc);
-    if (!Number.isFinite(fc)) continue;
-    if (fc > 127) {
-      exceptions.add(fc & 0x7f);
-    } else {
-      normal.add(fc);
-    }
-  }
-
-  const normalList = [...normal].sort((a, b) => a - b);
-  for (const rawFc of exceptionFunctionsSeen || []) {
-    const fc = Number(rawFc);
-    if (!Number.isFinite(fc)) continue;
-    if (fc > 0 && fc < 128) {
-      exceptions.add(fc);
-    }
-  }
-  const exceptionList = [...exceptions].sort((a, b) => a - b);
-
-  const union = [...new Set([...normalList, ...exceptionList])].sort((a, b) => a - b);
-  return `
-    <div class="fc-list">
-      ${union
-        .map((fc) => {
-          const hasException = exceptionList.includes(fc);
-          if (!hasException) {
-            return `<span class="fc-badge">FC${escapeHtml(fc)}</span>`;
-          }
-          const tip = exceptionInfoByFc.get(fc) || `Exception response detected for FC${fc} (raw frame may appear as FC${fc + 128}).`;
-          return `<span class="fc-badge fc-badge-exception" data-fc-exception-tooltip="${escapeHtml(tip)}">FC${escapeHtml(fc)}</span>`;
-        })
-        .join("")}
-    </div>
-  `;
-}
-
-function hasRealCommunication(summary, events) {
-  if (!summary || !summary.detected) return false;
-  const stateLabel = String(summary.state || "").toLowerCase();
-  if (stateLabel === "inactive") return false;
-  return Array.isArray(events) && events.length > 0;
-}
-
-function renderEventsPanel(summary, events = []) {
-  const el = byId("eventsPanel");
-  if (!el) return;
-
-  if (!hasRealCommunication(summary, events)) {
-    el.className = "event-summary empty";
-    el.innerHTML = `
-      <div class="event-empty-title">No communication identified</div>
-      <div class="event-empty-subtitle">Waiting for Modbus/TCP traffic...</div>
-    `;
-    return;
-  }
-
-  const writesDetected = !!summary.writes_detected;
-  const stateLabel = summary.state || "Active";
-  const stateClass = stateLabel.toLowerCase() === "inactive" ? "inactive" : "";
-
-  el.className = "event-summary";
-  el.innerHTML = `
-    <div class="event-title-row">
-      <div class="event-title">Communication detected</div>
-      <div class="event-state ${stateClass}">${escapeHtml(stateLabel)}</div>
-    </div>
-
-    <div class="event-grid">
-      <div class="event-item">
-        <div class="event-label">Protocol</div>
-        <div class="event-value">Modbus/TCP</div>
-      </div>
-
-      <div class="event-item">
-        <div class="event-label">Interface</div>
-        <div class="event-value soft">${escapeHtml(summary.interface || "-")}</div>
-      </div>
-
-      <div class="event-item">
-        <div class="event-label">Port</div>
-        <div class="event-value">${escapeHtml(summary.port ?? "-")}</div>
-      </div>
-
-      <div class="event-item">
-        <div class="event-label">Client</div>
-        <div class="event-value soft">${escapeHtml(stripPort(summary.client_ip || "-"))}</div>
-      </div>
-
-      <div class="event-item">
-        <div class="event-label">Server</div>
-        <div class="event-value soft">${escapeHtml(stripPort(summary.server_ip || "-"))}</div>
-      </div>
-
-      <div class="event-item">
-        <div class="event-label">Average polling</div>
-        <div class="event-value">${escapeHtml(formatPolling(summary.avg_polling_s))}</div>
-      </div>
-
-      <div class="event-item">
-        <div class="event-label">Writes detected</div>
-        <div class="event-value ${writesDetected ? "write-yes" : "write-no"}">
-          ${writesDetected ? "Yes" : "No"}
-        </div>
-      </div>
-
-      <div class="event-item wide">
-        <div class="event-label">Observed functions</div>
-        ${formatFunctions(summary.functions_seen, summary.exception_functions_seen)}
-      </div>
-    </div>
-  `;
-  bindFcExceptionTooltips(el);
-}
-
-function stripPort(value) {
-  if (!value) return "-";
-  const str = String(value);
-  const idx = str.lastIndexOf(":");
-  if (idx > 0) return str.slice(0, idx);
-  return str;
-}
-
-function buildReadableSnapshot(snapshot) {
-  if (!snapshot || Object.keys(snapshot).length === 0) {
-    return "No IDS data available yet.";
-  }
-
-  const overview = snapshot.traffic_overview || {};
-  const functionCodes =
-    Array.isArray(snapshot.function_codes_seen) && snapshot.function_codes_seen.length
-      ? snapshot.function_codes_seen.join(", ")
-      : "-";
-
-  const readPatterns =
-    Array.isArray(snapshot.read_patterns) && snapshot.read_patterns.length
-      ? snapshot.read_patterns
-          .map((p) => {
-            const avg = p.avg_period == null ? "-" : `${Number(p.avg_period).toFixed(3)}s`;
-            return `${p.server} | start=${p.start} qty=${p.quantity} | count=${p.count} | avg=${avg}`;
-          })
-          .join("\n")
-      : "-";
-
-  const writeRegisters =
-    Array.isArray(snapshot.write_registers) && snapshot.write_registers.length
-      ? snapshot.write_registers
-          .map(
-            (w) =>
-              `reg=${w.register} | count=${w.count} | last=${w.last_value} | seen=[${(w.values_seen || []).join(", ")}]`
-          )
-          .join("\n")
-      : "-";
-
-  return [
-    `Monitor ID: ${snapshot.agent_id || "-"}`,
-    `Host: ${snapshot.hostname || "-"}`,
-    `Interface: ${snapshot.iface || "-"}`,
-    `Mode: ${snapshot.mode || "-"}`,
-    `Port Filter: ${snapshot.port_mode || "-"}`,
-    `Custom Ports: ${
-      Array.isArray(snapshot.custom_ports) && snapshot.custom_ports.length
-        ? snapshot.custom_ports.join(", ")
-        : "-"
-    }`,
-    ``,
-    `Traffic Overview`,
-    `Clients Identified: ${overview.clients_identified ?? 0}`,
-    `Servers Identified: ${overview.servers_identified ?? 0}`,
-    `Function Codes Identified: ${
-      Array.isArray(overview.function_codes_identified) && overview.function_codes_identified.length
-        ? overview.function_codes_identified.join(", ")
-        : functionCodes
-    }`,
-    `Read Patterns Identified: ${overview.read_pattern_count ?? 0}`,
-    `Write Registers Identified: ${overview.write_register_count ?? 0}`,
-    ``,
-    `Read Patterns`,
-    `${readPatterns}`,
-    ``,
-    `Write Activity`,
-    `${writeRegisters}`,
-  ].join("\n");
-}
-
-async function refreshStatus() {
-  const data = await apiGet("/api/status");
-
-  const agentConnected = !!data.agent?.connected;
-  const simulationActive = isSimulationUsingRuntime(data);
-  const manualModbusActive = isManualModbusActive(data);
-  const effectiveServerRunning = !!data.server?.running || !!data?.process_sim?.server?.running;
-  const effectiveClientRunning = !!data.client?.running || !!data?.process_sim?.client?.running;
-  const serverView = { ...(data.server || {}), running: effectiveServerRunning };
-  const clientView = { ...(data.client || {}), running: effectiveClientRunning };
-
-  setText("agentStatus", formatAgentStatus(data));
-  setText("serverStatus", formatServerStatus(serverView));
-  setText("clientStatus", formatClientStatus(clientView));
-
-  setBadge("globalRuntimeBadge", "RUNTIME", agentConnected);
-  setBadge("globalMonitorBadge", "MONITOR", !!data.monitor?.running);
-  setBadge("globalDefenseBadge", "DEFENSE", !!data.runtime_state?.defense?.running);
-  setBadge("globalServerBadge", "SERVER", effectiveServerRunning);
-  setBadge("globalClientBadge", "CLIENT", effectiveClientRunning);
-
-  setToggleButton("toggleServerBtn", !!data.server?.running);
-  setToggleButton("toggleClientBtn", !!data.client?.running);
-
-  setDisabled("toggleServerBtn", !agentConnected || simulationActive);
-  setDisabled("toggleClientBtn", !agentConnected || simulationActive);
-  setDisabled("openMonitorConfigBtn", !agentConnected);
-  setDisabled("openServerConfigBtn", !agentConnected);
-  setDisabled("openClientConfigBtn", !agentConnected);
-  setDisabled("plcRunSwitchBtn", Date.now() < processCommandPendingUntil || manualModbusActive);
-
-  const simRunning = !!data?.process_sim?.running;
-  processConfigCache.poll_start = Number(data?.process_sim?.client?.poll_start ?? 0);
-  processConfigCache.poll_quantity = Number(data?.process_sim?.client?.poll_quantity ?? PROCESS_POLL_QUANTITY);
-  const latestProcessCommand = data?.process_control?.latest || null;
-  const processStarting =
-    latestProcessCommand?.type === "START_PROCESS_SIM" &&
-    ["queued", "sent"].includes(String(latestProcessCommand?.status || "").toLowerCase());
-  setDisabled("hmiPumpSwitchBtn", !simRunning || processStarting);
-  setDisabled("hmiValveSwitchBtn", !simRunning || processStarting);
-  setDisabled("applyAlarmLimitBtn", false);
-  setDisabled("processTypeSelect", simRunning);
-
-  // Only refresh inputs when the configuration modal is not open.
-  const serverModal = byId("serverModal");
-  const clientModal = byId("clientModal");
-  
-  if (!serverModal || serverModal.classList.contains("hidden")) {
-    if (byId("serverHost")) byId("serverHost").value = data.server?.host || "127.0.0.1";
-    if (byId("serverPort")) byId("serverPort").value = data.server?.port || 5020;
-  }
-
-  if (!clientModal || clientModal.classList.contains("hidden")) {
-    if (byId("clientHost")) byId("clientHost").value = data.client?.host || "127.0.0.1";
-    if (byId("clientPort")) byId("clientPort").value = data.client?.port || 5020;
-    if (byId("pollInterval")) byId("pollInterval").value = data.client?.poll_interval ?? 1.0;
-    if (byId("pollStart")) byId("pollStart").value = data.client?.poll_start ?? 0;
-    if (byId("pollQuantity")) byId("pollQuantity").value = data.client?.poll_quantity ?? 4;
-  }
-
-  const processConfigWindow = byId("processConfigWindow");
-  if (!processConfigWindow || processConfigWindow.classList.contains("hidden")) {
-    if (byId("plcHostInput")) byId("plcHostInput").value = data.process_sim?.server?.host || "127.0.0.1";
-    if (byId("plcPortInput")) byId("plcPortInput").value = data.process_sim?.server?.port || 15020;
-    if (byId("hmiHostInput")) byId("hmiHostInput").value = data.process_sim?.client?.host || "127.0.0.1";
-    if (byId("hmiPortInput")) byId("hmiPortInput").value = data.process_sim?.client?.port || 15020;
-    if (byId("processPollIntervalInput")) byId("processPollIntervalInput").value = data.process_sim?.client?.poll_interval ?? 0.5;
-  }
-
-  setText("monitorSnapshot", buildReadableSnapshot(data.monitor?.snapshot || {}));
-  renderProcessSimulation(data);
-}
-
-function formatSummaryBlock(summary) {
-  if (!summary) return "";
-  return `<div><strong>Summary:</strong> ${escapeHtml(summary)}</div>`;
-}
-
-function formatEventDetails(event) {
-  const type = event.type || "UNKNOWN";
-  const src = `${event.src_ip || "-"}:${event.src_port || "-"}`;
-  const dst = `${event.dst_ip || "-"}:${event.dst_port || "-"}`;
-  const functionCode = event.function_code ?? "-";
-  const txId = event.transaction_id ?? "-";
-  const summary = event.summary || "";
-
-  if (type === "READ_REQUEST") {
-    return `
-      ${formatSummaryBlock(summary)}
-      <div><strong>Action:</strong> Read Holding Registers</div>
-      <div><strong>Client:</strong> ${escapeHtml(event.client || src)}</div>
-      <div><strong>Server:</strong> ${escapeHtml(event.server || dst)}</div>
-      <div><strong>Function:</strong> FC${functionCode}</div>
-      <div><strong>Start:</strong> ${event.start_addr ?? "-"}</div>
-      <div><strong>Quantity:</strong> ${event.quantity ?? "-"}</div>
-      <div><strong>Transaction ID:</strong> ${txId}</div>
-    `;
-  }
-
-  if (type === "READ_RESPONSE") {
-    return `
-      ${formatSummaryBlock(summary)}
-      <div><strong>Action:</strong> Read Response</div>
-      <div><strong>Server:</strong> ${escapeHtml(event.server || src)}</div>
-      <div><strong>Client:</strong> ${escapeHtml(event.client || dst)}</div>
-      <div><strong>Function:</strong> FC${functionCode}</div>
-      <div><strong>Values:</strong> ${escapeHtml(JSON.stringify(event.register_values || []))}</div>
-      <div><strong>RTT:</strong> ${event.rtt ?? "-"} s</div>
-      <div><strong>Transaction ID:</strong> ${txId}</div>
-    `;
-  }
-
-  if (type === "WRITE_REQUEST") {
-    return `
-      ${formatSummaryBlock(summary)}
-      <div><strong>Action:</strong> Write Single Register</div>
-      <div><strong>Client:</strong> ${escapeHtml(event.client || src)}</div>
-      <div><strong>Server:</strong> ${escapeHtml(event.server || dst)}</div>
-      <div><strong>Function:</strong> FC${functionCode}</div>
-      <div><strong>Register:</strong> ${event.register ?? "-"}</div>
-      <div><strong>Value:</strong> ${event.value ?? "-"}</div>
-      <div><strong>Transaction ID:</strong> ${txId}</div>
-    `;
-  }
-
-  if (type === "WRITE_RESPONSE") {
-    return `
-      ${formatSummaryBlock(summary)}
-      <div><strong>Action:</strong> Write Response</div>
-      <div><strong>Server:</strong> ${escapeHtml(event.server || src)}</div>
-      <div><strong>Client:</strong> ${escapeHtml(event.client || dst)}</div>
-      <div><strong>Function:</strong> FC${functionCode}</div>
-      <div><strong>Register:</strong> ${event.register ?? "-"}</div>
-      <div><strong>Value:</strong> ${event.value ?? "-"}</div>
-      <div><strong>RTT:</strong> ${event.rtt ?? "-"} s</div>
-      <div><strong>Transaction ID:</strong> ${txId}</div>
-    `;
-  }
-
-  if (type === "EXCEPTION_RESPONSE") {
-    return `
-      ${formatSummaryBlock(summary)}
-      <div><strong>Action:</strong> Exception Response</div>
-      <div><strong>Server:</strong> ${escapeHtml(event.server || src)}</div>
-      <div><strong>Client:</strong> ${escapeHtml(event.client || dst)}</div>
-      <div><strong>Function:</strong> FC${functionCode}</div>
-      <div><strong>Exception Code:</strong> ${event.exception_code ?? "-"}</div>
-      <div><strong>RTT:</strong> ${event.rtt ?? "-"} s</div>
-      <div><strong>Transaction ID:</strong> ${txId}</div>
-    `;
-  }
-
-  return `
-    ${formatSummaryBlock(summary)}
-    <div><strong>Source:</strong> ${escapeHtml(src)}</div>
-    <div><strong>Destination:</strong> ${escapeHtml(dst)}</div>
-    <div><strong>Function:</strong> FC${functionCode}</div>
-    <div><strong>Transaction ID:</strong> ${txId}</div>
-  `;
-}
-
-function formatEventCard(event) {
-  const type = event.type || "UNKNOWN";
-  return `
-    <div>
-      <strong>${escapeHtml(type)}</strong><br>
-      ${formatEventDetails(event)}
-    </div>
-  `;
-}
-
-const MODBUS_EXCEPTION_MAP = {
-  1: "Illegal Function",
-  2: "Illegal Data Address",
-  3: "Illegal Data Value",
-  4: "Server Device Failure",
-  5: "Acknowledge",
-  6: "Server Device Busy",
-  8: "Memory Parity Error",
-  10: "Gateway Path Unavailable",
-  11: "Gateway Target Failed to Respond",
-};
-
-const MODBUS_FUNCTION_NAME_MAP = {
-  1: "Read Coils",
-  2: "Read Discrete Inputs",
-  3: "Read Holding Registers",
-  4: "Read Input Registers",
-  5: "Write Single Coil",
-  6: "Write Single Register",
-  7: "Read Exception Status",
-  8: "Diagnostics",
-  11: "Get Comm Event Counter",
-  12: "Get Comm Event Log",
-  15: "Write Multiple Coils",
-  16: "Write Multiple Registers",
-  17: "Report Server ID",
-  20: "Read File Record",
-  21: "Write File Record",
-  22: "Mask Write Register",
-  23: "Read/Write Multiple Registers",
-  24: "Read FIFO Queue",
-  43: "Read Device Identification",
-};
-
-const WINDOW_STATE_KEY_PREFIX = "otlab_window_state_v1_";
-const WINDOW_SIZE_RULES = {
-  default: { width: 620, height: 500, minWidth: 280, minHeight: 220 },
-  idsWindow: { width: 700, height: 560, minWidth: 280, minHeight: 220, resizable: true },
-  logsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240, resizable: true },
-  connectionsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240, resizable: true },
-  actionsWindow: { width: 980, height: 720, minWidth: 360, minHeight: 260, resizable: true },
-  actionsHistoryWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240, resizable: true },
-  actionsPreviewWindow: { width: 760, height: 560, minWidth: 320, minHeight: 240, resizable: true },
-  alertsWindow: { width: 860, height: 620, minWidth: 320, minHeight: 240, resizable: true },
-  processHmiWindow: { width: 306, height: 338, minWidth: 306, minHeight: 318, resizable: true },
-  processConfigWindow: { width: 260, height: 198, minWidth: 260, minHeight: 198, fixed: true },
-  processPlcWindow: { width: 384, height: 210, minWidth: 384, minHeight: 210, fixed: true },
-  scenarioWindow: { width: 560, height: 520, minWidth: 360, minHeight: 280, resizable: true },
-  policyWindow: { width: 760, height: 560, minWidth: 360, minHeight: 280, resizable: true },
-};
-const openAlertDetails = new Set();
-let lastAlertsFingerprint = "";
-let lastAlertsPlain = "";
-let lastLogsFingerprint = "";
-let lastConnectionsFingerprint = "";
-let exceptionInfoByFc = new Map();
-let fcTooltipEl = null;
-
-function clampNumber(value, minimum, maximum, fallback) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(minimum, Math.min(n, maximum));
-}
-
-function getWindowSizeRule(id) {
-  return WINDOW_SIZE_RULES[id] || WINDOW_SIZE_RULES.default;
-}
-
-function isWindowResizable(id) {
-  const rule = getWindowSizeRule(id);
-  return !!rule.resizable;
-}
-
-function getAlertKey(alert) {
-  return [
-    alert.timestamp ?? "-",
-    alert.severity ?? "-",
-    alert.event_type ?? "-",
-    alert.src ?? "-",
-    alert.dst ?? "-",
-    alert.summary ?? "-",
-  ].join("|");
-}
-
-function parseExceptionCode(alert) {
-  const reasons = Array.isArray(alert.reasons) ? alert.reasons : [];
-  for (const reason of reasons) {
-    const match = String(reason || "").match(/exception[_ ]code[=: ]+(\d+)/i);
-    if (match) return Number(match[1]);
-  }
-  const summaryMatch = String(alert.summary || "").match(/exception(?:[_ ]response)?(?:[_ ]code)?[=: ]+(\d+)/i);
-  if (summaryMatch) return Number(summaryMatch[1]);
-  return null;
-}
-
-function getExceptionActionHint(exceptionCode) {
-  if (exceptionCode === 1) return "Verify whether the PLC supports this function code.";
-  if (exceptionCode === 2) return "Check address mapping and register boundaries.";
-  if (exceptionCode === 3) return "Validate values/quantity against device limits.";
-  if (exceptionCode === 4) return "Check PLC diagnostics for internal device failure.";
-  if (exceptionCode === 6) return "Device busy. Retry with backoff or lower request burst.";
-  return "Review request payload and PLC-specific Modbus support.";
-}
-
-function getFunctionName(functionCode, fallback = "") {
-  const fc = Number(functionCode);
-  if (Number.isFinite(fc) && MODBUS_FUNCTION_NAME_MAP[fc]) {
-    return MODBUS_FUNCTION_NAME_MAP[fc];
-  }
-  return fallback || "Modbus Function";
-}
-
-function inferModbusContext(alert) {
-  const summary = String(alert.summary || "");
-  const functionMatch = summary.match(/\bFC(\d+)\b/i);
-  const fc = functionMatch ? Number(functionMatch[1]) : null;
-  const isException = String(alert.event_type || "").toUpperCase() === "EXCEPTION_RESPONSE" || /\bexception\b/i.test(summary);
-  const exceptionCode = isException ? parseExceptionCode(alert) : null;
-  return {
-    fc,
-    isException,
-    exceptionCode,
-    exceptionLabel:
-      exceptionCode !== null && MODBUS_EXCEPTION_MAP[exceptionCode]
-        ? `${exceptionCode} - ${MODBUS_EXCEPTION_MAP[exceptionCode]}`
-        : exceptionCode,
+  const resolveRoleByIp = (ipRaw) => {
+    const ip = endpointHost(ipRaw);
+    if (!ip) return "";
+    const hmiIp = endpointHost(uiEndpoints?.hmi?.ip || "");
+    const plcIp = endpointHost(uiEndpoints?.plc?.ip || "");
+    const monIp = endpointHost(uiEndpoints?.monitor_proxy?.ip || "");
+    if (ip === hmiIp) return "HMI";
+    if (ip === plcIp) return "PLC";
+    if (ip === monIp || monitorAliasIps.has(ip)) return "MONITOR";
+    const fromScan = (latestNetworkHosts || []).find((h) => endpointHost(h?.ip || "") === ip);
+    if (fromScan?.role) return String(fromScan.role).toUpperCase();
+    return "";
   };
-}
+  const labelIp = (ip) => {
+    const role = resolveRoleByIp(ip);
+    return role || (ip || "-");
+  };
 
-function inferOutcome(alert, context) {
-  const eventType = String(alert.event_type || "").toUpperCase();
-  if (context?.isException || eventType === "EXCEPTION_RESPONSE") {
-    return { label: "Rejected", cls: "outcome-rejected" };
+  const m = summary.match(/from\s+([0-9.]+):(\d+)\s+to\s+([0-9.]+):(\d+)/i);
+  const parts = summary
+    .split("|")
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .filter((p) => !/^rtt=/i.test(p));
+  const action = parts[1] || "";
+  const details = parts.slice(2).join(" | ");
+
+  if (!m) {
+    return `<strong>[${escapeHtml(severity)}] ${escapeHtml(title)}</strong><br>${escapeHtml(summary)}`;
   }
-  if (eventType === "WRITE_RESPONSE") {
-    return { label: "Accepted", cls: "outcome-accepted" };
-  }
-  if (eventType === "UNKNOWN_REQUEST") {
-    return { label: "Unknown", cls: "outcome-unknown" };
-  }
-  return { label: "Observed", cls: "outcome-observed" };
-}
 
-function formatAlertCard(alert) {
-  const severity = alert.severity || "INFO";
-  const eventType = String(alert.event_type || "UNKNOWN").replaceAll("_", " ");
-  const severityClass = `alert-level-${escapeHtml(severity)}`;
-  const severityBadgeClass = `sev-${escapeHtml(severity)}`;
-  const context = inferModbusContext(alert);
-  const outcome = inferOutcome(alert, context);
-  const alertKey = getAlertKey(alert);
-  const detailsOpen = openAlertDetails.has(alertKey) ? "open" : "";
+  const srcIp = endpointHost(m[1]);
+  const dstIp = endpointHost(m[3]);
+  const srcRole = labelIp(srcIp);
+  const dstRole = labelIp(dstIp);
+  const cleanTitle = title.replace("WRITE_", "").replace("READ_", "");
+  const actionLower = String(action || "").toLowerCase();
 
-  const fc = Number(alert.function_code ?? context.fc);
-  const functionName = getFunctionName(fc, alert.function_label || "");
-  const clientEndpoint = alert.client || alert.src || "-";
-  const serverEndpoint = alert.server || alert.dst || "-";
-  const register = alert.register ?? alert.address ?? alert.start_addr ?? "-";
-  const scalarValue = alert.value;
-  const listValues = Array.isArray(alert.values) ? alert.values : [];
-  const valueText = scalarValue != null ? String(scalarValue) : (listValues.length ? listValues.slice(0, 8).join(", ") : null);
-  const eventTypeUpper = String(alert.event_type || "").toUpperCase();
-  const fcBadge = Number.isFinite(fc) ? `FC${fc}` : "FC?";
-  const registerText = register !== "-" ? String(register) : "-";
-  const compactValue = valueText != null ? valueText : "-";
-  const serverLabel = "PLC";
-  const clientLabel = "HMI/SCADA";
-
-  let jobText = `${functionName} observed`;
-  if (context.isException) {
-    jobText = `PLC returned exception on ${fcBadge}`;
-  } else if (eventTypeUpper === "WRITE_REQUEST") {
-    jobText = registerText !== "-" && compactValue !== "-"
-      ? `HMI/SCADA requested write ${compactValue} to register ${registerText}`
-      : "HMI/SCADA requested a write operation";
-  } else if (eventTypeUpper === "WRITE_RESPONSE") {
-    jobText = registerText !== "-" && compactValue !== "-"
-      ? `PLC responded to write ${compactValue} on register ${registerText}`
-      : "PLC responded to write request";
-  } else if (eventTypeUpper === "READ_REQUEST") {
-    jobText = registerText !== "-"
-      ? `HMI/SCADA requested read from register ${registerText}`
-      : "HMI/SCADA requested a read operation";
-  } else if (eventTypeUpper === "READ_RESPONSE") {
-    jobText = registerText !== "-"
-      ? `PLC responded to read from register ${registerText}`
-      : "PLC responded to read request";
+  let shortAction = action || cleanTitle;
+  let shortDetail = details;
+  if (actionLower.includes("write single coil")) {
+    const regMatch = summary.match(/register\s*=\s*(\d+)/i);
+    const valMatch = summary.match(/value\s*=\s*(ON|OFF|0|1)/i);
+    const reg = Number(regMatch?.[1] || 0);
+    const valueRaw = String(valMatch?.[1] || "0").toUpperCase();
+    const bit = reg % 8;
+    const byte = Math.floor(reg / 8);
+    const valueNum = valueRaw === "ON" ? "1" : valueRaw === "OFF" ? "0" : valueRaw;
+    shortAction = "Write single coil";
+    shortDetail = `${MODBUS_TAG_MAP.coil[reg] || `%Q${byte}.${bit}`} = ${valueNum}`;
+  } else if (actionLower.includes("write single register")) {
+    const regMatch = summary.match(/register\s*=\s*(\d+)/i);
+    const valMatch = summary.match(/value\s*=\s*(-?\d+)/i);
+    const reg = Number(regMatch?.[1] || 0);
+    const valueNum = Number(valMatch?.[1] || 0);
+    shortAction = "Write register";
+    shortDetail = `${MODBUS_TAG_MAP.register[reg] || `HR${reg}`} = ${valueNum}`;
+  } else if (actionLower.includes("read coils")) {
+    const startMatch = summary.match(/start\s*=\s*(\d+)/i);
+    const qtyMatch = summary.match(/qty\s*=\s*(\d+)/i);
+    const start = Number(startMatch?.[1] || 0);
+    const qty = Number(qtyMatch?.[1] || 1);
+    shortAction = "Read coils";
+    shortDetail = `%Q${Math.floor(start / 8)}.${start % 8} .. qty=${qty}`;
   }
 
   return `
-    <div class="alert-card ${severityClass}">
+    <article class="alert-card">
       <div class="alert-top">
-        <span class="alert-severity ${severityBadgeClass}">${escapeHtml(severity)}</span>
-        <span class="alert-outcome ${escapeHtml(outcome.cls)}">${escapeHtml(outcome.label)}</span>
-        <span class="alert-fc">${escapeHtml(fcBadge)}</span>
-        <span class="alert-event">${escapeHtml(eventType)}</span>
+        <span class="alert-kind">${escapeHtml(cleanTitle)}</span>
+        <span class="alert-level">${escapeHtml(severity === "NOTICE" ? "EVENT" : severity)}</span>
       </div>
-      <div class="alert-brief-grid">
-        <div class="alert-brief-row"><span class="alert-brief-k">Server</span><span class="alert-brief-v">${escapeHtml(serverLabel)}: ${escapeHtml(serverEndpoint)}</span></div>
-        <div class="alert-brief-row"><span class="alert-brief-k">Client</span><span class="alert-brief-v">${escapeHtml(clientLabel)}: ${escapeHtml(clientEndpoint)}</span></div>
-        <div class="alert-brief-row"><span class="alert-brief-k">Job</span><span class="alert-brief-v">${escapeHtml(jobText)}</span></div>
-        <div class="alert-brief-row"><span class="alert-brief-k">Value</span><span class="alert-brief-v">${escapeHtml(compactValue)}</span></div>
-        <div class="alert-brief-row"><span class="alert-brief-k">Register</span><span class="alert-brief-v">${escapeHtml(registerText)}</span></div>
-      </div>
-      <details class="alert-detail" data-alert-key="${escapeHtml(alertKey)}" ${detailsOpen}>
-        <summary>Technical details</summary>
-        <div class="alert-technical-line">No additional details yet.</div>
-      </details>
-    </div>
+      <div class="alert-line">${escapeHtml(srcRole)} (${escapeHtml(srcIp)}) → ${escapeHtml(dstRole)} (${escapeHtml(dstIp)}) | ${escapeHtml(shortAction)}: ${escapeHtml(shortDetail || "-")}</div>
+    </article>
   `;
 }
 
-function formatAlertPlain(alert) {
-  const severity = alert.severity || "INFO";
-  const context = inferModbusContext(alert);
-  const outcome = inferOutcome(alert, context);
-  const eventType = String(alert.event_type || "UNKNOWN").replaceAll("_", " ");
-  const summary = alert.summary || "-";
-  const src = alert.src || "-";
-  const dst = alert.dst || "-";
-  const reasons = Array.isArray(alert.reasons) ? alert.reasons.join(" | ") : "-";
-  return `[${severity}] ${eventType} | Outcome: ${outcome.label}\n${summary}\n${src} -> ${dst}\nReasons: ${reasons}`;
-}
-
-function formatConnectionHistoryRow(row) {
-  const stateBadge = row.active ? "conn-active" : "conn-inactive";
-  const stateLabel = row.active ? "Active" : "Closed";
-  const normalFcs = Array.isArray(row.functions_seen) ? row.functions_seen : [];
-  const exceptionFcs = Array.isArray(row.exception_functions_seen) ? row.exception_functions_seen : [];
-  const fcText = normalFcs.map((fc) => `FC${fc}`).join(", ") || "-";
-  const excText = exceptionFcs.length ? ` | Exceptions: ${exceptionFcs.map((fc) => `FC${fc}`).join(", ")}` : "";
-  const ageText = row.age_s == null ? "-" : `${Number(row.age_s).toFixed(1)}s ago`;
-  const durText = row.duration_s == null ? "-" : `${Number(row.duration_s).toFixed(3)}s`;
-  const portText = row.port == null ? "-" : row.port;
-  const connId = row.connection_id ? String(row.connection_id).slice(0, 8) : "-";
-  const instance = row.instance_id == null ? 1 : Number(row.instance_id);
-  const reconnects = row.reconnect_count == null ? 0 : Number(row.reconnect_count);
-  return `
-    <div class="conn-row">
-      <div class="conn-top">
-        <span class="conn-state ${stateBadge}">${stateLabel}</span>
-        <span class="conn-meta">${escapeHtml(row.protocol || "Modbus/TCP")} | iface=${escapeHtml(row.interface || "-")} | port=${escapeHtml(portText)}</span>
-      </div>
-      <div class="conn-path">${escapeHtml(row.client_ip || "-")} → ${escapeHtml(row.server_ip || "-")}</div>
-      <div class="conn-fcs">${escapeHtml(fcText)}${escapeHtml(excText)}</div>
-      <div class="conn-extra">id=${escapeHtml(connId)} | instance=${escapeHtml(instance)} | reconnects=${escapeHtml(reconnects)} | events=${escapeHtml(row.event_count || 0)} | duration=${escapeHtml(durText)} | last=${escapeHtml(ageText)}</div>
-    </div>
-  `;
-}
-
-function getAlertSemanticKey(alert) {
-  return [
-    String(alert.event_type || "").toUpperCase(),
-    alert.function_code ?? "-",
-    alert.src ?? "-",
-    alert.dst ?? "-",
-    alert.register ?? "-",
-    alert.start_addr ?? "-",
-    alert.quantity ?? "-",
-    alert.value ?? "-",
-    alert.exception_code ?? "-",
-    alert.transaction_id ?? "-",
-  ].join("|");
-}
-
-function dedupeAlerts(alerts) {
+function compactOperationalAlerts(items) {
   const out = [];
-  const seen = new Set();
-  for (let i = 0; i < alerts.length; i += 1) {
-    const alert = alerts[i];
-    const key = getAlertSemanticKey(alert);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(alert);
+  const source = Array.isArray(items) ? items : [];
+  for (const item of source) {
+    if (String(item?.kind || "") === "operational_action") {
+      const ts = normalizeTsSeconds(item?.timestamp || Date.now() / 1000);
+      const actionType = String(item?.action_type || "");
+      const actionKey = actionType.includes("coil") ? "coil" : "register";
+      const valueTo = item?.value_to;
+      const mergeKey = actionKey === "coil"
+        ? `${actionType}|${item?.asset}|${item?.target}|${valueTo}`
+        : `${actionType}|${item?.asset}|${item?.target}`;
+      const last = out.length ? out[out.length - 1] : null;
+      if (last && last.key === mergeKey && (ts - last.lastTs) <= 0.5) {
+        last.lastTs = ts;
+        last.count += Number(item?.count || 1);
+        last.lastValue = valueTo;
+        if (last.firstValue === null || last.firstValue === undefined || last.firstValue === "") {
+          last.firstValue = item?.value_from;
+        }
+        continue;
+      }
+      out.push({
+        key: mergeKey,
+        ts,
+        lastTs: ts,
+        count: Number(item?.count || 1),
+        actionKey,
+        reg: Number(item?.address || 0),
+        firstValue: item?.value_from,
+        lastValue: valueTo,
+        src: String(item?.actor || ""),
+        dst: String(item?.target || ""),
+        asset: String(item?.asset || ""),
+        raw: item,
+      });
+      continue;
+    }
+    const eventType = String(item?.event_type || item?.event || "").toUpperCase();
+    const summary = String(item?.summary || item?.message || "");
+    const isWrite = /write single (coil|register)/i.test(summary);
+    if (!isWrite) continue;
+
+    const ts = normalizeTsSeconds(item?.timestamp || item?.ts_iso || Date.now() / 1000);
+    const regMatch = summary.match(/register\s*=\s*(\d+)/i);
+    const valMatch = summary.match(/value\s*=\s*(ON|OFF|0|1|-?\d+)/i);
+    const srcMatch = summary.match(/from\s+([0-9.]+):\d+\s+to\s+([0-9.]+):\d+/i);
+    const actionKey = /coil/i.test(summary) ? "coil" : "register";
+    const reg = Number(regMatch?.[1] || 0);
+    const valueRaw = String(valMatch?.[1] || "0").toUpperCase();
+    const value = valueRaw === "ON" ? 1 : valueRaw === "OFF" ? 0 : Number(valueRaw || 0);
+    const src = endpointHost(srcMatch?.[1] || "");
+    const dst = endpointHost(srcMatch?.[2] || "");
+    const key = `${actionKey}|${reg}|${src}|${dst}|${eventType.includes("REQUEST") ? "REQ" : "RESP"}`;
+
+    const last = out.length ? out[out.length - 1] : null;
+    if (last && last.key === key && (ts - last.lastTs) <= 2.0) {
+      last.lastTs = ts;
+      last.count += 1;
+      last.lastValue = value;
+      continue;
+    }
+
+    out.push({
+      key,
+      ts,
+      lastTs: ts,
+      count: 1,
+      actionKey,
+      reg,
+      firstValue: value,
+      lastValue: value,
+      src,
+      dst,
+      raw: item,
+    });
   }
   return out;
 }
 
-function buildExceptionInfoByFc(alerts) {
-  const map = new Map();
-  for (let i = alerts.length - 1; i >= 0; i -= 1) {
-    const alert = alerts[i];
-    const ctx = inferModbusContext(alert);
-    if (!ctx.isException || !ctx.fc) continue;
-    if (map.has(ctx.fc)) continue;
-    const reason = ctx.exceptionLabel || "Exception";
-    map.set(ctx.fc, `FC${ctx.fc} exception: ${reason}. ${getExceptionActionHint(ctx.exceptionCode)}`);
+async function refreshStatus() {
+  const data = await apiGet("/api/status");
+  if (data?.tag_map) applyTagMap(data.tag_map);
+  monitorRouteEnabled = !!data?.monitor_route_enabled;
+  setText("agentStatus", formatAgentStatus(data));
+  const monitorRuntime = !!data?.runtime_state?.monitor?.running;
+  setBadge("globalMonitorBadge", "MONITOR", monitorRuntime && monitorRouteEnabled);
+  const m = byId("globalMonitorBadge");
+  if (m) m.textContent = `MONITOR: ${monitorRouteEnabled ? "ON" : "OFF"}`;
+  setBadge("globalDefenseBadge", "DEFENSE", !!data?.runtime_state?.defense?.running);
+  setBadge("globalPlcBadge", "PLC", plcServiceRunning);
+  setBadge("globalHmiBadge", "HMI", hmiServiceRunning);
+  const toggleBtn = byId("toggleMonitorRouteBtn");
+  if (toggleBtn) {
+    toggleBtn.textContent = monitorRouteEnabled ? "Monitor ON" : "Monitor OFF";
+    toggleBtn.classList.toggle("secondary", !monitorRouteEnabled);
   }
-  return map;
-}
-
-function ensureFcTooltip() {
-  if (fcTooltipEl) return fcTooltipEl;
-  const el = document.createElement("div");
-  el.id = "fcExceptionTooltip";
-  el.className = "floating-tip hidden";
-  document.body.appendChild(el);
-  fcTooltipEl = el;
-  return el;
-}
-
-function hideFcTooltip() {
-  const el = ensureFcTooltip();
-  el.classList.add("hidden");
-}
-
-function showFcTooltip(text, x, y) {
-  const el = ensureFcTooltip();
-  el.textContent = text || "";
-  const left = Math.min(window.innerWidth - 320, Math.max(8, x + 12));
-  const top = Math.min(window.innerHeight - 80, Math.max(8, y + 12));
-  el.style.left = `${left}px`;
-  el.style.top = `${top}px`;
-  el.classList.remove("hidden");
-}
-
-function bindFcExceptionTooltips(root) {
-  if (!root) return;
-  root.querySelectorAll("[data-fc-exception-tooltip]").forEach((node) => {
-    node.addEventListener("mouseenter", (ev) => {
-      showFcTooltip(node.getAttribute("data-fc-exception-tooltip") || "", ev.clientX || 20, ev.clientY || 20);
-    });
-    node.addEventListener("mousemove", (ev) => {
-      showFcTooltip(node.getAttribute("data-fc-exception-tooltip") || "", ev.clientX || 20, ev.clientY || 20);
-    });
-    node.addEventListener("mouseleave", () => {
-      hideFcTooltip();
-    });
-  });
-}
-
-function simplifyLogLine(log) {
-  const line = String(log || "").trim();
-  if (!line) return "-";
-
-  if (line.startsWith("Alert: ")) return line;
-  if (line.startsWith("Agent connected")) return line.replace("Agent connected", "Monitor connected");
-  if (line.startsWith("Monitor configuration updated")) return line;
-  if (line.startsWith("Modbus server")) return line;
-  if (line.startsWith("Modbus client")) return line;
-  if (line.startsWith("FC")) return line;
-  if (line.startsWith("Modbus event detected")) return line;
-
-  return line;
 }
 
 async function refreshEvents() {
   const data = await apiGet("/api/events");
-  const rawAlerts = Array.isArray(data.alerts) ? data.alerts : [];
-  const alerts = dedupeAlerts(rawAlerts);
-  const logs = Array.isArray(data.logs) ? data.logs : [];
-  const connections = Array.isArray(data.connection_history) ? data.connection_history : [];
-  exceptionInfoByFc = buildExceptionInfoByFc(alerts);
+  if (data?.tag_map) applyTagMap(data.tag_map);
+  const rawEvents = Array.isArray(data?.events) ? data.events : [];
+  const plcIp = String(uiEndpoints?.plc?.ip || "").trim();
+  const plcPort = Number(uiEndpoints?.plc?.port || 502);
+  const hmiIp = String(uiEndpoints?.hmi?.ip || "").trim();
+  const monIp = String(uiEndpoints?.monitor_proxy?.ip || "").trim();
+  const monPort = Number(uiEndpoints?.monitor_proxy?.port || 15020);
 
-  renderEventsPanel(data.modbus_summary, data.events);
-  const alertsFingerprint = alerts
-    .map((a) => `${a.timestamp}|${a.severity}|${a.event_type}|${a.src}|${a.dst}|${a.summary}`)
-    .join("||");
-  const alertsPlain = alerts.map((a) => formatAlertPlain(a)).join("\n\n");
-  const logsFingerprint = logs.map((line) => simplifyLogLine(line)).join("\n");
+  const healthEvents = rawEvents.filter((ev) => {
+    const t = String(ev?.type || "");
+    if (!LINK_EVENT_TYPES.has(t)) return false;
+    const srcIp = String(ev?.src_ip || "");
+    const dstIp = String(ev?.dst_ip || "");
+    const dstPort = Number(ev?.dst_port || 0);
+    if (!plcIp) return false;
+    // Infra/system checks toward PLC endpoint but not from HMI/Monitor/PLC identities.
+    const isInfraSrc = srcIp !== hmiIp && srcIp !== monIp && srcIp !== plcIp;
+    return isInfraSrc && dstIp === plcIp && dstPort === plcPort;
+  });
 
-  if (alertsFingerprint !== lastAlertsFingerprint) {
-    renderList("alertsPanel", alerts, (a) => formatAlertCard(a));
-    renderList("alertsWindowPanel", alerts, (a) => formatAlertCard(a));
-    bindAlertDetails("alertsPanel");
-    bindAlertDetails("alertsWindowPanel");
-    lastAlertsFingerprint = alertsFingerprint;
-  }
-
-  if (alertsPlain !== lastAlertsPlain) {
-    setText("alertsPlainPanel", alertsPlain);
-    lastAlertsPlain = alertsPlain;
-  }
-
-  if (logsFingerprint !== lastLogsFingerprint) {
-    renderList("logsPanel", logs, (log) => escapeHtml(simplifyLogLine(log)));
-    lastLogsFingerprint = logsFingerprint;
-  }
-
-  const connectionsFingerprint = connections
-    .map((c) => `${c.id}|${c.active}|${c.last_seen}|${(c.functions_seen || []).join(",")}|${(c.exception_functions_seen || []).join(",")}|${c.event_count}`)
-    .join("||");
-  if (connectionsFingerprint !== lastConnectionsFingerprint) {
-    renderList("connectionsHistoryPanel", connections, (row) => formatConnectionHistoryRow(row));
-    lastConnectionsFingerprint = connectionsFingerprint;
-  }
+  const relevant = rawEvents.filter((ev) => {
+    const t = String(ev?.type || "");
+    if (!OT_EVENT_TYPES.has(t) && !LINK_EVENT_TYPES.has(t)) return false;
+    const proto = String(ev?.protocol || "").toUpperCase();
+    if (!MONITORED_PROTOCOLS.has(proto)) return false;
+    const srcIp = String(ev?.src_ip || "");
+    const dstIp = String(ev?.dst_ip || "");
+    const srcPort = Number(ev?.src_port || 0);
+    const dstPort = Number(ev?.dst_port || 0);
+    if (!plcIp) return true;
+    if (OT_EVENT_TYPES.has(t)) {
+      // Real OT communication is defined by Modbus payload events touching PLC endpoint.
+      return (srcIp === plcIp && srcPort === plcPort) || (dstIp === plcIp && dstPort === plcPort);
+    }
+    // Link events are useful for health context only.
+    return false;
+  });
+  renderEventsPanel(relevant.slice(-50), healthEvents.slice(-20));
+  renderAlertsPanel(data?.actions || data?.alerts || []);
 }
 
-async function refreshAll() {
-  try {
-    await refreshStatus();
-    await refreshEvents();
-    await refreshV2Panels();
-  } catch (err) {
-    console.error(err);
+function renderAlertsPanel(items) {
+  const panel = byId("alertsPanel");
+  if (!panel) return;
+  const compacted = compactOperationalAlerts(items);
+  if (!compacted.length) {
+    latestAlertsClipboardText = "";
+    panel.innerHTML = `<div class="log-item">No alerts.</div>`;
+    return;
   }
+  const roleByIp = (ipRaw) => {
+    const roleRaw = String(ipRaw || "").trim().toUpperCase();
+    if (["HMI", "PLC", "MONITOR"].includes(roleRaw)) return roleRaw;
+    const ip = endpointHost(ipRaw);
+    const hmiIp = endpointHost(uiEndpoints?.hmi?.ip || "");
+    const plcIp = endpointHost(uiEndpoints?.plc?.ip || "");
+    const monIp = endpointHost(uiEndpoints?.monitor_proxy?.ip || "");
+    if (ip === hmiIp) return "HMI";
+    if (ip === plcIp) return "PLC";
+    if (ip === monIp) return "MONITOR";
+    return ip || "-";
+  };
+  const ordered = compacted.slice().reverse();
+  latestAlertsClipboardText = ordered.map((c) => {
+    const src = roleByIp(c.src);
+    const dst = roleByIp(c.dst);
+    const tag = c.asset || (c.actionKey === "coil"
+      ? (MODBUS_TAG_MAP.coil[c.reg] || `%Q${Math.floor(c.reg / 8)}.${c.reg % 8}`)
+      : (MODBUS_TAG_MAP.register[c.reg] || `HR${c.reg}`));
+    const valueText = c.count > 1
+      ? `${c.firstValue} -> ${c.lastValue} (${c.count} changes)`
+      : `${c.lastValue}`;
+    const action = c.actionKey === "coil" ? "Write coil" : "Write register";
+    return `${action} | ${src} -> ${dst} | ${tag} = ${valueText}`;
+  }).join("\n");
+
+  panel.innerHTML = ordered.map((c) => {
+    const src = roleByIp(c.src);
+    const dst = roleByIp(c.dst);
+    const tag = c.asset || (c.actionKey === "coil"
+      ? (MODBUS_TAG_MAP.coil[c.reg] || `%Q${Math.floor(c.reg / 8)}.${c.reg % 8}`)
+      : (MODBUS_TAG_MAP.register[c.reg] || `HR${c.reg}`));
+    const hasFirst = c.firstValue !== null && c.firstValue !== undefined && c.firstValue !== "";
+    const firstVal = hasFirst ? c.firstValue : c.lastValue;
+    const valueText = c.count > 1
+      ? (String(firstVal) === String(c.lastValue)
+          ? `${c.lastValue} (${c.count} samples)`
+          : `${firstVal} → ${c.lastValue} (${c.count} changes)`)
+      : `${c.lastValue}`;
+    const action = c.actionKey === "coil" ? "Write coil" : "Write register";
+    return `
+      <article class="alert-card">
+        <div class="alert-top">
+          <span class="alert-kind">${escapeHtml(action)}</span>
+          <span class="alert-level">EVENT</span>
+        </div>
+        <div class="alert-line">${escapeHtml(src)} → ${escapeHtml(dst)} | ${escapeHtml(tag)} = ${escapeHtml(valueText)}</div>
+      </article>
+    `;
+  }).join("");
 }
 
-function formatPolicyDecision(item) {
-  const cmd = item?.command || {};
-  const ai = item?.ai || {};
-  const risk = Number(ai.risk_score ?? 0);
-  return `
-    <div>
-      <strong>${escapeHtml(item?.decision || "-")}</strong> (${escapeHtml(item?.rule_id || "-")})<br>
-      <span>${escapeHtml(item?.reason || "-")}</span><br>
-      <span>CMD: HR${escapeHtml(cmd.address ?? "-")}=${escapeHtml(cmd.value ?? "-")} | risk=${escapeHtml(risk)}</span>
+function renderEventsPanel(events, healthEvents = []) {
+  const panel = byId("eventsPanel");
+  if (!panel) return;
+
+  if (!monitorRouteEnabled) {
+    panel.innerHTML = `
+      <article class="comm-state-card comm-off">
+        <div class="comm-state-title">Monitor is OFF</div>
+        <div class="comm-state-sub">Detection disabled. No traffic inspection is being performed.</div>
+      </article>
+    `;
+    return;
+  }
+
+  const now = Date.now() / 1000;
+  const recent = Array.isArray(events) ? events : [];
+  const activeFlows = new Map();
+  let latestPayload = null;
+  let latestLink = null;
+
+  for (const ev of recent) {
+    const ts = normalizeTsSeconds(ev?.timestamp);
+    if (!ts) continue;
+    if ((now - ts) > FLOW_ACTIVE_TTL_SEC) continue;
+    const type = String(ev?.type || "");
+    const src = String(ev?.src_ip || "-");
+    const dst = String(ev?.dst_ip || "-");
+    const key = `${src}->${dst}`;
+    const prev = activeFlows.get(key);
+    if (!prev || ts > prev.ts) {
+      activeFlows.set(key, {
+        ts,
+        type,
+        src,
+        dst,
+      });
+    }
+    if (OT_EVENT_TYPES.has(type)) {
+      if (!latestPayload || ts > latestPayload.ts) latestPayload = { ts, type, src, dst };
+    }
+    if (LINK_EVENT_TYPES.has(type)) {
+      if (!latestLink || ts > latestLink.ts) latestLink = { ts, type, src, dst };
+    }
+  }
+
+  if (activeFlows.size === 0) {
+    panel.innerHTML = `
+      <article class="comm-state-card comm-wait">
+        <div class="comm-state-title">No communication detected</div>
+        <div class="comm-state-sub">No Modbus packets detected on the monitored interface.</div>
+      </article>
+    `;
+    return;
+  }
+
+  const latest = latestPayload || latestLink;
+  const ts = new Date(latest.ts * 1000).toLocaleTimeString();
+  const hmiIp = uiEndpoints?.hmi?.ip || "-";
+  const plcIp = uiEndpoints?.plc?.ip || "-";
+  const monIp = uiEndpoints?.monitor_proxy?.ip || "-";
+  const hasPayload = !!latestPayload;
+
+  let healthHtml = "";
+  if (healthEvents.length) {
+    const h = healthEvents[healthEvents.length - 1];
+    const hts = new Date(normalizeTsSeconds(h?.timestamp) * 1000).toLocaleTimeString();
+    const htype = String(h?.type || "LINK").replaceAll("_", " ");
+    const ok = htype === "LINK OPEN";
+    healthHtml = `<div class="comm-state-meta">Health check: ${ok ? "reachable" : "failing"} (${escapeHtml(htype)} at ${escapeHtml(hts)})</div>`;
+  }
+
+  panel.innerHTML = `
+    <article class="comm-state-card ${hasPayload ? "comm-on" : "comm-stale"}">
+      <div class="comm-state-title">${hasPayload ? "Communication active" : "Connection attempt detected"}</div>
+      <div class="comm-state-sub">${escapeHtml(hmiIp)} → ${escapeHtml(monIp)} → ${escapeHtml(plcIp)} (Modbus/TCP)</div>
+      <div class="comm-state-meta">Active conversations (last 3s): ${activeFlows.size} | Last packet: ${escapeHtml(latest.type.replaceAll("_", " "))} at ${escapeHtml(ts)}</div>
+      ${healthHtml}
+    </article>
+  `;
+}
+
+async function refreshLabTopology() {
+  const data = await apiGet("/api/v2/lab/topology");
+  const target = data?.target || {};
+  if (byId("labTargetHost") && document.activeElement !== byId("labTargetHost")) byId("labTargetHost").value = target.host || "runtime";
+  if (byId("labTargetPort") && document.activeElement !== byId("labTargetPort")) byId("labTargetPort").value = target.port || 15020;
+
+  const services = data?.services || [];
+  latestTopology = services;
+  uiEndpoints = data?.ui_endpoints || uiEndpoints;
+  latestNetworkArchitecture = data?.architecture || latestNetworkArchitecture;
+  monitorRouteEnabled = !!data?.monitor_route_enabled;
+  const plc = services.find((s) => s.id === "plc");
+  const hmi = services.find((s) => s.id === "hmi");
+  plcServiceRunning = !!(plc?.reachable && plc?.modbus_ready);
+  hmiServiceRunning = !!hmi?.reachable;
+
+  if (!services.length) {
+    setHtml("labTopologyPanel", `<div class="log-item">No lab services found.</div>`);
+    return;
+  }
+
+  const html = services.map((s) => {
+    const extra = s.id === "plc" ? ` | Modbus: ${s.modbus_ready ? "READY" : "NOT READY"}` : "";
+    const err = s.error ? ` | ${s.error}` : "";
+    const merr = s.modbus_error ? ` | ${s.modbus_error}` : "";
+    return `<div class="log-item"><strong>${escapeHtml(s.name)}:</strong> ${s.reachable ? "RUNNING" : "UNREACHABLE"}${escapeHtml(extra)}<br>open: <a href="${escapeHtml(s.external_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(s.external_url)}</a>${escapeHtml(err)}${escapeHtml(merr)}</div>`;
+  }).join("");
+  setHtml("labTopologyPanel", html);
+  renderFlowPanel();
+}
+
+function renderFlowPanel() {
+  const panel = byId("flowPanel");
+  if (!panel) return;
+  const plc = uiEndpoints?.plc || {};
+  const hmi = uiEndpoints?.hmi || {};
+  const mon = uiEndpoints?.monitor_proxy || {};
+  const arch = latestNetworkArchitecture || {};
+  const otSubnet = String(arch.ot_subnet || "10.20.0.0/24");
+  const dmzSubnet = String(arch.dmz_subnet || "10.30.0.0/24");
+  const monIps = Array.isArray(arch.monitor_alias_ips) ? arch.monitor_alias_ips : [];
+  const webIps = Array.isArray(arch.web_alias_ips) ? arch.web_alias_ips : [];
+  const monOtIp = monIps.find((ip) => ip.startsWith("10.20.")) || monIps[0] || String(mon.ip || "-");
+  const monDmzIp = monIps.find((ip) => ip.startsWith("10.30.")) || monIps[0] || String(mon.ip || "-");
+  const webIp = webIps.find((ip) => ip.startsWith("10.30.")) || webIps[0] || "-";
+  panel.innerHTML = `
+    <div class="flow-zones ${monitorRouteEnabled ? "route-on" : "route-off"}">
+      <div class="flow-zone">
+        <div class="flow-zone-head">OT subnet · ${escapeHtml(otSubnet)}</div>
+        <div class="flow-zone-grid">
+          <div class="flow-node ${monitorRouteEnabled ? "active" : "inactive"}">
+            <div class="flow-icon">🖥</div>
+            <div class="flow-label">HMI</div>
+            <div class="flow-meta">${escapeHtml(hmi.ip || "-")}:${escapeHtml(hmi.port || 1881)}</div>
+          </div>
+          <div class="flow-node ${monitorRouteEnabled ? "active" : "inactive"}">
+            <div class="flow-icon">🛡</div>
+            <div class="flow-label">Monitor (OT)</div>
+            <div class="flow-meta">${escapeHtml(monOtIp)}:${escapeHtml(mon.port || 15020)}</div>
+          </div>
+          <div class="flow-node">
+            <div class="flow-icon">⚙</div>
+            <div class="flow-label">PLC</div>
+            <div class="flow-meta">${escapeHtml(plc.ip || "-")}:${escapeHtml(plc.port || 502)}</div>
+          </div>
+        </div>
+      </div>
+      <div class="flow-zone">
+        <div class="flow-zone-head">DMZ subnet · ${escapeHtml(dmzSubnet)}</div>
+        <div class="flow-zone-grid flow-zone-grid-dmz">
+          <div class="flow-node ${monitorRouteEnabled ? "active" : "inactive"}">
+            <div class="flow-icon">🛡</div>
+            <div class="flow-label">Monitor (DMZ)</div>
+            <div class="flow-meta">${escapeHtml(monDmzIp)}:${escapeHtml(mon.port || 15020)}</div>
+          </div>
+          <div class="flow-node">
+            <div class="flow-icon">🌐</div>
+            <div class="flow-label">Web Platform</div>
+            <div class="flow-meta">${escapeHtml(webIp)}:8000</div>
+          </div>
+        </div>
+      </div>
+      <div class="flow-routing ${monitorRouteEnabled ? "active" : "inactive"}">
+        ${monitorRouteEnabled ? "OT flow: HMI → Monitor(OT) → PLC · Telemetry/API: Monitor(DMZ) → Web" : "Bypass enabled: HMI → PLC (monitor path disabled)"}
+      </div>
     </div>
   `;
+}
+
+async function toggleMonitorRoute() {
+  const next = !monitorRouteEnabled;
+  const res = await apiPost("/api/v2/monitor/route", { enabled: next });
+  if (!res?.ok) return alert(res?.error || "Failed to change monitor route.");
+  monitorRouteEnabled = !!res.enabled;
+  if (monitorRouteEnabled) {
+    await apiPost("/api/v2/lab/target", { host: "runtime", port: 15020 });
+  } else {
+    await apiPost("/api/v2/lab/target", { host: "openplc", port: 502 });
+  }
+  await refreshAll();
+}
+
+function fillEndpointConfigWindows() {
+  const plc = uiEndpoints?.plc || {};
+  const hmi = uiEndpoints?.hmi || {};
+  if (byId("plcIpInput")) byId("plcIpInput").value = plc.ip || "";
+  if (byId("plcPortInput")) byId("plcPortInput").value = plc.port || 502;
+  if (byId("plcUiUrlInput")) byId("plcUiUrlInput").value = plc.ui_url || "http://localhost:8081";
+  if (byId("hmiIpInput")) byId("hmiIpInput").value = hmi.ip || "";
+  if (byId("hmiPortInput")) byId("hmiPortInput").value = hmi.port || 1881;
+  if (byId("hmiUiUrlInput")) byId("hmiUiUrlInput").value = hmi.ui_url || "http://localhost:1881";
+}
+
+async function savePlcConfig() {
+  const payload = {
+    plc: {
+      ip: String(byId("plcIpInput")?.value || "").trim(),
+      port: Number(byId("plcPortInput")?.value || 502),
+      ui_url: String(byId("plcUiUrlInput")?.value || "").trim(),
+    },
+  };
+  const res = await apiPost("/api/v2/ui/endpoints", payload);
+  if (!res?.ok) return alert(res?.error || "Failed to save PLC configuration.");
+  uiEndpoints = res.ui_endpoints || uiEndpoints;
+}
+
+async function saveHmiConfig() {
+  const payload = {
+    hmi: {
+      ip: String(byId("hmiIpInput")?.value || "").trim(),
+      port: Number(byId("hmiPortInput")?.value || 1881),
+      ui_url: String(byId("hmiUiUrlInput")?.value || "").trim(),
+    },
+  };
+  const res = await apiPost("/api/v2/ui/endpoints", payload);
+  if (!res?.ok) return alert(res?.error || "Failed to save HMI configuration.");
+  uiEndpoints = res.ui_endpoints || uiEndpoints;
+}
+
+function openPlcFromConfig() {
+  const url = String(uiEndpoints?.plc?.ui_url || "http://localhost:8081");
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
+function openHmiFromConfig() {
+  const url = String(uiEndpoints?.hmi?.ui_url || "http://localhost:1881");
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
+async function saveLabTarget() {
+  const host = byId("labTargetHost")?.value || "runtime";
+  const port = Number(byId("labTargetPort")?.value || 15020);
+  const res = await apiPost("/api/v2/lab/target", { host, port });
+  if (!res?.ok) return alert(res?.error || "Failed to save target.");
+  await refreshLabTopology();
+}
+
+async function startOpenPlcRuntime() {
+  const res = await apiPost("/api/v2/lab/openplc/start");
+  if (!res?.ok) return alert(res?.error || "Failed to start OpenPLC runtime.");
+  await refreshLabTopology();
+}
+
+async function runLabSmokeTest() {
+  setText("labSmokePanel", "Running smoke test...");
+  const res = await apiPost("/api/v2/lab/smoke-test");
+  if (!res?.ok) return setText("labSmokePanel", `Smoke test failed: ${res?.error || "unknown error"}`);
+  setText("labSmokePanel", `OK: ${res?.target?.host}:${res?.target?.port} HR${res?.register} write=${res?.written} read=${res?.read_back}`);
+  await refreshLabTopology();
+}
+
+async function pollLabLiveRegister() {
+  const res = await apiGet("/api/v2/lab/read-register?register=0&unit_id=1");
+  if (!res?.ok) return setText("labLivePanel", `Read failed: ${res?.error || "unknown error"}`);
+  setText("labLivePanel", `HR0 = ${Number(res?.value ?? 0)}`);
+}
+
+async function toggleLabLive() {
+  const btn = byId("toggleLabLiveBtn");
+  if (!btn) return;
+  if (labLivePollHandle) {
+    clearInterval(labLivePollHandle);
+    labLivePollHandle = null;
+    btn.textContent = "Start Live";
+    return setText("labLivePanel", "Live polling stopped");
+  }
+  btn.textContent = "Stop Live";
+  setText("labLivePanel", "Connecting...");
+  await pollLabLiveRegister();
+  labLivePollHandle = setInterval(() => pollLabLiveRegister().catch(() => {}), 1000);
+}
+
+function renderLabSwitch(value) {
+  labSwitchValue = value ? 1 : 0;
+  const btn = byId("toggleLabSwitchBtn");
+  if (btn) {
+    btn.textContent = labSwitchValue ? "ON" : "OFF";
+    btn.classList.toggle("danger", !!labSwitchValue);
+  }
+  setText("labSwitchPanel", `COIL0 = ${labSwitchValue ? "ON" : "OFF"}`);
+}
+
+async function pollLabSwitch() {
+  const res = await apiGet("/api/v2/lab/read-bool?coil=0&unit_id=1");
+  if (!res?.ok) return setText("labSwitchPanel", `Read failed: ${res?.error || "unknown error"}`);
+  renderLabSwitch(!!res.value);
+}
+
+async function toggleLabSwitch() {
+  const res = await apiPost("/api/v2/lab/write-bool", { coil: 0, value: !labSwitchValue, unit_id: 1 });
+  if (!res?.ok) return setText("labSwitchPanel", `Write failed: ${res?.error || "unknown error"}`);
+  renderLabSwitch(!!res.value);
 }
 
 function populateAttackSelect(profileId) {
   const select = byId("scenarioAttackSelect");
   if (!select) return;
-  const list = (cachedV2Attacks || []).filter((a) => String(a.profile) === String(profileId));
+  const list = (cachedAttacks || []).filter((a) => String(a.profile) === String(profileId));
   select.innerHTML = "";
-  list.forEach((attack) => {
+  list.forEach((a) => {
     const opt = document.createElement("option");
-    opt.value = attack.id;
-    opt.textContent = `${attack.name} (${attack.technique})`;
+    opt.value = a.id;
+    opt.textContent = `${a.name} (${a.technique})`;
     select.appendChild(opt);
   });
 }
 
-async function refreshV2Panels() {
-  const filter = byId("policyDecisionFilter")?.value || "";
-  const policyUrl = filter ? `/api/v2/policy-decisions?decision=${encodeURIComponent(filter)}` : "/api/v2/policy-decisions";
-  const policy = await apiGet(policyUrl);
-  renderList("policyDecisionPanel", policy.entries || [], (item) => formatPolicyDecision(item));
-}
-
-async function loadV2Attacks() {
+async function loadAttacks() {
   const data = await apiGet("/api/v2/attacks");
-  cachedV2Attacks = Array.isArray(data.attacks) ? data.attacks : [];
+  cachedAttacks = Array.isArray(data?.attacks) ? data.attacks : [];
   populateAttackSelect(byId("scenarioProfileSelect")?.value || "tank_v1");
 }
 
 async function executeScenario(mode) {
   const profile_id = byId("scenarioProfileSelect")?.value || "tank_v1";
   const attack_id = byId("scenarioAttackSelect")?.value;
-  if (!attack_id) {
-    alert("Select an attack scenario first.");
-    return;
-  }
+  if (!attack_id) return alert("Select an attack scenario first.");
   const result = await apiPost("/api/v2/scenarios/execute", { profile_id, attack_id, mode });
-  if (!result.ok) {
-    alert(result.error || "Scenario execution failed");
-    return;
-  }
+  if (!result?.ok) return alert(result?.error || "Scenario execution failed");
   const report = result.report || {};
   const impact = report.impact || {};
-  const txt = [
+  setText("scenarioResultPanel", [
     `Scenario: ${report.attack_name || report.attack_id}`,
     `Mode: ${report.mode}`,
     `Technique: ${report.technique || "-"}`,
-    `Blocked: ${impact.blocked ?? 0}`,
-    `Alerts: ${impact.warned ?? 0}`,
-    `Allowed: ${impact.allowed ?? 0}`,
+    `Blocked: ${impact.blocked_effective ?? impact.blocked ?? 0}`,
+    `Would Block (protected): ${impact.would_block ?? 0}`,
+    `Alerts: ${impact.alerts_effective ?? impact.warned ?? 0}`,
+    `Allowed: ${impact.allowed_effective ?? impact.allowed ?? 0}`,
     `Final Level: ${impact.final_level ?? "-"}`,
     `Impact Score: ${impact.impact_score ?? "-"}`,
-  ].join("\n");
-  setText("scenarioResultPanel", txt);
+  ].join("\n"));
   await refreshAll();
-}
-
-async function startServer() {
-  const host = byId("serverHost")?.value || "127.0.0.1";
-  const port = Number(byId("serverPort")?.value || 5020);
-
-  const result = await apiPost("/api/agent/server/start", { host, port });
-  if (!result.ok) {
-    setText("serverStatus", "Failed to start server.");
-  }
-}
-
-async function stopServer() {
-  const result = await apiPost("/api/agent/server/stop");
-  if (!result.ok) {
-    setText("serverStatus", "Failed to stop server.");
-  }
-}
-
-async function toggleServer() {
-  const status = await apiGet("/api/status");
-  if (!status.agent?.connected) {
-    setText("serverStatus", "Runtime disconnected.");
-    return;
-  }
-  if (!status.server?.running && isSimulationUsingRuntime(status)) {
-    alert("Process simulation is active. Stop simulation before starting manual Modbus server/client.");
-    return;
-  }
-
-  if (status.server?.running) {
-    await stopServer();
-  } else {
-    await startServer();
-  }
-
-  await refreshAll();
-}
-
-async function startClient() {
-  const host = byId("clientHost")?.value || "127.0.0.1";
-  const port = Number(byId("clientPort")?.value || 5020);
-  const poll_interval = Number(byId("pollInterval")?.value || 1.0);
-  const poll_start = Number(byId("pollStart")?.value || 0);
-  const poll_quantity = Number(byId("pollQuantity")?.value || 4);
-
-  const result = await apiPost("/api/agent/client/start", {
-    host,
-    port,
-    poll_interval,
-    poll_start,
-    poll_quantity,
-  });
-
-  if (!result.ok) {
-    setText("clientStatus", "Failed to start client.");
-  }
-}
-
-async function stopClient() {
-  const result = await apiPost("/api/agent/client/stop");
-  if (!result.ok) {
-    setText("clientStatus", "Failed to stop client.");
-  }
-}
-
-async function toggleClient() {
-  const status = await apiGet("/api/status");
-  if (!status.agent?.connected) {
-    setText("clientStatus", "Runtime disconnected.");
-    return;
-  }
-  if (!status.client?.running && isSimulationUsingRuntime(status)) {
-    alert("Process simulation is active. Stop simulation before starting manual Modbus server/client.");
-    return;
-  }
-
-  if (status.client?.running) {
-    await stopClient();
-  } else {
-    await startClient();
-  }
-
-  await refreshAll();
-}
-
-async function sendProcessWrite(address, value, note = "") {
-  const payload = {
-    address: Number(address),
-    value: Number(value),
-    unit_id: 1,
-  };
-
-  const result = await apiPost("/api/process-sim/write", payload);
-  if (!result.ok) {
-    const msg = result.error || `Write failed (${note || `HR${address}`})`;
-    alert(msg);
-    return result;
-  }
-  return result;
-}
-
-async function startProcessSimulation() {
-  const processType = byId("processTypeSelect")?.value || "tank_v1";
-  const plcHost = byId("plcHostInput")?.value || "127.0.0.1";
-  const plcPort = parseProcessInput("plcPortInput", 15020);
-  const hmiHost = byId("hmiHostInput")?.value || plcHost;
-  const hmiPort = parseProcessInput("hmiPortInput", plcPort);
-  const pollInterval = Number(byId("processPollIntervalInput")?.value || 0.5);
-  const pollStart = Number(processConfigCache.poll_start ?? 0);
-  const pollQuantity = Number(processConfigCache.poll_quantity ?? PROCESS_POLL_QUANTITY);
-  const result = await apiPost("/api/process-sim/start", {
-    plc_host: plcHost,
-    plc_port: plcPort,
-    hmi_host: hmiHost,
-    hmi_port: hmiPort,
-    poll_interval: pollInterval,
-    poll_start: pollStart,
-    poll_quantity: pollQuantity,
-    process_type: processType,
-  });
-
-  if (!result.ok) {
-    alert(result.error || "Failed to start simulation");
-    return;
-  }
-
-  openWindow("processPlcWindow");
-  if (result.queued) {
-    processCommandPendingUntil = Date.now() + 5000;
-    processCommandPendingLabel = "STARTING...";
-    processCommandTargetRunning = true;
-  }
-  await refreshAll();
-  if (result.queued) {
-    window.setTimeout(refreshAll, 1200);
-    window.setTimeout(refreshAll, 2600);
-  }
-}
-
-async function stopProcessSimulation() {
-  const result = await apiPost("/api/process-sim/stop");
-  if (!result.ok) {
-    alert(result.error || "Failed to stop simulation");
-    return;
-  }
-  if (result.queued) {
-    processCommandPendingUntil = Date.now() + 5000;
-    processCommandPendingLabel = "STOPPING...";
-    processCommandTargetRunning = false;
-  }
-  await refreshAll();
-  if (result.queued) {
-    window.setTimeout(refreshAll, 1200);
-    window.setTimeout(refreshAll, 2600);
-  }
-}
-
-async function toggleProcessSimulation() {
-  const status = await apiGet("/api/status");
-  if (!status?.process_sim?.running && isManualModbusActive(status)) {
-    alert("Manual Modbus server/client is active. Stop it before starting process simulation.");
-    return;
-  }
-  const running = !!status?.process_sim?.running;
-  if (running) {
-    await stopProcessSimulation();
-  } else {
-    await startProcessSimulation();
-  }
-}
-
-async function toggleProcessActuator(registerKey, note) {
-  const status = await apiGet("/api/status");
-  const regs = getProcessRegistersFromStatus(status);
-  const current = Number(regs[registerKey]) > 0;
-  await sendProcessWrite(PROCESS_REG_MAP[registerKey], current ? 0 : 1, note);
-  await refreshAll();
-}
-
-function parseProcessInput(id, fallback) {
-  return toSafeInt(byId(id)?.value, fallback);
-}
-
-async function saveProcessConfig() {
-  const plcHost = byId("plcHostInput")?.value || "127.0.0.1";
-  const plcPort = parseProcessInput("plcPortInput", 15020);
-  const hmiHost = byId("hmiHostInput")?.value || plcHost;
-  const hmiPort = parseProcessInput("hmiPortInput", plcPort);
-  const pollInterval = Number(byId("processPollIntervalInput")?.value || 0.5);
-  const processType = byId("processTypeSelect")?.value || "tank_v1";
-  const pollStart = Number(processConfigCache.poll_start ?? 0);
-  const pollQuantity = Number(processConfigCache.poll_quantity ?? PROCESS_POLL_QUANTITY);
-
-  const result = await apiPost("/api/process-sim/configure", {
-    plc_host: plcHost,
-    plc_port: plcPort,
-    hmi_host: hmiHost,
-    hmi_port: hmiPort,
-    poll_interval: pollInterval,
-    poll_start: pollStart,
-    poll_quantity: pollQuantity,
-    process_type: processType,
-  });
-
-  if (!result.ok) {
-    alert(result.error || "Failed to save process config");
-    return result;
-  }
-  await refreshAll();
-  return result;
-}
-
-async function applyAlarmLimitConfig() {
-  const status = await apiGet("/api/status");
-  if (!status?.process_sim?.running) {
-    alert("Start the PLC before applying alarm settings.");
-    return;
-  }
-
-  const alarmLow = Math.max(0, Math.min(100, parseProcessInput("alarmLowInput", 0)));
-  const alarmHigh = Math.max(0, Math.min(100, parseProcessInput("alarmHighInput", 0)));
-  const limitLow = Math.max(0, Math.min(100, parseProcessInput("limitLowInput", 0)));
-  const limitHigh = Math.max(0, Math.min(100, parseProcessInput("limitHighInput", 0)));
-
-  const writes = [
-    [PROCESS_REG_MAP.alarmLoThreshold, alarmLow, "alarm low"],
-    [PROCESS_REG_MAP.alarmHiThreshold, alarmHigh, "alarm high"],
-    [PROCESS_REG_MAP.limitLoThreshold, limitLow, "limit low"],
-    [PROCESS_REG_MAP.limitHiThreshold, limitHigh, "limit high"],
-  ];
-
-  for (const [addr, value, note] of writes) {
-    const result = await sendProcessWrite(addr, value, note);
-    if (!result.ok) {
-      alert(`Failed to save (${note}).`);
-      return;
-    }
-  }
-
-  byId("hmiAlarmPopup")?.classList.add("hidden");
-  await refreshAll();
-}
-
-function openProcessSimulationWindows() {
-  openWindow("processHmiWindow");
-  openWindow("processPlcWindow");
-}
-
-function bindProcessSimulationControls() {
-  byId("plcRunSwitchBtn")?.addEventListener("click", toggleProcessSimulation);
-  byId("openProcessSimulationBtn")?.addEventListener("click", openProcessSimulationWindows);
-  byId("openProcessConfigBtn")?.addEventListener("click", () => openWindow("processConfigWindow"));
-  byId("openHmiAlarmBtn")?.addEventListener("click", () => byId("hmiAlarmPopup")?.classList.remove("hidden"));
-  byId("closeHmiAlarmBtn")?.addEventListener("click", () => byId("hmiAlarmPopup")?.classList.add("hidden"));
-  byId("saveProcessConfigBtn")?.addEventListener("click", saveProcessConfig);
-  byId("hmiPumpSwitchBtn")?.addEventListener("click", async () => {
-    await toggleProcessActuator("pump", "pump");
-  });
-  byId("hmiValveSwitchBtn")?.addEventListener("click", async () => {
-    await toggleProcessActuator("valve", "valve");
-  });
-  byId("applyAlarmLimitBtn")?.addEventListener("click", applyAlarmLimitConfig);
-}
-
-async function resetSystem() {
-  await apiPost("/api/reset");
-  await refreshAll();
-}
-
-async function saveMonitorConfig() {
-  const iface = byId("ifaceSelect")?.value || "ALL";
-  const mode = byId("monitorMode")?.value || "MONITORING";
-  const port_mode = byId("portModeSelect")?.value || "MODBUS_PORTS";
-  const custom_ports_raw = byId("customPortsInput")?.value || "";
-  const custom_ports = custom_ports_raw
-    .split(",")
-    .map((v) => v.trim())
-    .filter((v) => v.length > 0);
-
-  const result = await apiPost("/api/agent/config", { iface, mode, port_mode, custom_ports });
-
-  if (result.ok) {
-    setText("monitorConfigStatus", "Configuration saved successfully.");
-    closeModal("monitorModal");
-    await refreshAll();
-  } else {
-    setText("monitorConfigStatus", `Failed to save: ${result.error || "unknown error"}`);
-  }
-}
-
-async function saveServerConfig() {
-  const host = byId("serverHost")?.value || "127.0.0.1";
-  const port = byId("serverPort")?.value || "5020";
-
-  const result = await apiPost("/api/agent/server/configure", { host, port });
-
-  if (result.ok) {
-    closeModal("serverModal");
-    await refreshAll();
-  } else {
-    alert(`Failed to save server config: ${result.error || "unknown error"}`);
-  }
-}
-
-async function saveClientConfig() {
-  const host = byId("clientHost")?.value || "127.0.0.1";
-  const port = byId("clientPort")?.value || "5020";
-  const poll_interval = byId("pollInterval")?.value || "1.0";
-  const poll_start = byId("pollStart")?.value || "0";
-  const poll_quantity = byId("pollQuantity")?.value || "4";
-
-  const result = await apiPost("/api/agent/client/configure", {
-    host,
-    port,
-    poll_interval,
-    poll_start,
-    poll_quantity,
-  });
-
-  if (result.ok) {
-    closeModal("clientModal");
-    await refreshAll();
-  } else {
-    alert(`Failed to save client config: ${result.error || "unknown error"}`);
-  }
 }
 
 async function openMonitorConfig() {
-  const status = await apiGet("/api/status");
-
-  if (byId("monitorMode")) {
-    byId("monitorMode").value = status.agent_config?.mode || "MONITORING";
-  }
-  if (byId("portModeSelect")) {
-    byId("portModeSelect").value = status.agent_config?.port_mode || "MODBUS_PORTS";
-  }
-  if (byId("customPortsInput")) {
-    const ports = status.agent_config?.custom_ports || [];
-    byId("customPortsInput").value = Array.isArray(ports) ? ports.join(",") : "";
-  }
+  const configRes = await apiGet("/api/agent/config");
+  const modeRes = await apiGet("/api/v2/monitor/mode");
+  const contextRes = await apiGet("/api/v2/monitor/context");
+  const cfg = configRes?.config || {};
+  if (byId("monitorOperatingMode")) byId("monitorOperatingMode").value = modeRes?.mode || "observe";
+  if (byId("portModeSelect")) byId("portModeSelect").value = cfg.port_mode || "MODBUS_PORTS";
+  if (byId("customPortsInput")) byId("customPortsInput").value = (cfg.custom_ports || []).join(",");
+  if (byId("monitorCtxHmiIpInput")) byId("monitorCtxHmiIpInput").value = contextRes?.hmi_ip || "";
+  if (byId("monitorCtxPlcIpInput")) byId("monitorCtxPlcIpInput").value = contextRes?.plc_ip || "";
+  if (byId("monitorCtxMonitorIpInput")) byId("monitorCtxMonitorIpInput").value = contextRes?.monitor_ip || "";
+  if (byId("monitorCtxOtSubnetInput")) byId("monitorCtxOtSubnetInput").value = contextRes?.ot_subnet || "";
+  if (byId("monitorCtxDmzSubnetInput")) byId("monitorCtxDmzSubnetInput").value = contextRes?.dmz_subnet || "";
+  if (contextRes?.tag_map) applyTagMap(contextRes.tag_map);
+  monitorTagRows = [];
+  const coils = Object.entries((contextRes?.tag_map?.coil || MODBUS_TAG_MAP.coil)).map(([k, v]) => ({ location: `%QX0.${k}`, name: String(v || "") }));
+  const regs = Object.entries((contextRes?.tag_map?.register || MODBUS_TAG_MAP.register)).map(([k, v]) => ({ location: `%QW${k}`, name: String(v || "") }));
+  monitorTagRows.push(...coils, ...regs);
+  renderTagMapRows();
+  setText("monitorConfigStatus", "");
   updateCustomPortsVisibility();
-
-  openModal("monitorModal");
   await scanInterfaces();
-
-  populateIfaceSelect(
-    status.agent?.available_ifaces || [],
-    status.agent_config?.iface || "ALL"
-  );
 }
 
 function updateCustomPortsVisibility() {
   const mode = byId("portModeSelect")?.value || "MODBUS_PORTS";
-  const row = byId("customPortsRow");
-  const input = byId("customPortsInput");
-  if (!row) return;
-  if (mode === "CUSTOM") {
-    row.classList.remove("hidden");
-    if (input) input.disabled = false;
-  } else {
-    row.classList.add("hidden");
-    if (input) input.disabled = true;
-  }
+  byId("customPortsRow")?.classList.toggle("hidden", mode !== "CUSTOM");
 }
 
 async function scanInterfaces() {
   const data = await apiGet("/api/agent/interfaces");
+  const interfaces = Array.isArray(data?.interfaces) ? data.interfaces : [];
+  const select = byId("ifaceSelect");
+  if (!select) return;
+  select.innerHTML = interfaces.map((iface) => `<option value="${escapeHtml(iface)}">${escapeHtml(iface)}</option>`).join("");
+  if (!interfaces.length) setText("monitorConfigStatus", "");
+}
 
-  if (!data.connected) {
-    setText("monitorConfigStatus", "Agent disconnected.");
-    populateIfaceSelect([], "");
+function buildTagMapPayloadFromRows() {
+  const out = { coil: {}, register: {} };
+  for (const row of monitorTagRows) {
+    const location = String(row.location || "").trim().toUpperCase();
+    const name = String(row.name || "").trim();
+    if (!location || !name) continue;
+    let m = location.match(/^%QX\d+\.(\d+)$/);
+    if (m) {
+      out.coil[Number(m[1])] = name;
+      continue;
+    }
+    m = location.match(/^%QW(\d+)$/);
+    if (m) {
+      out.register[Number(m[1])] = name;
+      continue;
+    }
+  }
+  return out;
+}
+
+function renderTagMapRows() {
+  const tbody = byId("tagsMapRows");
+  if (!tbody) return;
+  tbody.innerHTML = monitorTagRows.map((r, idx) => `
+    <tr data-tag-idx="${idx}">
+      <td><input data-tag-field="location" value="${escapeHtml(String(r.location || ""))}" placeholder="%QX0.0 or %QW1" /></td>
+      <td><input data-tag-field="name" value="${escapeHtml(String(r.name || ""))}" placeholder="PUMP_CMD" /></td>
+      <td><button type="button" class="secondary small" data-tag-del="${idx}">✕</button></td>
+    </tr>
+  `).join("");
+  tbody.querySelectorAll("[data-tag-field]").forEach((el) => {
+    el.addEventListener("input", (e) => {
+      const tr = e.target.closest("tr[data-tag-idx]");
+      if (!tr) return;
+      const idx = Number(tr.getAttribute("data-tag-idx"));
+      const field = e.target.getAttribute("data-tag-field");
+      if (!Number.isFinite(idx) || !field) return;
+      monitorTagRows[idx][field] = e.target.value;
+    });
+  });
+  tbody.querySelectorAll("[data-tag-del]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const idx = Number(btn.getAttribute("data-tag-del"));
+      if (!Number.isFinite(idx)) return;
+      monitorTagRows.splice(idx, 1);
+      renderTagMapRows();
+    });
+  });
+}
+
+function parseFuxaDevicesJsonToRows(content) {
+  let payload;
+  try {
+    payload = JSON.parse(content);
+  } catch (_) {
+    return [];
+  }
+  const rows = [];
+  const devices = Array.isArray(payload) ? payload : [];
+  for (const dev of devices) {
+    const tags = dev?.tags && typeof dev.tags === "object" ? dev.tags : {};
+    for (const tag of Object.values(tags)) {
+      const mem = String(tag?.memaddress || "").trim();
+      const name = String(tag?.name || "").trim();
+      const type = String(tag?.type || "").trim().toLowerCase();
+      const addrNum = Number(tag?.address);
+      if (!mem || !name) continue;
+      // Prefer explicit location if already exported in IEC format.
+      if (/^%QX\d+\.\d+$/i.test(mem) || /^%QW\d+$/i.test(mem)) {
+        rows.push({ location: mem.toUpperCase(), name });
+        continue;
+      }
+      // FUXA modbus export: Bool with address 1..N usually maps to coil N-1.
+      if (type.includes("bool") && Number.isFinite(addrNum) && addrNum >= 1) {
+        rows.push({ location: `%QX0.${Math.floor(addrNum - 1)}`, name });
+        continue;
+      }
+      // FUXA holding register export: memaddress 4xxxxx + address 1..N -> %QW(address-1).
+      if ((/^4\d{5}$/.test(mem) || type.includes("int") || type.includes("word") || type.includes("number")) && Number.isFinite(addrNum) && addrNum >= 1) {
+        rows.push({ location: `%QW${Math.floor(addrNum - 1)}`, name });
+        continue;
+      }
+      // Last fallback: if six-digit non-4xxxx and numeric, treat as coil bit index.
+      if (/^\d{6}$/.test(mem)) {
+        const addr = Number(mem);
+        rows.push({ location: `%QX0.${addr}`, name });
+      }
+    }
+  }
+  const uniq = new Map();
+  rows.forEach((r) => {
+    const key = `${r.location}|${r.name}`;
+    if (!uniq.has(key)) uniq.set(key, r);
+  });
+  return Array.from(uniq.values());
+}
+
+async function saveMonitorAll() {
+  const btn = byId("saveMonitorAllBtn");
+  const payload = {
+    iface: byId("ifaceSelect")?.value || "ALL",
+    mode: "MONITORING",
+    port_mode: byId("portModeSelect")?.value || "MODBUS_PORTS",
+    custom_ports: (byId("customPortsInput")?.value || "").trim(),
+  };
+  const res = await apiPost("/api/agent/config", payload);
+  if (!res?.ok) {
+    setText("monitorConfigStatus", `Save failed: ${res?.error || "unknown error"}`);
     return;
   }
-
-  populateIfaceSelect(data.interfaces || [], data.current || "ALL");
-  const available = Array.isArray(data.interfaces) ? data.interfaces.length : 0;
-  const monitored = Array.isArray(data.monitored_interfaces) ? data.monitored_interfaces.length : 0;
-  const unmonitored = Array.isArray(data.unmonitored_interfaces) ? data.unmonitored_interfaces.length : 0;
-  setText(
-    "monitorConfigStatus",
-    `Interfaces: available=${available}, monitored=${monitored}, not_monitored=${unmonitored}`
-  );
-}
-
-async function openAgentDownloadModal() {
-  openModal("agentDownloadModal");
-  setText("agentSessionIdValue", "loading...");
-
-  try {
-    const status = await apiGet("/api/status");
-    setText("agentSessionIdValue", status.session_id || "-");
-  } catch (_err) {
-    setText("agentSessionIdValue", "unavailable");
+  const opMode = byId("monitorOperatingMode")?.value || "observe";
+  const modeRes = await apiPost("/api/v2/monitor/mode", { mode: opMode });
+  if (!modeRes?.ok) {
+    setText("monitorConfigStatus", `Operating mode save failed: ${modeRes?.error || "unknown error"}`);
+    return;
   }
-
-  // Load and render releases
-  await loadAndRenderReleases();
+  const plcIp = String(byId("monitorCtxPlcIpInput")?.value || "").trim();
+  const proxyRes = await apiPost("/api/v2/monitor/proxy-target", { host: plcIp || "openplc", port: 502 });
+  if (!proxyRes?.ok) {
+    setText("monitorConfigStatus", `Save failed on destination: ${proxyRes?.error || "unknown error"}`);
+    return;
+  }
+  const contextPayload = {
+    hmi_ip: String(byId("monitorCtxHmiIpInput")?.value || "").trim(),
+    plc_ip: plcIp,
+    monitor_ip: String(byId("monitorCtxMonitorIpInput")?.value || "").trim(),
+    ot_subnet: String(byId("monitorCtxOtSubnetInput")?.value || "").trim(),
+    dmz_subnet: String(byId("monitorCtxDmzSubnetInput")?.value || "").trim(),
+    tag_map: buildTagMapPayloadFromRows(),
+    tag_map_use_defaults: false,
+  };
+  const contextRes = await apiPost("/api/v2/monitor/context", contextPayload);
+  if (!contextRes?.ok) {
+    setText("monitorConfigStatus", `Save failed on context: ${contextRes?.error || "unknown error"}`);
+    return;
+  }
+  if (contextRes?.tag_map) applyTagMap(contextRes.tag_map);
+  setText("monitorConfigStatus", "");
+  flashButtonSaved(btn);
+  await refreshAll();
 }
 
-async function loadAndRenderReleases() {
-  const container = document.getElementById("releasesContainer");
-  if (!container) return;
+function renderNetworkScan(hosts = [], selectedIp = null) {
+  const container = byId("networkScanHosts");
+  const details = byId("networkScanDetails");
+  if (!container || !details) return;
+  if (!hosts.length) {
+    container.innerHTML = "";
+    details.textContent = "No devices found.";
+    return;
+  }
+  const roleIcon = (role) => {
+    const r = String(role || "unknown").toLowerCase();
+    if (r === "plc") return "⚙";
+    if (r === "hmi") return "🖥";
+    if (r === "monitor") return "🛡";
+    return "◉";
+  };
 
-  container.innerHTML = '<div class="loading-spinner">Loading releases from GitHub...</div>';
-
-  try {
-    const response = await apiGet("/api/releases/agent");
-
-    if (!response.ok && response.releases && response.releases.length === 0) {
-      container.innerHTML = '<div class="info-message">GitHub releases not available. You can still try generating a package from the latest release endpoint.</div>';
-      document.querySelector(".download-fallback")?.classList.remove("hidden");
-      return;
-    }
-
-    // Render releases
-    const releases = response.releases || [];
-    if (releases.length === 0) {
-      container.innerHTML = '<div class="error-message">No releases available.</div>';
-      document.querySelector(".download-fallback")?.classList.remove("hidden");
-      return;
-    }
-
-    let html = "";
-    let hasDownloadableAssets = false;
-    for (const release of releases) {
-      const compatible = release.compatible_with_server !== false;
-      const releaseType = release.type === "development" 
-        ? '<span class="badge-dev">DEV</span>' 
-        : '<span class="badge-stable">STABLE</span>';
-      const compatibilityBadge = compatible
-        ? ""
-        : '<span class="badge-dev">BUILDING</span>';
-      
-      const releaseDateRaw = release.updated_at || release.published_at;
-      const publishDate = releaseDateRaw
-        ? new Date(releaseDateRaw).toLocaleDateString()
-        : "-";
-      
-      html += `
-        <div class="release-card">
-          <div class="release-header">
-            <h4>${release.tag} ${releaseType} ${compatibilityBadge}</h4>
-            <div class="release-date">Updated: ${publishDate}</div>
-          </div>
-          <div class="release-downloads">
-      `;
-
-      const assets = release.assets || {};
-      if (!compatible) {
-        html += '<div class="info-message">Using latest available runtime build (not exact web-build match).</div>';
-      }
-      
-      if (assets.windows) {
-        hasDownloadableAssets = true;
-        html += `<a class="download-link" href="${getBundleDownloadUrl("windows")}" download>
-          <span class="os-icon">🪟</span> Windows Runtime ZIP
-        </a>`;
-      }
-      if (assets.macos) {
-        hasDownloadableAssets = true;
-        html += `<a class="download-link" href="${getBundleDownloadUrl("macos")}" download>
-          <span class="os-icon">🍎</span> macOS Runtime ZIP
-        </a>`;
-      }
-      if (assets.linux) {
-        hasDownloadableAssets = true;
-        html += `<a class="download-link" href="${getBundleDownloadUrl("linux")}" download>
-          <span class="os-icon">🐧</span> Linux Runtime ZIP
-        </a>`;
-      }
-      
-      html += `
-          </div>
+  container.innerHTML = hosts.map((h) => {
+    const ip = String(h.ip || "-");
+    const role = String(h.role || "unknown").toUpperCase();
+    const zones = Array.isArray(h.zones) && h.zones.length ? ` · ${h.zones.join("/")}` : "";
+    const up = h.reachable ? "UP" : "DOWN";
+    const active = ip === selectedIp ? "active" : "";
+    const ports = (h.open_ports || []).slice(0, 4).map((p) => `<span class="port-chip">${escapeHtml(String(p))}</span>`).join("");
+    return `
+      <button type="button" class="network-host-item ${active}" data-host-ip="${escapeHtml(ip)}">
+        <div class="host-top">
+          <span class="host-icon">${roleIcon(role)}</span>
+          <span class="host-ip">${escapeHtml(ip)}</span>
+          <span class="host-state ${h.reachable ? "up" : "down"}">${escapeHtml(up)}</span>
         </div>
-      `;
+        <div class="host-sub">${escapeHtml(role)}${escapeHtml(zones)}</div>
+        <div class="host-ports">${ports || '<span class="host-ports-empty">No open OT ports</span>'}</div>
+      </button>
+    `;
+  }).join("");
+  container.querySelectorAll("[data-host-ip]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const ip = btn.getAttribute("data-host-ip");
+      selectedNetworkHostIp = ip;
+      renderNetworkScan(latestNetworkHosts, selectedNetworkHostIp);
+    });
+  });
+  if (!selectedIp) return;
+  const selected = hosts.find((h) => String(h.ip) === String(selectedIp)) || hosts[0];
+  selectedNetworkHostIp = String(selected.ip);
+  const ports = (selected.open_ports || []).map((p) => String(p)).join(", ") || "none";
+  details.textContent = `Selected: ${selected.ip} | ${String(selected.role || "unknown").toUpperCase()} | ${selected.reachable ? "UP" : "DOWN"} | Ports: ${ports}`;
+}
+
+function renderNetworkArchitecture(arch) {
+  const panel = byId("networkArchitecturePanel");
+  if (!panel) return;
+  if (!arch) {
+    panel.innerHTML = `
+      <div class="network-arch-title">Architecture</div>
+      <div class="network-arch-line">OT subnet: -</div>
+      <div class="network-arch-line">DMZ subnet: -</div>
+      <div class="network-arch-line">Monitor interfaces: -</div>
+    `;
+    return;
+  }
+  const monitorIps = Array.isArray(arch.monitor_alias_ips) && arch.monitor_alias_ips.length
+    ? arch.monitor_alias_ips.join(", ")
+    : "-";
+  panel.innerHTML = `
+    <div class="network-arch-title">Architecture (OT + DMZ)</div>
+    <div class="network-arch-line">OT subnet: ${escapeHtml(String(arch.ot_subnet || "-"))}</div>
+    <div class="network-arch-line">DMZ subnet: ${escapeHtml(String(arch.dmz_subnet || "-"))}</div>
+    <div class="network-arch-line">Monitor interfaces: ${escapeHtml(monitorIps)}</div>
+  `;
+}
+
+async function scanNetwork() {
+  setText("networkScanDetails", "Scanning...");
+  const data = await apiGet("/api/v2/network/scan");
+  if (!data?.ok) {
+    setText("networkScanDetails", `Scan failed: ${data?.error || "unknown error"}`);
+    return;
+  }
+  const hosts = Array.isArray(data?.hosts) ? data.hosts : [];
+  latestNetworkArchitecture = data?.architecture || null;
+  latestNetworkHosts = hosts;
+  selectedNetworkHostIp = null;
+  setText("networkScanDetails", `Scan complete: ${hosts.length} device(s) found.`);
+  renderNetworkArchitecture(latestNetworkArchitecture);
+  renderNetworkScan(hosts, selectedNetworkHostIp);
+}
+
+async function refreshAll() {
+  await refreshLabTopology();
+  await Promise.all([refreshStatus(), refreshEvents()]);
+}
+
+loadPinnedSessionId();
+
+window.addEventListener("DOMContentLoaded", () => {
+  byId("saveMonitorAllBtn")?.addEventListener("click", () => saveMonitorAll().catch(console.error));
+  byId("runNetworkScanBtn")?.addEventListener("click", () => scanNetwork().catch(console.error));
+  byId("scanIfacesBtn")?.addEventListener("click", () => scanInterfaces().catch(console.error));
+  byId("portModeSelect")?.addEventListener("change", updateCustomPortsVisibility);
+  byId("openTagsMapBtn")?.addEventListener("click", () => toggleQuickConfigWindow("tagsMapWindow", "openTagsMapBtn"));
+  byId("addTagMapRowBtn")?.addEventListener("click", () => {
+    monitorTagRows.push({ location: "", name: "" });
+    renderTagMapRows();
+  });
+  byId("saveTagMapBtn")?.addEventListener("click", async () => {
+    const btn = byId("saveTagMapBtn");
+    const payload = { tag_map: buildTagMapPayloadFromRows(), tag_map_use_defaults: false };
+    const res = await apiPost("/api/v2/monitor/context", payload);
+    if (!res?.ok) return;
+    if (res?.tag_map) applyTagMap(res.tag_map);
+    setText("tagsMapStatus", "");
+    setText("monitorConfigStatus", "");
+    flashButtonSaved(btn);
+    await refreshEvents();
+  });
+  byId("uploadTagsJsonBtn")?.addEventListener("click", () => byId("tagsJsonInput")?.click());
+  byId("tagsJsonInput")?.addEventListener("change", async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const txt = await file.text();
+    const rows = parseFuxaDevicesJsonToRows(txt);
+    if (!rows.length) {
+      setText("tagsMapStatus", "");
+      return;
     }
+    monitorTagRows = rows;
+    renderTagMapRows();
+    setText("tagsMapStatus", "");
+  });
+  byId("saveLabTargetBtn")?.addEventListener("click", () => saveLabTarget().catch(console.error));
+  byId("startOpenPlcBtn")?.addEventListener("click", () => startOpenPlcRuntime().catch(console.error));
+  byId("runLabSmokeBtn")?.addEventListener("click", () => runLabSmokeTest().catch(console.error));
+  byId("toggleLabLiveBtn")?.addEventListener("click", () => toggleLabLive().catch(console.error));
+  byId("toggleLabSwitchBtn")?.addEventListener("click", () => toggleLabSwitch().catch(console.error));
 
-    container.innerHTML = html;
-    document.querySelector(".download-fallback")?.classList.toggle("hidden", hasDownloadableAssets);
+  byId("scenarioProfileSelect")?.addEventListener("change", (e) => populateAttackSelect(e.target.value || "tank_v1"));
+  byId("runBaselineScenarioBtn")?.addEventListener("click", () => executeScenario("baseline").catch(console.error));
+  byId("runProtectedScenarioBtn")?.addEventListener("click", () => executeScenario("protected").catch(console.error));
 
-  } catch (err) {
-    console.error("Error loading releases:", err);
-    container.innerHTML = '<div class="error-message">Failed to load releases from GitHub.</div>';
-    document.querySelector(".download-fallback")?.classList.remove("hidden");
-  }
-}
-
-function formatFileSize(bytes) {
-  if (!bytes) return "unknown";
-  if (bytes < 1024) return bytes + " B";
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
-}
-
-function getBundleDownloadUrl(platform) {
-  let base = null;
-  if (platform === "windows") base = "/api/downloads/agent/windows";
-  if (platform === "macos") base = "/api/downloads/agent/mac";
-  if (platform === "linux") base = "/api/downloads/agent/linux";
-  if (!base) return "#";
-
-  const params = new URLSearchParams();
-  if (isValidSessionId(pinnedSessionId)) {
-    params.set("session_id", pinnedSessionId);
-  }
-  params.set("_ts", String(Date.now()));
-  return `${base}?${params.toString()}`;
-}
-
-function initFloatingWindows() {
-  byId("openIdsWindowBtn")?.addEventListener("click", () => openWindow("idsWindow"));
-  byId("openLogsWindowBtn")?.addEventListener("click", () => openWindow("logsWindow"));
-  byId("openConnectionsWindowBtn")?.addEventListener("click", () => openWindow("connectionsWindow"));
-  byId("openActionsWindowBtn")?.addEventListener("click", () => openWindow("actionsWindow"));
-  byId("openScenarioWindowBtn")?.addEventListener("click", () => openWindow("scenarioWindow"));
-  byId("openPolicyWindowBtn")?.addEventListener("click", () => openWindow("policyWindow"));
   byId("clearAlertsBtn")?.addEventListener("click", async () => {
     await apiPost("/api/alerts/clear");
     await refreshEvents();
   });
-
-  document.querySelectorAll("[data-close-window]").forEach((btn) => {
-    btn.addEventListener("click", () => closeWindow(btn.dataset.closeWindow));
-  });
-
-  [
-    "idsWindow",
-    "logsWindow",
-    "connectionsWindow",
-    "actionsWindow",
-    "actionsHistoryWindow",
-    "actionsPreviewWindow",
-    "alertsWindow",
-    "processHmiWindow",
-    "processConfigWindow",
-    "processPlcWindow",
-    "scenarioWindow",
-    "policyWindow",
-  ].forEach((id, index) => {
-    const el = byId(id);
-    if (!el) return;
-
-    applyWindowState(el, id, index);
-    makeWindowDraggable(el);
-    if (isWindowResizable(id)) {
-      makeWindowResizable(el, id);
-    }
-    observeWindowResize(el, id);
-  });
-
   byId("copyAlertsBtn")?.addEventListener("click", async () => {
-    const plain = byId("alertsPlainPanel")?.textContent || "";
-    if (!plain.trim()) return;
+    const btn = byId("copyAlertsBtn");
+    const text = String(latestAlertsClipboardText || "").trim();
+    if (!text) return;
     try {
-      await navigator.clipboard.writeText(plain);
-    } catch (_err) {
-      console.error("Failed to copy alerts");
+      await navigator.clipboard.writeText(text);
+    } catch (_) {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+    if (btn) {
+      const prev = btn.textContent;
+      btn.textContent = "Copied";
+      setTimeout(() => { btn.textContent = prev || "Copy Log"; }, 1200);
     }
   });
 
-  document.addEventListener("mouseleave", () => hideFcTooltip());
-  window.addEventListener("blur", () => hideFcTooltip());
-}
-
-function makeWindowResizable(windowEl, id) {
-  if (!windowEl) return;
-  const handle = windowEl.querySelector(".window-resize-handle");
-  if (!handle) return;
-
-  const rule = getWindowSizeRule(id);
-  let resizing = false;
-  let startX = 0;
-  let startY = 0;
-  let startW = 0;
-  let startH = 0;
-
-  const begin = (clientX, clientY) => {
-    const rect = windowEl.getBoundingClientRect();
-    resizing = true;
-    startX = clientX;
-    startY = clientY;
-    startW = rect.width;
-    startH = rect.height;
-    bringWindowToFront(windowEl);
-  };
-
-  const move = (clientX, clientY) => {
-    if (!resizing) return;
-    const maxWidth = Math.max(rule.minWidth, window.innerWidth - 20);
-    const maxHeight = Math.max(rule.minHeight, window.innerHeight - 20);
-    const width = clampNumber(startW + (clientX - startX), rule.minWidth, maxWidth, startW);
-    const height = clampNumber(startH + (clientY - startY), rule.minHeight, maxHeight, startH);
-    windowEl.style.width = `${width}px`;
-    windowEl.style.height = `${height}px`;
-  };
-
-  const end = () => {
-    if (!resizing) return;
-    resizing = false;
-    persistWindowState(windowEl, id);
-  };
-
-  handle.addEventListener("mousedown", (e) => {
-    begin(e.clientX, e.clientY);
-    e.preventDefault();
-    e.stopPropagation();
+  byId("openPlcUrlBtn")?.addEventListener("click", () => {
+    toggleQuickConfigWindow("plcConfigWindow", "openPlcUrlBtn", fillEndpointConfigWindows);
   });
-  document.addEventListener("mousemove", (e) => move(e.clientX, e.clientY));
-  document.addEventListener("mouseup", end);
-
-  handle.addEventListener(
-    "touchstart",
-    (e) => {
-      const t = e.touches[0];
-      if (!t) return;
-      begin(t.clientX, t.clientY);
-      e.preventDefault();
-      e.stopPropagation();
-    },
-    { passive: false }
-  );
-  document.addEventListener(
-    "touchmove",
-    (e) => {
-      const t = e.touches[0];
-      if (!t) return;
-      move(t.clientX, t.clientY);
-    },
-    { passive: true }
-  );
-  document.addEventListener("touchend", end);
-}
-
-function fitWindowToContent(windowEl, id) {
-  if (!windowEl) return;
-  const rule = getWindowSizeRule(id);
-  const body = windowEl.querySelector(".window-body");
-  const head = windowEl.querySelector(".window-head");
-  if (!body || !head) return;
-
-  const bodyStyle = window.getComputedStyle(body);
-  const bodyPadX = (parseFloat(bodyStyle.paddingLeft) || 0) + (parseFloat(bodyStyle.paddingRight) || 0);
-  const bodyPadY = (parseFloat(bodyStyle.paddingTop) || 0) + (parseFloat(bodyStyle.paddingBottom) || 0);
-
-  let contentWidth = body.scrollWidth;
-  let contentHeight = body.scrollHeight;
-  const firstChild = body.firstElementChild;
-  if (firstChild) {
-    contentWidth = Math.max(contentWidth, firstChild.scrollWidth);
-    contentHeight = Math.max(contentHeight, firstChild.scrollHeight);
-  }
-
-  const handleExtra = isWindowResizable(id) ? 16 : 0;
-  const desiredWidth = Math.ceil(contentWidth + bodyPadX + 8);
-  const desiredHeight = Math.ceil(head.offsetHeight + contentHeight + bodyPadY + handleExtra + 6);
-
-  const maxWidth = Math.max(rule.minWidth, window.innerWidth - 40);
-  const maxHeight = Math.max(rule.minHeight, window.innerHeight - 40);
-  const width = clampNumber(desiredWidth, rule.minWidth, maxWidth, Math.min(rule.width, maxWidth));
-  const height = clampNumber(desiredHeight, rule.minHeight, maxHeight, Math.min(rule.height, maxHeight));
-  const currentLeft = parseFloat(windowEl.style.left || "120");
-  const currentTop = parseFloat(windowEl.style.top || "120");
-  const left = clampNumber(currentLeft, 0, Math.max(0, window.innerWidth - width), 0);
-  const top = clampNumber(currentTop, 0, Math.max(0, window.innerHeight - height), 0);
-
-  windowEl.style.width = `${width}px`;
-  windowEl.style.height = `${height}px`;
-  windowEl.style.left = `${left}px`;
-  windowEl.style.top = `${top}px`;
-}
-
-function bindAlertDetails(containerId) {
-  const container = byId(containerId);
-  if (!container) return;
-  container.querySelectorAll(".alert-detail[data-alert-key]").forEach((detailsEl) => {
-    const key = detailsEl.dataset.alertKey;
-    if (!key) return;
-    detailsEl.addEventListener("toggle", () => {
-      if (detailsEl.open) {
-        openAlertDetails.add(key);
-      } else {
-        openAlertDetails.delete(key);
-      }
+  byId("openHmiUrlBtn")?.addEventListener("click", () => {
+    toggleQuickConfigWindow("hmiConfigWindow", "openHmiUrlBtn", fillEndpointConfigWindows);
+  });
+  byId("openMonitorConfigBtn")?.addEventListener("click", () => {
+    toggleQuickConfigWindow("monitorConfigWindow", "openMonitorConfigBtn", () => openMonitorConfig().catch(console.error));
+  });
+  byId("openAttackBtn")?.addEventListener("click", () => {
+    toggleQuickConfigWindow("scenarioWindow", "openAttackBtn");
+  });
+  byId("openNetworkScanBtn")?.addEventListener("click", () => {
+    toggleQuickConfigWindow("networkScanWindow", "openNetworkScanBtn", () => {
+      renderNetworkArchitecture(latestNetworkArchitecture);
+      renderNetworkScan(latestNetworkHosts, selectedNetworkHostIp);
     });
   });
-}
-
-function windowStateStorageKey(id) {
-  const variant = id === "processHmiWindow" ? "hmi_v10_" : (id === "processConfigWindow" ? "cfg_v7_" : "");
-  return `${WINDOW_STATE_KEY_PREFIX}${variant}${id}`;
-}
-
-function applyWindowState(el, id, index) {
-  const fallbackLeft = 120 + index * 24;
-  const fallbackTop = 120 + index * 24;
-  const rule = getWindowSizeRule(id);
-  const maxWidth = Math.max(rule.minWidth, window.innerWidth - 40);
-  const maxHeight = Math.max(rule.minHeight, window.innerHeight - 40);
-  const fallbackWidth = Math.min(rule.width, maxWidth);
-  const fallbackHeight = Math.min(rule.height, maxHeight);
-  const isFixed = !!rule.fixed;
-
-  try {
-    const raw = localStorage.getItem(windowStateStorageKey(id));
-    if (!raw) {
-      const maxLeft = Math.max(0, window.innerWidth - fallbackWidth);
-      const maxTop = Math.max(0, window.innerHeight - fallbackHeight);
-      el.style.width = `${fallbackWidth}px`;
-      el.style.height = `${fallbackHeight}px`;
-      el.style.left = `${Math.max(0, Math.min(fallbackLeft, maxLeft))}px`;
-      el.style.top = `${Math.max(0, Math.min(fallbackTop, maxTop))}px`;
-      return;
-    }
-
-    const state = JSON.parse(raw);
-    const width = isFixed ? fallbackWidth : clampNumber(state.width, rule.minWidth, maxWidth, fallbackWidth);
-    const height = isFixed ? fallbackHeight : clampNumber(state.height, rule.minHeight, maxHeight, fallbackHeight);
-    const maxLeft = Math.max(0, window.innerWidth - width);
-    const maxTop = Math.max(0, window.innerHeight - height);
-    const left = clampNumber(state.left, 0, maxLeft, Math.max(0, Math.min(fallbackLeft, maxLeft)));
-    const top = clampNumber(state.top, 0, maxTop, Math.max(0, Math.min(fallbackTop, maxTop)));
-
-    el.style.width = `${width}px`;
-    el.style.height = `${height}px`;
-    el.style.left = `${left}px`;
-    el.style.top = `${top}px`;
-  } catch (_err) {
-    const maxLeft = Math.max(0, window.innerWidth - fallbackWidth);
-    const maxTop = Math.max(0, window.innerHeight - fallbackHeight);
-    el.style.width = `${fallbackWidth}px`;
-    el.style.height = `${fallbackHeight}px`;
-    el.style.left = `${Math.max(0, Math.min(fallbackLeft, maxLeft))}px`;
-    el.style.top = `${Math.max(0, Math.min(fallbackTop, maxTop))}px`;
-  }
-}
-
-function persistWindowState(el, id) {
-  if (!el) return;
-  const rule = getWindowSizeRule(id);
-  const maxWidth = Math.max(rule.minWidth, window.innerWidth - 40);
-  const maxHeight = Math.max(rule.minHeight, window.innerHeight - 40);
-  const left = parseFloat(el.style.left || "0");
-  const top = parseFloat(el.style.top || "0");
-  const width = rule.fixed
-    ? Math.min(rule.width, maxWidth)
-    : clampNumber(el.offsetWidth, rule.minWidth, maxWidth, Math.min(rule.width, maxWidth));
-  const height = rule.fixed
-    ? Math.min(rule.height, maxHeight)
-    : clampNumber(el.offsetHeight, rule.minHeight, maxHeight, Math.min(rule.height, maxHeight));
-  try {
-    localStorage.setItem(
-      windowStateStorageKey(id),
-      JSON.stringify({ left, top, width, height })
-    );
-  } catch (_err) {
-    // Ignore storage failures.
-  }
-}
-
-function observeWindowResize(el, id) {
-  if (typeof ResizeObserver === "undefined") return;
-  let timeout = null;
-  const observer = new ResizeObserver(() => {
-    if (timeout) clearTimeout(timeout);
-    timeout = setTimeout(() => persistWindowState(el, id), 120);
-  });
-  observer.observe(el);
-}
-
-window.addEventListener("DOMContentLoaded", () => {
-  byId("toggleServerBtn")?.addEventListener("click", toggleServer);
-  byId("toggleClientBtn")?.addEventListener("click", toggleClient);
-  byId("resetSystemBtn")?.addEventListener("click", resetSystem);
-
-  byId("openMonitorConfigBtn")?.addEventListener("click", openMonitorConfig);
-  byId("saveMonitorConfigBtn")?.addEventListener("click", saveMonitorConfig);
-  byId("scanIfacesBtn")?.addEventListener("click", scanInterfaces);
-  byId("portModeSelect")?.addEventListener("change", updateCustomPortsVisibility);
-
-  byId("saveServerBtn")?.addEventListener("click", saveServerConfig);
-  byId("closeServerBtn")?.addEventListener("click", () => closeModal("serverModal"));
-
-  byId("saveClientBtn")?.addEventListener("click", saveClientConfig);
-  byId("closeClientBtn")?.addEventListener("click", () => closeModal("clientModal"));
-
-  byId("openServerConfigBtn")?.addEventListener("click", () => openModal("serverModal"));
-  byId("openClientConfigBtn")?.addEventListener("click", () => openModal("clientModal"));
-  byId("openAgentDownloadBtn")?.addEventListener("click", openAgentDownloadModal);
-  byId("scenarioProfileSelect")?.addEventListener("change", (e) => {
-    populateAttackSelect(e.target.value || "tank_v1");
-  });
-  byId("runBaselineScenarioBtn")?.addEventListener("click", () => executeScenario("baseline"));
-  byId("runProtectedScenarioBtn")?.addEventListener("click", () => executeScenario("protected"));
-  byId("policyDecisionFilter")?.addEventListener("change", () => refreshV2Panels());
-  byId("exportPolicyBtn")?.addEventListener("click", async () => {
-    const exp = await apiPost("/api/v2/policy-decisions/export");
-    const count = (exp?.export?.entries || []).length;
-    alert(`Policy decisions exported in JSON response (${count} entries).`);
-  });
+  byId("savePlcConfigBtn")?.addEventListener("click", () => savePlcConfig().catch(console.error));
+  byId("saveHmiConfigBtn")?.addEventListener("click", () => saveHmiConfig().catch(console.error));
+  byId("openPlcFromConfigBtn")?.addEventListener("click", () => openPlcFromConfig());
+  byId("openHmiFromConfigBtn")?.addEventListener("click", () => openHmiFromConfig());
+  byId("toggleMonitorRouteBtn")?.addEventListener("click", () => toggleMonitorRoute().catch(console.error));
+  
 
   document.querySelectorAll("[data-close]").forEach((btn) => {
     btn.addEventListener("click", () => closeModal(btn.dataset.close));
   });
-
+  document.querySelectorAll("[data-close-window]").forEach((btn) => {
+    btn.addEventListener("click", () => closeWindow(btn.dataset.closeWindow));
+  });
   document.querySelectorAll(".modal").forEach((modal) => {
     modal.addEventListener("click", (e) => {
-      if (e.target === modal) {
-        modal.classList.add("hidden");
-      }
+      if (e.target === modal) modal.classList.add("hidden");
     });
   });
 
-  initFloatingWindows();
-  bindProcessSimulationControls();
-  loadV2Attacks().catch((err) => console.error(err));
-  if (window.OTLabActions?.mountActionsWindow) {
-    window.OTLabActions.mountActionsWindow("actionsWindowBody").catch((err) => {
-      console.error(err);
-      setText("actionsWindowBody", "Failed to load Actions window.");
-    });
-  }
-  refreshAll();
-  setInterval(refreshAll, 1000);
+  enableWindowDragging();
+  loadAttacks().catch(console.error);
+  // Do not generate synthetic background OT traffic from the web UI by default.
+  refreshAll().catch(console.error);
+  setInterval(() => refreshStatus().catch(() => {}), 1000);
+  setInterval(() => refreshEvents().catch(() => {}), 1000);
+  setInterval(() => refreshLabTopology().catch(() => {}), 2000);
 });

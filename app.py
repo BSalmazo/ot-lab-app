@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import ipaddress
 import json
 import re
 import socket
@@ -118,6 +119,133 @@ def modbus_write_single_register(host: str, port: int, register: int, value: int
             raise RuntimeError(f"unexpected function code in response: {fc}")
 
     return {"ok": True, "transaction_id": tx_id}
+
+
+def modbus_write_single_coil(host: str, port: int, coil: int, value: bool, unit_id: int = 1, timeout_s: float = 2.0):
+    tx_id = int(time.time() * 1000) & 0xFFFF
+    function_code = 5
+    coil_value = 0xFF00 if bool(value) else 0x0000
+    pdu = bytes([function_code]) + int(coil).to_bytes(2, "big") + int(coil_value).to_bytes(2, "big")
+    mbap = (
+        tx_id.to_bytes(2, "big")
+        + (0).to_bytes(2, "big")
+        + (len(pdu) + 1).to_bytes(2, "big")
+        + int(unit_id).to_bytes(1, "big")
+    )
+
+    with socket.create_connection((host, int(port)), timeout=timeout_s) as conn:
+        conn.settimeout(timeout_s)
+        conn.sendall(mbap + pdu)
+        resp_header = recv_exact(conn, 7)
+        resp_tx_id = int.from_bytes(resp_header[0:2], "big")
+        resp_proto_id = int.from_bytes(resp_header[2:4], "big")
+        resp_len = int.from_bytes(resp_header[4:6], "big")
+        if resp_tx_id != tx_id or resp_proto_id != 0:
+            raise RuntimeError("invalid Modbus response header")
+        resp_pdu = recv_exact(conn, resp_len - 1)
+        if len(resp_pdu) < 5:
+            raise RuntimeError("short Modbus response")
+        fc = resp_pdu[0]
+        if fc & 0x80:
+            exc_code = resp_pdu[1]
+            raise RuntimeError(f"modbus exception code={exc_code}")
+        if fc != function_code:
+            raise RuntimeError(f"unexpected function code in response: {fc}")
+    return {"ok": True, "transaction_id": tx_id}
+
+
+def modbus_read_holding_registers(
+    host: str,
+    port: int,
+    start: int,
+    quantity: int,
+    unit_id: int = 1,
+    timeout_s: float = 2.0,
+):
+    tx_id = int(time.time() * 1000) & 0xFFFF
+    function_code = 3
+    pdu = bytes([function_code]) + int(start).to_bytes(2, "big") + int(quantity).to_bytes(2, "big")
+    mbap = (
+        tx_id.to_bytes(2, "big")
+        + (0).to_bytes(2, "big")
+        + (len(pdu) + 1).to_bytes(2, "big")
+        + int(unit_id).to_bytes(1, "big")
+    )
+
+    with socket.create_connection((host, int(port)), timeout=timeout_s) as conn:
+        conn.settimeout(timeout_s)
+        conn.sendall(mbap + pdu)
+
+        resp_header = recv_exact(conn, 7)
+        resp_tx_id = int.from_bytes(resp_header[0:2], "big")
+        resp_proto_id = int.from_bytes(resp_header[2:4], "big")
+        resp_len = int.from_bytes(resp_header[4:6], "big")
+        if resp_tx_id != tx_id or resp_proto_id != 0:
+            raise RuntimeError("invalid Modbus response header")
+
+        resp_pdu = recv_exact(conn, resp_len - 1)
+        if len(resp_pdu) < 2:
+            raise RuntimeError("short Modbus response")
+
+        fc = resp_pdu[0]
+        if fc & 0x80:
+            exc_code = resp_pdu[1] if len(resp_pdu) > 1 else -1
+            raise RuntimeError(f"modbus exception code={exc_code}")
+        if fc != function_code:
+            raise RuntimeError(f"unexpected function code in response: {fc}")
+        byte_count = int(resp_pdu[1])
+        data = resp_pdu[2 : 2 + byte_count]
+        if len(data) != byte_count:
+            raise RuntimeError("invalid byte count in read response")
+        values = []
+        for i in range(0, len(data), 2):
+            values.append(int.from_bytes(data[i : i + 2], "big"))
+        return {"ok": True, "transaction_id": tx_id, "values": values}
+
+
+def modbus_read_coils(
+    host: str,
+    port: int,
+    start: int,
+    quantity: int,
+    unit_id: int = 1,
+    timeout_s: float = 2.0,
+):
+    tx_id = int(time.time() * 1000) & 0xFFFF
+    function_code = 1
+    pdu = bytes([function_code]) + int(start).to_bytes(2, "big") + int(quantity).to_bytes(2, "big")
+    mbap = (
+        tx_id.to_bytes(2, "big")
+        + (0).to_bytes(2, "big")
+        + (len(pdu) + 1).to_bytes(2, "big")
+        + int(unit_id).to_bytes(1, "big")
+    )
+
+    with socket.create_connection((host, int(port)), timeout=timeout_s) as conn:
+        conn.settimeout(timeout_s)
+        conn.sendall(mbap + pdu)
+        resp_header = recv_exact(conn, 7)
+        resp_tx_id = int.from_bytes(resp_header[0:2], "big")
+        resp_proto_id = int.from_bytes(resp_header[2:4], "big")
+        resp_len = int.from_bytes(resp_header[4:6], "big")
+        if resp_tx_id != tx_id or resp_proto_id != 0:
+            raise RuntimeError("invalid Modbus response header")
+        resp_pdu = recv_exact(conn, resp_len - 1)
+        if len(resp_pdu) < 2:
+            raise RuntimeError("short Modbus response")
+        fc = resp_pdu[0]
+        if fc & 0x80:
+            exc_code = resp_pdu[1] if len(resp_pdu) > 1 else -1
+            raise RuntimeError(f"modbus exception code={exc_code}")
+        if fc != function_code:
+            raise RuntimeError(f"unexpected function code in response: {fc}")
+        byte_count = int(resp_pdu[1])
+        data = resp_pdu[2 : 2 + byte_count]
+        bits = []
+        for b in data:
+            for i in range(8):
+                bits.append((b >> i) & 0x01)
+        return {"ok": True, "transaction_id": tx_id, "values": bits[: int(quantity)]}
 
 
 class ProcessSimulationManager:
@@ -643,6 +771,50 @@ def default_defense_state():
     }
 
 
+def default_lab_target():
+    return {"host": "runtime", "port": 15020}
+
+def default_monitor_proxy_target():
+    return {"host": "openplc", "port": 502}
+
+
+def default_ui_endpoints():
+    openplc_web_port = int(os.getenv("OPENPLC_WEB_PORT", "8081"))
+    openplc_modbus_port = int(os.getenv("OPENPLC_MODBUS_PORT", "1502"))
+    hmi_web_port = int(os.getenv("HMI_WEB_PORT", "1881"))
+    monitor_proxy_port = int(os.getenv("MONITOR_PROXY_PORT", "15020"))
+    return {
+        "plc": {
+            "ip": "10.20.0.11",
+            "port": 502,
+            "ui_url": f"http://localhost:{openplc_web_port}",
+            "host_modbus": f"localhost:{openplc_modbus_port}",
+        },
+        "hmi": {
+            "ip": "10.20.0.21",
+            "port": 1881,
+            "ui_url": f"http://localhost:{hmi_web_port}",
+            "plc_target_ip": "10.30.0.31",
+            "plc_target_port": monitor_proxy_port,
+        },
+        "monitor_proxy": {
+            "ip": "10.30.0.31",
+            "port": 15020,
+            "host_modbus": f"localhost:{monitor_proxy_port}",
+        },
+    }
+
+
+def default_monitor_operating_mode():
+    # observe: passive visibility-only
+    # protect: semantic policy can enforce blocks
+    return "observe"
+
+
+def default_monitor_route_enabled():
+    return True
+
+
 def default_modbus_summary():
     return {
         "detected": False,
@@ -669,6 +841,7 @@ def ensure_session_state(session_id: str):
             agents_by_session[session_id] = {
                 "events": deque(maxlen=300),
                 "alerts": deque(maxlen=100),
+                "operational_actions": deque(maxlen=300),
                 "logs": deque(maxlen=100),
                 "agent_info": default_agent_info(),
                 "agent_snapshot": default_agent_snapshot(),
@@ -684,11 +857,21 @@ def ensure_session_state(session_id: str):
                 "event_log_signatures": deque(maxlen=600),
                 "recent_event_signatures": {},
                 "recent_alert_signatures": {},
+                "recent_operational_action_signatures": {},
                 "runtime_state": default_runtime_state(),
                 "defense_state": default_defense_state(),
                 "policy_decisions": deque(maxlen=600),
                 "command_history": deque(maxlen=400),
                 "execution_reports": deque(maxlen=100),
+                "lab_target": default_lab_target(),
+                "monitor_proxy_target": default_monitor_proxy_target(),
+                "monitor_operating_mode": default_monitor_operating_mode(),
+                "monitor_route_enabled": default_monitor_route_enabled(),
+                "ui_endpoints": default_ui_endpoints(),
+                "tag_map_overrides": {"coil": {}, "register": {}},
+                "tag_map_use_defaults": True,
+                "ot_subnet_override": "",
+                "dmz_subnet_override": "",
             }
         return agents_by_session[session_id]
 
@@ -848,10 +1031,255 @@ def push_log_for_session(session_id: str, message: str):
 MODBUS_WRITE_FUNCTIONS = get_modbus_write_function_codes()
 MODBUS_ACTIVE_WINDOW_SECONDS = 2.0
 MAX_EVENT_CLOCK_DRIFT_SECONDS = 30.0
+OP_ACTION_COALESCE_WINDOW_SECONDS = 2.0
+OP_ACTION_TAG_MAP = {
+    "coil": {
+        0: "PUMP_CMD",
+        1: "VALVE_CMD",
+        2: "ALARM_HI_ACTIVE",
+        3: "ALARM_LO_ACTIVE",
+    },
+    "register": {
+        1: "PUMP_FLOW_SP",
+        2: "VALVE_FLOW_SP",
+        3: "ALARM_HI_SP",
+        4: "ALARM_LO_SP",
+        6: "LEVEL_AI",
+    },
+}
+
+
+def get_effective_tag_map(state: dict):
+    use_defaults = bool(state.get("tag_map_use_defaults", True))
+    if not use_defaults:
+        out = {"coil": {}, "register": {}}
+        overrides = state.get("tag_map_overrides") or {}
+        for bucket in ("coil", "register"):
+            src = overrides.get(bucket) or {}
+            for k, v in dict(src).items():
+                try:
+                    key = int(k)
+                except Exception:
+                    continue
+                val = str(v or "").strip()
+                if val:
+                    out[bucket][key] = val
+        return out
+    base = {
+        "coil": dict(OP_ACTION_TAG_MAP.get("coil") or {}),
+        "register": dict(OP_ACTION_TAG_MAP.get("register") or {}),
+    }
+    overrides = state.get("tag_map_overrides") or {}
+    for bucket in ("coil", "register"):
+        src = overrides.get(bucket) or {}
+        for k, v in dict(src).items():
+            try:
+                key = int(k)
+            except Exception:
+                continue
+            val = str(v or "").strip()
+            if val:
+                base[bucket][key] = val
+    return base
 
 
 def normalize_event_type(event_type: str):
     return str(event_type or "").upper().strip()
+
+
+def endpoint_host(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return raw
+    if raw.count(":") == 1 and "." in raw:
+        return raw.rsplit(":", 1)[0]
+    return raw
+
+
+def resolve_role_for_ip(state: dict, ip_value: str):
+    ip = endpoint_host(ip_value)
+    if not ip:
+        return "UNKNOWN"
+    endpoints = state.get("ui_endpoints") or default_ui_endpoints()
+    hmi_ip = endpoint_host((endpoints.get("hmi") or {}).get("ip"))
+    plc_ip = endpoint_host((endpoints.get("plc") or {}).get("ip"))
+    mon_ip = endpoint_host((endpoints.get("monitor_proxy") or {}).get("ip"))
+    if ip == hmi_ip:
+        return "HMI"
+    if ip == plc_ip:
+        return "PLC"
+    if ip == mon_ip:
+        return "MONITOR"
+    try:
+        arch = _build_network_architecture(endpoints)
+        monitor_alias_ips = set(arch.get("monitor_alias_ips") or [])
+        web_alias_ips = set(arch.get("web_alias_ips") or [])
+        if ip in monitor_alias_ips:
+            return "MONITOR"
+        if ip in web_alias_ips:
+            return "WEB"
+    except Exception:
+        pass
+    return ip
+
+
+def normalize_modbus_value(raw):
+    if raw is None:
+        return None
+    txt = str(raw).strip().upper()
+    if txt == "ON":
+        return 1
+    if txt == "OFF":
+        return 0
+    try:
+        return int(float(txt))
+    except Exception:
+        return None
+
+
+def extract_write_target_and_value(payload: dict):
+    summary = str(payload.get("summary") or "")
+    register = payload.get("register")
+    value = payload.get("value")
+    if register is None:
+        m = re.search(r"register\s*=\s*(-?\d+)", summary, flags=re.IGNORECASE)
+        if m:
+            register = int(m.group(1))
+    if value is None:
+        m = re.search(r"value\s*=\s*(ON|OFF|-?\d+)", summary, flags=re.IGNORECASE)
+        if m:
+            value = normalize_modbus_value(m.group(1))
+    else:
+        value = normalize_modbus_value(value)
+    return register, value
+
+
+def push_operational_action(state: dict, action: dict):
+    now_ts = time.time()
+    with lock:
+        sig_cache = state.get("recent_operational_action_signatures")
+        if sig_cache is None:
+            sig_cache = {}
+            state["recent_operational_action_signatures"] = sig_cache
+        dedupe_sig = action.get("_dedupe_sig")
+        if dedupe_sig:
+            prev_ts = sig_cache.get(dedupe_sig)
+            if prev_ts is not None and (now_ts - float(prev_ts)) <= 3.0:
+                return
+            sig_cache[dedupe_sig] = now_ts
+            _cleanup_recent_signature_cache(sig_cache, now_ts=now_ts, ttl_s=30.0, max_items=4000)
+
+    with lock:
+        actions = state.get("operational_actions")
+        if actions is None:
+            actions = deque(maxlen=300)
+            state["operational_actions"] = actions
+        if actions:
+            try:
+                action_ts = float(action.get("timestamp", 0.0))
+            except Exception:
+                action_ts = 0.0
+            for idx in range(len(actions) - 1, max(-1, len(actions) - 16), -1):
+                prev = actions[idx]
+                try:
+                    same_key = (
+                        prev.get("action_type") == action.get("action_type")
+                        and prev.get("asset") == action.get("asset")
+                        and prev.get("target") == action.get("target")
+                        and str(prev.get("value_to")) == str(action.get("value_to"))
+                    )
+                    prev_ts = float(prev.get("timestamp", 0.0))
+                    within_window = abs(action_ts - prev_ts) <= 2.5
+                    if not (same_key and within_window):
+                        continue
+                    count = int(prev.get("count", 1)) + 1
+                    prev["count"] = count
+                    prev["value_to"] = action.get("value_to")
+                    prev["timestamp"] = action.get("timestamp")
+                    # Prefer HMI attribution when available.
+                    if str(prev.get("actor") or "").upper() != "HMI" and str(action.get("actor") or "").upper() == "HMI":
+                        prev["actor"] = action.get("actor")
+                    return
+                except Exception:
+                    continue
+        actions.append(action)
+
+
+def ingest_operational_action_from_event(state: dict, payload: dict):
+    event_type = normalize_event_type(payload.get("type"))
+    if event_type != "WRITE_REQUEST":
+        return
+    function_code = payload.get("function_code")
+    try:
+        function_code = int(function_code) if function_code is not None else None
+    except Exception:
+        function_code = None
+    if function_code is None:
+        return
+    base_fc = function_code & 0x7F if function_code > 127 else function_code
+    if base_fc not in MODBUS_WRITE_FUNCTIONS:
+        return
+
+    register, value = extract_write_target_and_value(payload)
+    if register is None:
+        return
+
+    is_coil = base_fc in {5, 15}
+    tag_map = get_effective_tag_map(state)
+    tag = tag_map["coil"].get(int(register)) if is_coil else tag_map["register"].get(int(register))
+    if not tag:
+        if is_coil:
+            byte = int(register) // 8
+            bit = int(register) % 8
+            tag = f"%Q{byte}.{bit}"
+        else:
+            tag = f"HR{int(register)}"
+
+    client_ip, server_ip, _port = extract_event_client_server(payload)
+    src_ip = endpoint_host(client_ip)
+    dst_ip = endpoint_host(server_ip)
+    actor = resolve_role_for_ip(state, src_ip)
+    target = resolve_role_for_ip(state, dst_ip)
+    plc_ip = endpoint_host(((state.get("ui_endpoints") or default_ui_endpoints()).get("plc") or {}).get("ip"))
+    if plc_ip and dst_ip != plc_ip:
+        return
+    try:
+        arch = _build_network_architecture(state.get("ui_endpoints") or default_ui_endpoints())
+        monitor_alias_ips = set(arch.get("monitor_alias_ips") or [])
+        web_alias_ips = set(arch.get("web_alias_ips") or [])
+    except Exception:
+        monitor_alias_ips = set()
+        web_alias_ips = set()
+    # Drop DMZ-side reflected proxy writes (they duplicate the same command seen on OT side).
+    if src_ip in web_alias_ips and dst_ip == plc_ip:
+        return
+    # OT-side proxy writes represent HMI-originated operator actions for this lab view.
+    if (src_ip in monitor_alias_ips) and dst_ip == plc_ip:
+        actor = "HMI"
+    event_ts = resolve_event_time(payload)
+
+    action = {
+        "kind": "operational_action",
+        "timestamp": event_ts,
+        "protocol": "MODBUS/TCP",
+        "event_type": event_type,
+        "action_type": "write_coil" if is_coil else "write_register",
+        "asset": tag,
+        "address": int(register),
+        "value_from": value,
+        "value_to": value,
+        "count": 1,
+        "actor": actor,
+        "target": target,
+        "path": "via_monitor_proxy",
+        "function_code": base_fc,
+        "_dedupe_sig": (
+            f"{payload.get('transaction_id')}|{base_fc}|{int(register)}|{value}"
+            if payload.get("transaction_id") is not None
+            else f"no-tx|{base_fc}|{int(register)}|{value}"
+        ),
+    }
+    push_operational_action(state, action)
 
 
 def extract_event_client_server(payload: dict):
@@ -1203,6 +1631,11 @@ def build_command_log_message(command_type: str, payload: dict):
             "Process simulation write requested "
             f"(HR{payload.get('address', '-') }={payload.get('value', '-')}, unit={payload.get('unit_id', 1)})"
         )
+    if command_type == "CONFIGURE_PROXY_TARGET":
+        return (
+            "Monitor proxy destination updated "
+            f"({payload.get('upstream_host', '-') }:{payload.get('upstream_port', '-')})"
+        )
     return f"Command queued: {command_type}"
 
 
@@ -1497,8 +1930,11 @@ def refresh_runtime_state(state: dict):
     runtime_state["process"]["profile_id"] = str(process_snapshot.get("process_type") or "tank_v1")
     runtime_state["process"]["last_updated"] = now
     defense_state = state.get("defense_state") or default_defense_state()
-    runtime_state["defense"]["running"] = bool(defense_state.get("enabled", True))
+    monitor_mode = str(state.get("monitor_operating_mode") or default_monitor_operating_mode()).strip().lower()
+    defense_enabled = bool(defense_state.get("enabled", True))
+    runtime_state["defense"]["running"] = bool(defense_enabled and monitor_mode == "protect")
     runtime_state["defense"]["mode"] = str(defense_state.get("policy_mode") or "semantic_policy_ai_assist")
+    runtime_state["defense"]["operating_mode"] = monitor_mode
     runtime_state["defense"]["last_updated"] = now
     state["runtime_state"] = runtime_state
     state["defense_state"] = defense_state
@@ -1512,6 +1948,8 @@ def apply_process_write_with_semantic_control(
     value: int,
     unit_id: int = 1,
     enforce_defense: bool = True,
+    process_running_override: bool | None = None,
+    external_target: tuple[str, int] | None = None,
 ):
     now_ts = time.time()
     process_snapshot = state.get("process_sim") or process_sim.snapshot()
@@ -1519,9 +1957,13 @@ def apply_process_write_with_semantic_control(
     registers = get_process_register_values(process_snapshot)
     command = {"address": int(address), "value": int(value), "unit_id": int(unit_id), "timestamp": now_ts}
     history = [item for item in list(state.get("command_history") or []) if isinstance(item, dict)]
+    process_running_for_policy = bool(process_snapshot.get("running"))
+    if process_running_override is not None:
+        process_running_for_policy = bool(process_running_override)
+
     decision_obj = evaluate_semantic_policy(
         profile_id=profile_id,
-        process_running=bool(process_snapshot.get("running")),
+        process_running=process_running_for_policy,
         register_values=registers,
         address=int(address),
         value=int(value),
@@ -1555,12 +1997,25 @@ def apply_process_write_with_semantic_control(
         return {
             "ok": False,
             "blocked": True,
+            "would_block": True,
             "error": decision_obj.reason,
             "policy_decision": trace_entry,
             "process_sim": process_snapshot,
         }
 
-    if should_run_process_on_agent(state):
+    would_block = decision_obj.decision == "BLOCK"
+
+    if external_target:
+        ext_host, ext_port = external_target
+        modbus_write_single_register(
+            host=str(ext_host),
+            port=int(ext_port),
+            register=int(address),
+            value=int(value),
+            unit_id=int(unit_id),
+        )
+        result = {"ok": True, "queued": False, "runtime": "external_lab", "process_sim": process_snapshot}
+    elif should_run_process_on_agent(state):
         queue_command(
             session_id,
             "WRITE_PROCESS_SIM",
@@ -1577,7 +2032,128 @@ def apply_process_write_with_semantic_control(
             session_id,
             f"Semantic policy ALERT for HR{address}={value} ({decision_obj.rule_id}: {decision_obj.reason})",
         )
-    return {**result, "policy_decision": trace_entry}
+    return {
+        **result,
+        "blocked": False,
+        "would_block": bool(would_block),
+        "policy_decision": trace_entry,
+    }
+
+
+def probe_lab_topology():
+    openplc_web_port = int(os.getenv("OPENPLC_WEB_PORT", "8081"))
+    openplc_modbus_port = int(os.getenv("OPENPLC_MODBUS_PORT", "1502"))
+    hmi_web_port = int(os.getenv("HMI_WEB_PORT", "1881"))
+    monitor_proxy_port = int(os.getenv("MONITOR_PROXY_PORT", "15020"))
+    services = [
+        {
+            "id": "plc",
+            "name": "OpenPLC Runtime",
+            "internal_url": "http://openplc:8080",
+            "external_url": f"http://localhost:{openplc_web_port}",
+            "zone": "OT",
+            "modbus_host": "openplc",
+            "modbus_port": 502,
+            "external_modbus": f"localhost:{openplc_modbus_port}",
+        },
+        {
+            "id": "hmi",
+            "name": "FUXA HMI",
+            "internal_url": "http://hmi:1881",
+            "external_url": f"http://localhost:{hmi_web_port}",
+            "zone": "OT",
+            "port": 1881,
+        },
+        {
+            "id": "monitor",
+            "name": "OT Monitor Proxy",
+            "internal_url": "http://runtime:15020",
+            "external_url": f"tcp://localhost:{monitor_proxy_port}",
+            "zone": "OT/DMZ",
+            "modbus_host": "runtime",
+            "modbus_port": 15020,
+            "external_modbus": f"localhost:{monitor_proxy_port}",
+        },
+    ]
+    out = []
+    for svc in services:
+        internal = str(svc.get("internal_url") or "")
+        service_id = str(svc.get("id") or "")
+        reachable = False
+        err = None
+        if service_id == "monitor":
+            try:
+                with socket.create_connection(("runtime", 15020), timeout=0.7):
+                    reachable = True
+            except Exception as exc:
+                err = str(exc)
+        else:
+            try:
+                r = requests.get(internal, timeout=0.7)
+                reachable = r.status_code < 500
+            except Exception as exc:
+                err = str(exc)
+        row = dict(svc)
+        try:
+            row["host"] = socket.gethostbyname(str(svc.get("modbus_host") or svc.get("id") or ""))
+        except Exception:
+            row["host"] = None
+        row["reachable"] = bool(reachable)
+        row["error"] = err
+        if svc.get("id") == "plc":
+            modbus_ready = False
+            modbus_error = None
+            try:
+                with socket.create_connection((str(svc.get("modbus_host")), int(svc.get("modbus_port") or 502)), timeout=0.7):
+                    modbus_ready = True
+            except Exception as exc:
+                modbus_error = str(exc)
+            row["modbus_ready"] = bool(modbus_ready)
+            row["modbus_error"] = modbus_error
+        out.append(row)
+    return out
+
+
+def ensure_openplc_runtime_started():
+    try:
+        with socket.create_connection(("openplc", 502), timeout=0.8):
+            return True, None
+    except Exception:
+        pass
+
+    sess = requests.Session()
+    base = "http://openplc:8080"
+    last_err = None
+    for _ in range(3):
+        try:
+            resp = sess.post(
+                f"{base}/login",
+                data={"username": "openplc", "password": "openplc"},
+                timeout=5.0,
+                allow_redirects=True,
+            )
+            if resp.status_code >= 400:
+                last_err = f"OpenPLC login failed with status {resp.status_code}"
+                time.sleep(1.0)
+                continue
+
+            resp2 = sess.get(f"{base}/start_plc", timeout=5.0, allow_redirects=True)
+            if resp2.status_code >= 400:
+                last_err = f"OpenPLC start_plc failed with status {resp2.status_code}"
+                time.sleep(1.0)
+                continue
+
+            time.sleep(1.5)
+            try:
+                with socket.create_connection(("openplc", 502), timeout=1.5):
+                    return True, None
+            except Exception as exc:
+                last_err = f"OpenPLC runtime start attempted, Modbus still unavailable: {exc}"
+                time.sleep(1.0)
+        except Exception as exc:
+            last_err = f"OpenPLC auto-start failed: {exc}"
+            time.sleep(1.0)
+    return False, str(last_err or "OpenPLC runtime unavailable")
 
 
 def should_log_agent_event(state: dict, payload: dict) -> bool:
@@ -1636,6 +2212,7 @@ def ingest_agent_event_payload(state: dict, session_id: str, payload: dict):
 
     push_event(state, payload)
     update_modbus_summary_from_event(state, payload)
+    ingest_operational_action_from_event(state, payload)
 
     if not should_log_agent_event(state, payload):
         return
@@ -1932,6 +2509,12 @@ def api_status(request: Request):
         "process_control": build_process_control_status(state, now),
         "runtime_state": state.get("runtime_state") or default_runtime_state(),
         "defense_state": state.get("defense_state") or default_defense_state(),
+        "monitor_operating_mode": str(state.get("monitor_operating_mode") or default_monitor_operating_mode()),
+        "monitor_route_enabled": bool(state.get("monitor_route_enabled", default_monitor_route_enabled())),
+        "monitor_proxy_target": state.get("monitor_proxy_target") or default_monitor_proxy_target(),
+        "lab_target": state.get("lab_target") or default_lab_target(),
+        "ui_endpoints": state.get("ui_endpoints") or default_ui_endpoints(),
+        "tag_map": get_effective_tag_map(state),
         "agent_config": state["agent_config"],
         "supported_protocols": ["modbus", "ethercat"],
         "session_id": session_id,
@@ -1949,6 +2532,8 @@ def api_events(request: Request):
     response = JSONResponse({
         "events": list(state["events"]),
         "alerts": list(state["alerts"]),
+        "actions": list(state.get("operational_actions") or []),
+        "tag_map": get_effective_tag_map(state),
         "logs": list(state["logs"]),
         "modbus_summary": build_modbus_summary(state),
         "connection_history": build_connection_history(state),
@@ -2180,6 +2765,599 @@ def api_v2_process_profiles(request: Request):
     return response
 
 
+@app.get("/api/v2/monitor/mode")
+def api_v2_monitor_mode(request: Request):
+    session_id, state = get_session_state_from_request(request)
+    mode = str(state.get("monitor_operating_mode") or default_monitor_operating_mode()).strip().lower()
+    if mode not in {"observe", "protect"}:
+        mode = default_monitor_operating_mode()
+        state["monitor_operating_mode"] = mode
+    response = JSONResponse({"ok": True, "mode": mode, "session_id": session_id})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.post("/api/v2/monitor/mode")
+def api_v2_set_monitor_mode(request: Request, payload: dict = Body(default={})):
+    session_id, state = get_session_state_from_request(request)
+    mode = str((payload or {}).get("mode") or "").strip().lower()
+    if mode not in {"observe", "protect"}:
+        response = JSONResponse({"ok": False, "error": "mode must be observe or protect"}, status_code=400)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+    state["monitor_operating_mode"] = mode
+    refresh_runtime_state(state)
+    push_log_for_session(session_id, f"Monitor operating mode set to {mode.upper()}")
+    response = JSONResponse({"ok": True, "mode": mode, "session_id": session_id})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.get("/api/v2/monitor/route")
+def api_v2_monitor_route(request: Request):
+    session_id, state = get_session_state_from_request(request)
+    enabled = bool(state.get("monitor_route_enabled", default_monitor_route_enabled()))
+    response = JSONResponse({"ok": True, "enabled": enabled, "lab_target": state.get("lab_target") or default_lab_target(), "session_id": session_id})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.post("/api/v2/monitor/route")
+def api_v2_set_monitor_route(request: Request, payload: dict = Body(default={})):
+    session_id, state = get_session_state_from_request(request)
+    enabled = bool((payload or {}).get("enabled", True))
+    state["monitor_route_enabled"] = enabled
+    if enabled:
+        state["lab_target"] = {"host": "runtime", "port": 15020}
+    else:
+        state["lab_target"] = {"host": "openplc", "port": 502}
+    push_log_for_session(session_id, f"Monitor route set to {'ENABLED' if enabled else 'BYPASS'}")
+    response = JSONResponse({"ok": True, "enabled": enabled, "lab_target": state.get("lab_target"), "session_id": session_id})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+@app.get("/api/v2/monitor/proxy-target")
+def api_v2_monitor_proxy_target(request: Request):
+    session_id, state = get_session_state_from_request(request)
+    target = state.get("monitor_proxy_target") or default_monitor_proxy_target()
+    response = JSONResponse({"ok": True, "target": target, "session_id": session_id})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.post("/api/v2/monitor/proxy-target")
+def api_v2_set_monitor_proxy_target(request: Request, payload: dict = Body(default={})):
+    session_id, state = get_session_state_from_request(request)
+    host = str((payload or {}).get("host") or "").strip()
+    try:
+        port = int((payload or {}).get("port") or 502)
+    except Exception:
+        port = 502
+    if not host:
+        response = JSONResponse({"ok": False, "error": "host is required"}, status_code=400)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+    if port < 1 or port > 65535:
+        response = JSONResponse({"ok": False, "error": "invalid port"}, status_code=400)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+
+    state["monitor_proxy_target"] = {"host": host, "port": int(port)}
+    queue_command(
+        session_id,
+        "CONFIGURE_PROXY_TARGET",
+        {"upstream_host": host, "upstream_port": int(port)},
+    )
+    response = JSONResponse({"ok": True, "target": state["monitor_proxy_target"], "session_id": session_id})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+def _probe_host_ports(host: str, ports: list[int], timeout_s: float = 0.15):
+    open_ports = []
+    for port in ports:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout_s)
+        try:
+            if s.connect_ex((host, int(port))) == 0:
+                open_ports.append(int(port))
+        except Exception:
+            pass
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+    return open_ports
+
+
+def _build_network_architecture(ui: dict):
+    mon_ip = str(((ui.get("monitor_proxy") or {}).get("ip") or "")).strip()
+    monitor_alias_ips = set()
+    web_alias_ips = set()
+    if mon_ip:
+        monitor_alias_ips.add(mon_ip)
+    try:
+        for fam, _, _, _, sockaddr in socket.getaddrinfo("runtime", 15020, socket.AF_INET, socket.SOCK_STREAM):
+            if fam == socket.AF_INET and sockaddr and sockaddr[0]:
+                monitor_alias_ips.add(str(sockaddr[0]).strip())
+    except Exception:
+        pass
+    try:
+        for fam, _, _, _, sockaddr in socket.getaddrinfo("web", 8000, socket.AF_INET, socket.SOCK_STREAM):
+            if fam == socket.AF_INET and sockaddr and sockaddr[0]:
+                web_alias_ips.add(str(sockaddr[0]).strip())
+    except Exception:
+        pass
+    ot_subnet = str(os.getenv("OT_SUBNET", "10.20.0.0/24"))
+    dmz_subnet = str(os.getenv("DMZ_SUBNET", "10.30.0.0/24"))
+    return {
+        "ot_subnet": ot_subnet,
+        "dmz_subnet": dmz_subnet,
+        "monitor_alias_ips": sorted([ip for ip in monitor_alias_ips if ip]),
+        "web_alias_ips": sorted([ip for ip in web_alias_ips if ip]),
+        "explanation": "Monitor is dual-homed (OT + DMZ): it sees OT traffic and forwards telemetry/control to Web on DMZ.",
+    }
+
+
+@app.get("/api/v2/network/scan")
+def api_v2_network_scan(request: Request):
+    session_id, state = get_session_state_from_request(request)
+    ui = state.get("ui_endpoints") or default_ui_endpoints()
+    plc_ip = str(((ui.get("plc") or {}).get("ip") or "")).strip()
+    hmi_ip = str(((ui.get("hmi") or {}).get("ip") or "")).strip()
+    mon_ip = str(((ui.get("monitor_proxy") or {}).get("ip") or "")).strip()
+    architecture = _build_network_architecture(ui)
+    monitor_alias_ips = set(architecture.get("monitor_alias_ips") or [])
+    web_alias_ips = set(architecture.get("web_alias_ips") or [])
+    extra_ips = set()
+    for ev in list(state.get("events") or [])[-300:]:
+        src = str(ev.get("src_ip") or "").strip()
+        dst = str(ev.get("dst_ip") or "").strip()
+        if src:
+            extra_ips.add(src)
+        if dst:
+            extra_ips.add(dst)
+    ips = []
+    for ip in [hmi_ip, mon_ip, plc_ip, *sorted(monitor_alias_ips)]:
+        if ip and ip not in ips:
+            ips.append(ip)
+    for ip in sorted(extra_ips):
+        if ip not in ips:
+            ips.append(ip)
+
+    scan_ports = [502, 15020, 1881, 8000, 8080, 8081]
+    ot_subnet = str(architecture.get("ot_subnet") or os.getenv("OT_SUBNET", "10.20.0.0/24"))
+    dmz_subnet = str(architecture.get("dmz_subnet") or os.getenv("DMZ_SUBNET", "10.30.0.0/24"))
+    try:
+        ot_net = ipaddress.ip_network(ot_subnet, strict=False)
+    except Exception:
+        ot_net = ipaddress.ip_network("10.20.0.0/24")
+    try:
+        dmz_net = ipaddress.ip_network(dmz_subnet, strict=False)
+    except Exception:
+        dmz_net = ipaddress.ip_network("10.30.0.0/24")
+
+    rows = []
+    for ip in ips[:48]:
+        open_ports = _probe_host_ports(ip, scan_ports)
+        role = "unknown"
+        if ip == plc_ip:
+            role = "plc"
+        elif ip == hmi_ip:
+            role = "hmi"
+        elif ip == mon_ip or ip in monitor_alias_ips:
+            role = "monitor"
+        elif ip in web_alias_ips:
+            role = "web"
+        zones = []
+        try:
+            addr = ipaddress.ip_address(ip)
+            if addr in ot_net:
+                zones.append("OT")
+            if addr in dmz_net:
+                zones.append("DMZ")
+        except Exception:
+            pass
+        rows.append({
+            "ip": ip,
+            "role": role,
+            "reachable": bool(open_ports),
+            "open_ports": open_ports,
+            "zones": zones,
+        })
+    response = JSONResponse({"ok": True, "hosts": rows, "architecture": architecture, "session_id": session_id})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.get("/api/v2/lab/topology")
+def api_v2_lab_topology(request: Request):
+    session_id, state = get_session_state_from_request(request)
+    ui_endpoints = state.get("ui_endpoints") or default_ui_endpoints()
+    response = JSONResponse(
+        {
+            "ok": True,
+            "target": state.get("lab_target") or default_lab_target(),
+            "monitor_route_enabled": bool(state.get("monitor_route_enabled", default_monitor_route_enabled())),
+            "monitor_proxy_target": state.get("monitor_proxy_target") or default_monitor_proxy_target(),
+            "services": probe_lab_topology(),
+            "ui_endpoints": ui_endpoints,
+            "architecture": _build_network_architecture(ui_endpoints),
+        }
+    )
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.get("/api/v2/ui/endpoints")
+def api_v2_ui_endpoints(request: Request):
+    session_id, state = get_session_state_from_request(request)
+    response = JSONResponse({"ok": True, "ui_endpoints": state.get("ui_endpoints") or default_ui_endpoints(), "session_id": session_id})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.get("/api/v2/monitor/context")
+def api_v2_monitor_context(request: Request):
+    session_id, state = get_session_state_from_request(request)
+    ui = state.get("ui_endpoints") or default_ui_endpoints()
+    arch = _build_network_architecture(ui)
+    response = JSONResponse(
+        {
+            "ok": True,
+            "session_id": session_id,
+            "hmi_ip": endpoint_host((ui.get("hmi") or {}).get("ip")),
+            "plc_ip": endpoint_host((ui.get("plc") or {}).get("ip")),
+            "monitor_ip": endpoint_host((ui.get("monitor_proxy") or {}).get("ip")),
+            "ot_subnet": str(state.get("ot_subnet_override") or arch.get("ot_subnet") or ""),
+            "dmz_subnet": str(state.get("dmz_subnet_override") or arch.get("dmz_subnet") or ""),
+            "tag_map": get_effective_tag_map(state),
+        }
+    )
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.post("/api/v2/monitor/context")
+def api_v2_set_monitor_context(request: Request, payload: dict = Body(default={})):
+    session_id, state = get_session_state_from_request(request)
+    with lock:
+        current = dict(state.get("ui_endpoints") or default_ui_endpoints())
+        hmi_ip = endpoint_host(payload.get("hmi_ip"))
+        plc_ip = endpoint_host(payload.get("plc_ip"))
+        monitor_ip = endpoint_host(payload.get("monitor_ip"))
+        if hmi_ip:
+            current.setdefault("hmi", {})["ip"] = hmi_ip
+        if plc_ip:
+            current.setdefault("plc", {})["ip"] = plc_ip
+        if monitor_ip:
+            current.setdefault("monitor_proxy", {})["ip"] = monitor_ip
+        state["ui_endpoints"] = current
+
+        ot_subnet = str(payload.get("ot_subnet") or "").strip()
+        dmz_subnet = str(payload.get("dmz_subnet") or "").strip()
+        if ot_subnet:
+            state["ot_subnet_override"] = ot_subnet
+        if dmz_subnet:
+            state["dmz_subnet_override"] = dmz_subnet
+
+        incoming = payload.get("tag_map") or {}
+        normalized = {"coil": {}, "register": {}}
+        for bucket in ("coil", "register"):
+            src = incoming.get(bucket) or {}
+            for k, v in dict(src).items():
+                try:
+                    kk = int(k)
+                except Exception:
+                    continue
+                vv = str(v or "").strip()
+                if vv:
+                    normalized[bucket][kk] = vv
+        state["tag_map_overrides"] = normalized
+        state["tag_map_use_defaults"] = bool(payload.get("tag_map_use_defaults", False)) if "tag_map_use_defaults" in payload else False
+    response = JSONResponse({"ok": True, "session_id": session_id, "ui_endpoints": state.get("ui_endpoints"), "tag_map": get_effective_tag_map(state)})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.post("/api/v2/ui/endpoints")
+def api_v2_set_ui_endpoints(request: Request, payload: dict = Body(default={})):
+    session_id, state = get_session_state_from_request(request)
+    current = dict(state.get("ui_endpoints") or default_ui_endpoints())
+    updates = payload or {}
+    for key in ("plc", "hmi", "monitor_proxy"):
+        incoming = updates.get(key)
+        if isinstance(incoming, dict):
+            base = dict(current.get(key) or {})
+            for k, v in incoming.items():
+                base[str(k)] = v
+            current[key] = base
+    state["ui_endpoints"] = current
+    response = JSONResponse({"ok": True, "ui_endpoints": current, "session_id": session_id})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.post("/api/v2/lab/openplc/start")
+def api_v2_lab_openplc_start(request: Request):
+    session_id, _state = get_session_state_from_request(request)
+    ok, err = ensure_openplc_runtime_started()
+    code = 200 if ok else 409
+    response = JSONResponse({"ok": ok, "error": err}, status_code=code)
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.post("/api/v2/lab/smoke-test")
+def api_v2_lab_smoke_test(request: Request):
+    session_id, state = get_session_state_from_request(request)
+    target = state.get("lab_target") or default_lab_target()
+    host = str(target.get("host") or "openplc")
+    port = int(target.get("port") or 502)
+
+    if host == "openplc" and port == 502:
+        ok, err = ensure_openplc_runtime_started()
+        if not ok:
+            response = JSONResponse({"ok": False, "error": err or "OpenPLC runtime not ready"}, status_code=409)
+            set_session_cookie_if_needed(request, response, session_id)
+            return response
+
+    register = 0
+    write_value = int(time.time()) % 100
+    try:
+        modbus_write_single_register(host=host, port=port, register=register, value=write_value, unit_id=1, timeout_s=2.0)
+        read_res = modbus_read_holding_registers(host=host, port=port, start=register, quantity=1, unit_id=1, timeout_s=2.0)
+        read_back = int((read_res.get("values") or [None])[0])
+    except Exception as exc:
+        response = JSONResponse({"ok": False, "error": f"Smoke test failed: {exc}"}, status_code=409)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+
+    passed = read_back == write_value
+    payload = {
+        "ok": bool(passed),
+        "target": {"host": host, "port": port},
+        "register": register,
+        "written": write_value,
+        "read_back": read_back,
+        "message": "PLC Modbus read/write smoke test passed" if passed else "PLC responded but value mismatch",
+    }
+    if passed:
+        push_log_for_session(session_id, f"Lab smoke test OK ({host}:{port}) HR{register}={write_value}")
+        response = JSONResponse(payload)
+    else:
+        push_log_for_session(session_id, f"Lab smoke test mismatch ({host}:{port}) write={write_value} read={read_back}")
+        response = JSONResponse(payload, status_code=409)
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.get("/api/v2/lab/read-register")
+def api_v2_lab_read_register(request: Request, register: int = 0, unit_id: int = 1):
+    session_id, state = get_session_state_from_request(request)
+    target = state.get("lab_target") or default_lab_target()
+    host = str(target.get("host") or "openplc")
+    port = int(target.get("port") or 502)
+
+    if register < 0 or register > 65535:
+        response = JSONResponse({"ok": False, "error": "Invalid register address"}, status_code=400)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+    if unit_id < 0 or unit_id > 255:
+        response = JSONResponse({"ok": False, "error": "Invalid unit_id"}, status_code=400)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+
+    if host == "openplc" and port == 502:
+        ok, err = ensure_openplc_runtime_started()
+        if not ok:
+            response = JSONResponse({"ok": False, "error": err or "OpenPLC runtime not ready"}, status_code=409)
+            set_session_cookie_if_needed(request, response, session_id)
+            return response
+
+    try:
+        read_res = modbus_read_holding_registers(
+            host=host,
+            port=port,
+            start=register,
+            quantity=1,
+            unit_id=unit_id,
+            timeout_s=2.0,
+        )
+        value = int((read_res.get("values") or [0])[0])
+    except Exception as exc:
+        response = JSONResponse({"ok": False, "error": f"Read failed: {exc}"}, status_code=409)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+
+    response = JSONResponse(
+        {
+            "ok": True,
+            "target": {"host": host, "port": port},
+            "register": register,
+            "unit_id": unit_id,
+            "value": value,
+            "ts": int(time.time() * 1000),
+        }
+    )
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.post("/api/v2/lab/write-register")
+def api_v2_lab_write_register(request: Request, payload: dict = Body(default={})):
+    session_id, state = get_session_state_from_request(request)
+    target = state.get("lab_target") or default_lab_target()
+    host = str(target.get("host") or "openplc")
+    port = int(target.get("port") or 502)
+
+    try:
+        register = int(payload.get("register", 2))
+        value = int(payload.get("value", 0))
+        unit_id = int(payload.get("unit_id", 1))
+    except Exception:
+        response = JSONResponse({"ok": False, "error": "Invalid payload"}, status_code=400)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+
+    if register < 0 or register > 65535:
+        response = JSONResponse({"ok": False, "error": "Invalid register address"}, status_code=400)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+    if value < 0 or value > 65535:
+        response = JSONResponse({"ok": False, "error": "Invalid register value"}, status_code=400)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+    if unit_id < 0 or unit_id > 255:
+        response = JSONResponse({"ok": False, "error": "Invalid unit_id"}, status_code=400)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+
+    if host == "openplc" and port == 502:
+        ok, err = ensure_openplc_runtime_started()
+        if not ok:
+            response = JSONResponse({"ok": False, "error": err or "OpenPLC runtime not ready"}, status_code=409)
+            set_session_cookie_if_needed(request, response, session_id)
+            return response
+
+    try:
+        modbus_write_single_register(
+            host=host,
+            port=port,
+            register=register,
+            value=value,
+            unit_id=unit_id,
+            timeout_s=2.0,
+        )
+    except Exception as exc:
+        response = JSONResponse({"ok": False, "error": f"Write failed: {exc}"}, status_code=409)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+
+    response = JSONResponse(
+        {
+            "ok": True,
+            "target": {"host": host, "port": port},
+            "register": register,
+            "unit_id": unit_id,
+            "value": value,
+            "ts": int(time.time() * 1000),
+        }
+    )
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.get("/api/v2/lab/read-bool")
+def api_v2_lab_read_bool(request: Request, coil: int = 0, unit_id: int = 1):
+    session_id, state = get_session_state_from_request(request)
+    target = state.get("lab_target") or default_lab_target()
+    host = str(target.get("host") or "openplc")
+    port = int(target.get("port") or 502)
+
+    if coil < 0 or coil > 65535:
+        response = JSONResponse({"ok": False, "error": "Invalid coil address"}, status_code=400)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+
+    if host == "openplc" and port == 502:
+        ok, err = ensure_openplc_runtime_started()
+        if not ok:
+            response = JSONResponse({"ok": False, "error": err or "OpenPLC runtime not ready"}, status_code=409)
+            set_session_cookie_if_needed(request, response, session_id)
+            return response
+
+    try:
+        read_res = modbus_read_coils(host=host, port=port, start=coil, quantity=1, unit_id=unit_id, timeout_s=2.0)
+        value = int((read_res.get("values") or [0])[0])
+    except Exception as exc:
+        response = JSONResponse({"ok": False, "error": f"Read bool failed: {exc}"}, status_code=409)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+
+    response = JSONResponse(
+        {
+            "ok": True,
+            "target": {"host": host, "port": port},
+            "coil": int(coil),
+            "unit_id": int(unit_id),
+            "value": bool(value),
+            "ts": int(time.time() * 1000),
+        }
+    )
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.post("/api/v2/lab/write-bool")
+def api_v2_lab_write_bool(request: Request, payload: dict = Body(default={})):
+    session_id, state = get_session_state_from_request(request)
+    target = state.get("lab_target") or default_lab_target()
+    host = str(target.get("host") or "openplc")
+    port = int(target.get("port") or 502)
+
+    try:
+        coil = int(payload.get("coil", 0))
+        unit_id = int(payload.get("unit_id", 1))
+        raw_value = payload.get("value", False)
+        value = bool(raw_value) if isinstance(raw_value, bool) else str(raw_value).strip().lower() in {"1", "true", "on", "yes"}
+    except Exception:
+        response = JSONResponse({"ok": False, "error": "Invalid payload"}, status_code=400)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+
+    if coil < 0 or coil > 65535:
+        response = JSONResponse({"ok": False, "error": "Invalid coil address"}, status_code=400)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+
+    if host == "openplc" and port == 502:
+        ok, err = ensure_openplc_runtime_started()
+        if not ok:
+            response = JSONResponse({"ok": False, "error": err or "OpenPLC runtime not ready"}, status_code=409)
+            set_session_cookie_if_needed(request, response, session_id)
+            return response
+
+    try:
+        modbus_write_single_coil(host=host, port=port, coil=coil, value=value, unit_id=unit_id, timeout_s=2.0)
+    except Exception as exc:
+        response = JSONResponse({"ok": False, "error": f"Write bool failed: {exc}"}, status_code=409)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+
+    response = JSONResponse(
+        {
+            "ok": True,
+            "target": {"host": host, "port": port},
+            "coil": int(coil),
+            "unit_id": int(unit_id),
+            "value": bool(value),
+            "ts": int(time.time() * 1000),
+        }
+    )
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
+@app.post("/api/v2/lab/target")
+def api_v2_lab_target(request: Request, payload: dict = Body(default={})):
+    session_id, state = get_session_state_from_request(request)
+    host = str(payload.get("host") or "").strip() or "openplc"
+    try:
+        port = int(payload.get("port") or 502)
+    except Exception:
+        port = 502
+    if port < 1 or port > 65535:
+        response = JSONResponse({"ok": False, "error": "Invalid port"}, status_code=400)
+        set_session_cookie_if_needed(request, response, session_id)
+        return response
+    state["lab_target"] = {"host": host, "port": port}
+    response = JSONResponse({"ok": True, "target": state["lab_target"]})
+    set_session_cookie_if_needed(request, response, session_id)
+    return response
+
+
 @app.get("/api/v2/semantic-policy")
 def api_v2_semantic_policy(request: Request, profile_id: str = "tank_v1"):
     session_id, _state = get_session_state_from_request(request)
@@ -2284,10 +3462,50 @@ async def api_v2_scenarios_execute(request: Request):
         return response
 
     process_snapshot = state.get("process_sim") or process_sim.snapshot()
-    if not process_snapshot.get("running"):
-        response = JSONResponse({"ok": False, "error": "Process simulation must be running to execute scenario"}, status_code=409)
-        set_session_cookie_if_needed(request, response, session_id)
-        return response
+    use_external_lab = not bool(process_snapshot.get("running"))
+    external_target = None
+    process_running_override = None
+    if use_external_lab:
+        target = state.get("lab_target") or default_lab_target()
+        external_target = (str(target.get("host") or "openplc"), int(target.get("port") or 502))
+        process_running_override = True
+        modbus_ready = False
+        try:
+            with socket.create_connection((external_target[0], external_target[1]), timeout=1.0):
+                modbus_ready = True
+        except Exception:
+            modbus_ready = False
+        if not modbus_ready:
+            if external_target[0] == "openplc" and external_target[1] == 502:
+                ok, err = ensure_openplc_runtime_started()
+                if ok:
+                    modbus_ready = True
+                else:
+                    response = JSONResponse(
+                        {
+                            "ok": False,
+                            "error": err or (
+                                "External PLC target openplc:502 is not accepting Modbus/TCP yet. "
+                                "Open OpenPLC at http://localhost:8081 and ensure runtime is started."
+                            ),
+                        },
+                        status_code=409,
+                    )
+                    set_session_cookie_if_needed(request, response, session_id)
+                    return response
+        if not modbus_ready:
+            response = JSONResponse(
+                {
+                    "ok": False,
+                    "error": (
+                        f"External PLC target {external_target[0]}:{external_target[1]} is not accepting Modbus/TCP yet. "
+                        "Open OpenPLC at http://localhost:8081 and ensure runtime is started."
+                    ),
+                },
+                status_code=409,
+            )
+            set_session_cookie_if_needed(request, response, session_id)
+            return response
 
     enforce = mode == "protected"
     trace = []
@@ -2303,6 +3521,8 @@ async def api_v2_scenarios_execute(request: Request):
                 value=value,
                 unit_id=1,
                 enforce_defense=enforce,
+                process_running_override=process_running_override,
+                external_target=external_target,
             )
         except Exception as exc:
             trace.append({"ok": False, "address": address, "value": value, "error": str(exc)})
@@ -2315,6 +3535,18 @@ async def api_v2_scenarios_execute(request: Request):
     trace_entries = [item.get("policy_decision") for item in trace if isinstance(item, dict) and item.get("policy_decision")]
     final_registers = get_process_register_values(end_snapshot)
     impact = evaluate_execution_impact(trace_entries, final_registers)
+    effective_blocked = sum(1 for item in trace if isinstance(item, dict) and bool(item.get("blocked")))
+    would_block = sum(1 for item in trace if isinstance(item, dict) and bool(item.get("would_block")) and not bool(item.get("blocked")))
+    warnings = sum(
+        1
+        for item in trace_entries
+        if isinstance(item, dict) and str(item.get("decision")) == "ALLOW_WITH_ALERT"
+    )
+    allowed_effective = max(0, len(trace) - effective_blocked - warnings)
+    impact["blocked_effective"] = int(effective_blocked)
+    impact["would_block"] = int(would_block)
+    impact["alerts_effective"] = int(warnings + would_block)
+    impact["allowed_effective"] = int(allowed_effective)
     report = {
         "id": f"rep_{uuid.uuid4().hex[:16]}",
         "timestamp": time.time(),
@@ -2324,6 +3556,11 @@ async def api_v2_scenarios_execute(request: Request):
         "mode": mode,
         "framework": attack.get("framework"),
         "technique": attack.get("technique"),
+        "execution_target": {
+            "mode": "external_lab" if use_external_lab else "process_sim",
+            "host": external_target[0] if external_target else ((end_snapshot.get("server") or {}).get("host")),
+            "port": external_target[1] if external_target else ((end_snapshot.get("server") or {}).get("port")),
+        },
         "trace": trace,
         "policy_trace": trace_entries,
         "impact": impact,
