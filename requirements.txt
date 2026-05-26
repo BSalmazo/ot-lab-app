@@ -3,4 +3,3 @@ uvicorn[standard]
 python-multipart
 jinja2
 requests
-scapy
