@@ -15,6 +15,8 @@ let latestNetworkHosts = [];
 let selectedNetworkHostIp = null;
 let latestNetworkArchitecture = null;
 let latestAlertsClipboardText = "";
+let latestPolicyDecisionRows = [];
+let latestPolicyDecisionClipboardText = "";
 let monitorTagRows = [];
 const FLOW_ACTIVE_TTL_SEC = 3;
 const MONITORED_PROTOCOLS = new Set(["MODBUS/TCP", "MODBUS"]);
@@ -169,18 +171,19 @@ function openQuickConfigWindow(windowId, anchorButtonId) {
   win.classList.remove("closing");
   if (!btn) return;
   const rect = btn.getBoundingClientRect();
-  const preferredWidth = windowId === "networkScanWindow"
-    ? 860
-    : (win.classList.contains("attack-config-window") ? 460 : 360);
+  let preferredWidth = 360;
+  if (windowId === "networkScanWindow") preferredWidth = 860;
+  else if (windowId === "policyDecisionsWindow") preferredWidth = 980;
+  else if (win.classList.contains("attack-config-window")) preferredWidth = 460;
   const w = Math.min(preferredWidth, Math.max(320, window.innerWidth - 24));
   const gap = 12;
-  const measuredH = windowId === "networkScanWindow"
+  const measuredH = (windowId === "networkScanWindow" || windowId === "policyDecisionsWindow")
     ? Math.max(300, Math.min(560, win.offsetHeight || 420))
     : Math.max(220, Math.min(520, win.offsetHeight || 260));
   const spaceBelow = window.innerHeight - rect.bottom;
   const spaceAbove = rect.top;
   let top;
-  if (windowId === "networkScanWindow") {
+  if (windowId === "networkScanWindow" || windowId === "policyDecisionsWindow") {
     // Prefer opening above button for dock actions.
     if (spaceAbove >= (measuredH + gap)) {
       top = rect.top - measuredH - gap;
@@ -389,6 +392,14 @@ function formatAlert(item) {
 function compactOperationalAlerts(items) {
   const out = [];
   const source = Array.isArray(items) ? items : [];
+  const decisionRank = (decision) => {
+    const d = String(decision || "").toUpperCase();
+    if (d === "BLOCK") return 3;
+    if (d === "ALERT" || d === "ALLOW_WITH_ALERT") return 2;
+    if (d === "ALLOW") return 1;
+    return 0;
+  };
+  const strongerDecision = (a, b) => decisionRank(b?.decision) >= decisionRank(a?.decision) ? b : a;
   for (const item of source) {
     if (String(item?.kind || "") === "operational_action") {
       const ts = normalizeTsSeconds(item?.timestamp || Date.now() / 1000);
@@ -403,6 +414,7 @@ function compactOperationalAlerts(items) {
         last.lastTs = ts;
         last.count += Number(item?.count || 1);
         last.lastValue = valueTo;
+        last.policyDecision = strongerDecision(last.policyDecision, item?.policy_decision);
         if (last.firstValue === null || last.firstValue === undefined || last.firstValue === "") {
           last.firstValue = item?.value_from;
         }
@@ -420,6 +432,7 @@ function compactOperationalAlerts(items) {
         src: String(item?.actor || ""),
         dst: String(item?.target || ""),
         asset: String(item?.asset || ""),
+        policyDecision: item?.policy_decision || null,
         raw: item,
       });
       continue;
@@ -560,7 +573,11 @@ function renderAlertsPanel(items) {
       ? `${c.firstValue} -> ${c.lastValue} (${c.count} changes)`
       : `${c.lastValue}`;
     const action = c.actionKey === "coil" ? "Write coil" : "Write register";
-    return `${action} | ${src} -> ${dst} | ${tag} = ${valueText}`;
+    const policy = c.policyDecision || {};
+    const decision = String(policy.decision || "EVENT").toUpperCase();
+    const rule = policy.rule_id ? ` | ${policy.rule_id}` : "";
+    const reason = policy.reason ? ` | ${policy.reason}` : "";
+    return `${action} | ${src} -> ${dst} | ${tag} = ${valueText} | ${decision}${rule}${reason}`;
   }).join("\n");
 
   panel.innerHTML = ordered.map((c) => {
@@ -577,13 +594,21 @@ function renderAlertsPanel(items) {
           : `${firstVal} → ${c.lastValue} (${c.count} changes)`)
       : `${c.lastValue}`;
     const action = c.actionKey === "coil" ? "Write coil" : "Write register";
+    const policy = c.policyDecision || {};
+    const decision = String(policy.decision || "EVENT").toUpperCase();
+    const rule = String(policy.rule_id || "").trim();
+    const reason = String(policy.reason || "").trim();
+    const policyLine = reason
+      ? `<div class="alert-policy">${escapeHtml(rule ? `${rule}: ${reason}` : reason)}</div>`
+      : "";
     return `
-      <article class="alert-card">
+      <article class="alert-card policy-${escapeHtml(decision.toLowerCase())}">
         <div class="alert-top">
           <span class="alert-kind">${escapeHtml(action)}</span>
-          <span class="alert-level">EVENT</span>
+          <span class="alert-level">${escapeHtml(decision)}</span>
         </div>
         <div class="alert-line">${escapeHtml(src)} → ${escapeHtml(dst)} | ${escapeHtml(tag)} = ${escapeHtml(valueText)}</div>
+        ${policyLine}
       </article>
     `;
   }).join("");
@@ -1194,6 +1219,114 @@ async function scanNetwork() {
   renderNetworkScan(hosts, selectedNetworkHostIp);
 }
 
+function normalizePolicyDecisionEntry(entry) {
+  const ts = normalizeTsSeconds(entry?.timestamp);
+  return {
+    timestamp: ts,
+    timeText: ts ? new Date(ts * 1000).toLocaleTimeString() : "-",
+    decision: String(entry?.decision || "EVENT").toUpperCase(),
+    ruleId: String(entry?.rule_id || "-"),
+    ruleName: String(entry?.rule_name || ""),
+    asset: String(entry?.asset || entry?.address || "-"),
+    value: entry?.value === null || entry?.value === undefined ? "-" : String(entry.value),
+    reason: String(entry?.reason || ""),
+    severity: String(entry?.severity || ""),
+    actor: String(entry?.actor || "-"),
+    target: String(entry?.target || "-"),
+    actionType: String(entry?.action_type || "-"),
+    protocol: String(entry?.protocol || "-"),
+    raw: entry,
+  };
+}
+
+function renderPolicyDecisions(entries) {
+  const tbody = byId("policyDecisionRows");
+  const summary = byId("policyDecisionSummary");
+  if (!tbody || !summary) return;
+  const rows = (Array.isArray(entries) ? entries : [])
+    .map(normalizePolicyDecisionEntry)
+    .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+  latestPolicyDecisionRows = rows;
+  const counts = rows.reduce((acc, row) => {
+    acc[row.decision] = (acc[row.decision] || 0) + 1;
+    return acc;
+  }, {});
+  summary.innerHTML = rows.length
+    ? `Decisions: <strong>${rows.length}</strong> · ALLOW: <strong>${counts.ALLOW || 0}</strong> · ALERT: <strong>${counts.ALERT || 0}</strong> · BLOCK: <strong>${counts.BLOCK || 0}</strong>`
+    : "No policy decisions recorded yet.";
+  latestPolicyDecisionClipboardText = rows.map((row) => [
+    row.timeText,
+    row.decision,
+    row.ruleId,
+    row.asset,
+    row.value,
+    row.actor,
+    row.target,
+    row.reason,
+  ].join(" | ")).join("\n");
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="policy-empty">No policy decisions recorded yet.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.slice(0, 80).map((row) => `
+    <tr class="policy-row policy-row-${escapeHtml(row.decision.toLowerCase())}">
+      <td>${escapeHtml(row.timeText)}</td>
+      <td><span class="policy-pill">${escapeHtml(row.decision)}</span></td>
+      <td>
+        <div class="policy-rule-id">${escapeHtml(row.ruleId)}</div>
+        <div class="policy-rule-name">${escapeHtml(row.ruleName)}</div>
+      </td>
+      <td>
+        <div class="policy-asset">${escapeHtml(row.asset)}</div>
+        <div class="policy-action">${escapeHtml(row.actionType)}</div>
+      </td>
+      <td>${escapeHtml(row.value)}</td>
+      <td>${escapeHtml(row.reason)}</td>
+    </tr>
+  `).join("");
+}
+
+async function refreshPolicyDecisions(button = null) {
+  const data = await apiGet("/api/v2/policy-decisions");
+  renderPolicyDecisions(Array.isArray(data?.entries) ? data.entries : []);
+  if (button) flashButtonSaved(button, "Updated", 900);
+}
+
+async function copyPolicyDecisions() {
+  if (!latestPolicyDecisionRows.length) await refreshPolicyDecisions();
+  const btn = byId("copyPolicyDecisionsBtn");
+  const text = String(latestPolicyDecisionClipboardText || "").trim();
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (_) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+  }
+  flashButtonSaved(btn, "Copied", 1200);
+}
+
+async function exportPolicyDecisions() {
+  const btn = byId("exportPolicyDecisionsBtn");
+  const data = await apiPost("/api/v2/policy-decisions/export");
+  const payload = data?.export || { entries: latestPolicyDecisionRows.map((r) => r.raw) };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  a.href = url;
+  a.download = `otlab-policy-decisions-${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  flashButtonSaved(btn, "Exported", 1200);
+}
+
 async function refreshAll() {
   await refreshLabTopology();
   await Promise.all([refreshStatus(), refreshEvents()]);
@@ -1289,6 +1422,14 @@ window.addEventListener("DOMContentLoaded", () => {
       renderNetworkScan(latestNetworkHosts, selectedNetworkHostIp);
     });
   });
+  byId("openPolicyDecisionsBtn")?.addEventListener("click", () => {
+    toggleQuickConfigWindow("policyDecisionsWindow", "openPolicyDecisionsBtn", () => {
+      refreshPolicyDecisions().catch(console.error);
+    });
+  });
+  byId("refreshPolicyDecisionsBtn")?.addEventListener("click", (e) => refreshPolicyDecisions(e.currentTarget).catch(console.error));
+  byId("copyPolicyDecisionsBtn")?.addEventListener("click", () => copyPolicyDecisions().catch(console.error));
+  byId("exportPolicyDecisionsBtn")?.addEventListener("click", () => exportPolicyDecisions().catch(console.error));
   byId("savePlcConfigBtn")?.addEventListener("click", () => savePlcConfig().catch(console.error));
   byId("saveHmiConfigBtn")?.addEventListener("click", () => saveHmiConfig().catch(console.error));
   byId("openPlcFromConfigBtn")?.addEventListener("click", () => openPlcFromConfig());

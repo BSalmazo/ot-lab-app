@@ -1,0 +1,592 @@
+{
+    "devices": {
+        "0": {
+            "id": "0",
+            "name": "FUXA Server",
+            "type": "FuxaServer",
+            "property": {},
+            "polling": 1000,
+            "enabled": true,
+            "tags": {
+                "t_b97ab434-8aed4eeb": {
+                    "id": "t_b97ab434-8aed4eeb",
+                    "name": "Monitor Connection Status",
+                    "label": "Monitor Connection Status",
+                    "value": 0,
+                    "type": "number",
+                    "memaddress": "d_monitor_tank",
+                    "daq": {
+                        "enabled": false,
+                        "interval": 60,
+                        "changed": false,
+                        "restored": false
+                    },
+                    "init": "",
+                    "sysType": 1,
+                    "timestamp": 1779812553883
+                }
+            }
+        },
+        "d_monitor_tank": {
+            "id": "d_monitor_tank",
+            "name": "Monitor",
+            "enabled": true,
+            "type": "ModbusTCP",
+            "polling": 300,
+            "property": {
+                "address": "10.30.0.31:15020",
+                "port": 15020,
+                "slaveid": 1,
+                "timeout": 2000,
+                "connectionOption": "TcpPort",
+                "slot": null,
+                "rack": null,
+                "baudrate": 9600,
+                "databits": 8,
+                "stopbits": 1,
+                "parity": "None",
+                "forceFC16": false
+            },
+            "tags": {
+                "t_pump_cmd": {
+                    "id": "t_pump_cmd",
+                    "name": "PUMP_CMD",
+                    "type": "Bool",
+                    "memaddress": "000000",
+                    "address": 1,
+                    "access": "readwrite",
+                    "value": 0,
+                    "timestamp": 1779814516632,
+                    "divisor": null,
+                    "description": null
+                },
+                "t_valve_cmd": {
+                    "id": "t_valve_cmd",
+                    "name": "VALVE_CMD",
+                    "type": "Bool",
+                    "memaddress": "000000",
+                    "address": 2,
+                    "access": "readwrite",
+                    "value": 0,
+                    "timestamp": 1779814516632,
+                    "divisor": null,
+                    "description": null
+                },
+                "t_alarm_hi_active": {
+                    "id": "t_alarm_hi_active",
+                    "name": "ALARM_HI_ACTIVE",
+                    "type": "Bool",
+                    "memaddress": "000000",
+                    "address": 3,
+                    "access": "readonly",
+                    "value": 0,
+                    "divisor": null,
+                    "description": null,
+                    "timestamp": 1779814516632
+                },
+                "t_alarm_lo_active": {
+                    "id": "t_alarm_lo_active",
+                    "name": "ALARM_LO_ACTIVE",
+                    "type": "Bool",
+                    "memaddress": "000000",
+                    "address": 4,
+                    "access": "readonly",
+                    "value": 1,
+                    "divisor": null,
+                    "description": null,
+                    "timestamp": 1779814516632
+                },
+                "t_pump_flow_sp": {
+                    "id": "t_pump_flow_sp",
+                    "name": "PUMP_FLOW_SP",
+                    "type": "Int16",
+                    "memaddress": "400000",
+                    "address": 2,
+                    "access": "readwrite",
+                    "value": 60,
+                    "timestamp": 1779814516632,
+                    "divisor": null,
+                    "description": null
+                },
+                "t_valve_flow_sp": {
+                    "id": "t_valve_flow_sp",
+                    "name": "VALVE_FLOW_SP",
+                    "type": "Int16",
+                    "memaddress": "400000",
+                    "address": 3,
+                    "access": "readwrite",
+                    "value": 100,
+                    "timestamp": 1779814516632,
+                    "divisor": null,
+                    "description": null
+                },
+                "t_alarm_hi_sp": {
+                    "id": "t_alarm_hi_sp",
+                    "name": "ALARM_HI_SP",
+                    "type": "Int16",
+                    "memaddress": "400000",
+                    "address": 4,
+                    "access": "readwrite",
+                    "value": 0,
+                    "divisor": null,
+                    "description": null,
+                    "timestamp": 1779814516632
+                },
+                "t_alarm_lo_sp": {
+                    "id": "t_alarm_lo_sp",
+                    "name": "ALARM_LO_SP",
+                    "type": "Int16",
+                    "memaddress": "400000",
+                    "address": 5,
+                    "access": "readwrite",
+                    "value": 70,
+                    "divisor": null,
+                    "description": null,
+                    "timestamp": 1779814516632
+                },
+                "t_level_ai": {
+                    "id": "t_level_ai",
+                    "name": "LEVEL_AI",
+                    "type": "Int16",
+                    "memaddress": "400000",
+                    "address": 7,
+                    "access": "readonly",
+                    "value": 48,
+                    "timestamp": 1779814516632,
+                    "divisor": null,
+                    "description": null
+                }
+            }
+        }
+    },
+    "hmi": {
+        "views": [
+            {
+                "id": "v_239a41913-b025",
+                "name": "Tank",
+                "profile": {
+                    "width": 1024,
+                    "height": 768,
+                    "bkcolor": "#ffffffff",
+                    "margin": 10,
+                    "align": "topCenter",
+                    "gridType": "fixed",
+                    "viewRenderDelay": 0
+                },
+                "items": {
+                    "OXC_f7f8c814-92b042f6": {
+                        "id": "OXC_f7f8c814-92b042f6",
+                        "type": "svg-ext-own_ctrl-image",
+                        "name": "shape_1",
+                        "property": {
+                            "events": [],
+                            "actions": [],
+                            "address": "http://localhost:1881/_widgets/Tanks/squareTankLevel-v3.svg",
+                            "type": "widget",
+                            "svgGuid": "76b94bbb_10b6",
+                            "svgContent": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"238\" height=\"231\" viewBox=\"0 0 150 150\" preserveAspectRatio=\"none\" style=\"vector-effect: non-scaling-stroke;\" stroke=\"null\">\n  <!-- Livello acqua con path -->\n  <path id=\"waterShape_76b94bbb_10b6\" fill=\"#74b1e6ff\" d=\"M 9 101.4 Q 25.5 97.4, 42 101.4 Q 58.5 105.4, 75 101.4 Q 91.5 97.4, 108 101.4 Q 124.5 105.4, 141 101.4 V 141 H 9 Z\" style=\"fill: rgb(116, 177, 230); vector-effect: non-scaling-stroke;\" stroke-linecap=\"round\" stroke=\"#74b1e6ff\" stroke-width=\"1\"></path>\n  <path id=\"waterShapeBorder_76b94bbb_10b6\" fill=\"none\" stroke-width=\"4\" stroke-linecap=\"round\" d=\"M 9 101.4 Q 25.5 97.4, 42 101.4 Q 58.5 105.4, 75 101.4 Q 91.5 97.4, 108 101.4 Q 124.5 105.4, 141 101.4 V 141 H 9 Z\" style=\"vector-effect: non-scaling-stroke;\" stroke=\"#3781d8ff\"></path>\n  <rect id=\"tankBorder_76b94bbb_10b6\" x=\"7\" y=\"7\" width=\"136\" height=\"136\" stroke-width=\"4\" fill=\"none\" style=\"stroke: rgb(137, 137, 137); vector-effect: non-scaling-stroke;\" stroke=\"#888888\"></rect>\n\n  <!-- Static preview (used in <img>) -->\n  <path id=\"previewWater_76b94bbb_10b6\" fill=\"#74b1e6\" d=\"M9 70 Q42 66, 75 70 Q108 74, 141 70 V141 H9 Z\" style=\"display: none; vector-effect: non-scaling-stroke;\" stroke=\"null\"></path>\n\n  <text id=\"tankText_76b94bbb_10b6\" x=\"75\" y=\"85\" text-anchor=\"middle\" font-size=\"24\" fill=\"#000000\" font-family=\"Arial\" style=\"fill: rgb(0, 0, 0); font-size: 24px; vector-effect: non-scaling-stroke;\" stroke=\"null\">30%</text>\n\n  \n</svg>",
+                            "scriptContent": {
+                                "moduleId": "wModule_76b94bbb_10b6",
+                                "content": "var wModule_76b94bbb_10b6 = window.wModule_76b94bbb_10b6 || {};\n(function() {\n    \n    let initValue = 30;\n    //!export-start\n    let _pc_borderColor = \"#898989ff\";\n    let _pc_waterColor = \"#74b1e6ff\";\n    let _pc_waterBorderColor = \"#3781d8ff\";\n    let _pc_textColor = \"#000000ff\";\n    let _pn_textSize = 24;\n    let _pn_value = initValue;\n    let _pn_min = 0;\n    let _pn_max = 100;\n    \nwModule_76b94bbb_10b6._pc_borderColor = _pc_borderColor;\nwModule_76b94bbb_10b6._pc_waterColor = _pc_waterColor;\nwModule_76b94bbb_10b6._pc_waterBorderColor = _pc_waterBorderColor;\nwModule_76b94bbb_10b6._pc_textColor = _pc_textColor;\nwModule_76b94bbb_10b6._pn_textSize = _pn_textSize;\nwModule_76b94bbb_10b6._pn_value = _pn_value;\nwModule_76b94bbb_10b6._pn_min = _pn_min;\nwModule_76b94bbb_10b6._pn_max = _pn_max;//!export-end\n\n    function init() {\n      const pw = document.getElementById('previewWater_76b94bbb_10b6');\n      if (pw) pw.style.display = \"none\";\n\n      document.getElementById('tankBorder_76b94bbb_10b6').style.stroke = _pc_borderColor;\n      document.getElementById('waterShape_76b94bbb_10b6').style.fill = _pc_waterColor;\n      document.getElementById('tankText_76b94bbb_10b6').style.fill = _pc_textColor;\n      document.getElementById('tankText_76b94bbb_10b6').style.fontSize = _pn_textSize + 'px';\n      updateWaterLevel(_pn_value);\n    }\n\n    let animationFrame = null;\n\n    function updateWaterLevel(pct) {\n      const shape = document.getElementById('waterShape_76b94bbb_10b6');\n      const shapeBorder = document.getElementById('waterShapeBorder_76b94bbb_10b6');\n      pct = Math.max(_pn_min, Math.min(_pn_max, pct));\n      const relativePct = Math.round(((pct - _pn_min) / (_pn_max - _pn_min)) * 100);\n      const displayPct = Math.max(0, Math.min(100, relativePct));\n      document.getElementById('tankText_76b94bbb_10b6').textContent = displayPct + '%';\n\n      const x = 9;\n      const y = 9;\n      const width = 132;\n      const height = 132;\n      const fillHeight = height * (pct - _pn_min) / (_pn_max - _pn_min);\n      const topY = y + height - fillHeight;\n\n      const waveCount = 4;\n      const waveAmp = 4;\n      const waveWidth = width / waveCount;\n\n      let wavePath = `M ${x} ${topY}`;\n      for (let i = 0; i < waveCount; i++) {\n        const xStart = x + i * waveWidth;\n        const xMid = xStart + waveWidth / 2;\n        const xEnd = xStart + waveWidth;\n        const yCtrl = topY + (i % 2 === 0 ? -waveAmp : waveAmp);\n        wavePath += ` Q ${xMid} ${yCtrl}, ${xEnd} ${topY}`;\n      }\n      wavePath += ` V ${y + height} H ${x} Z`;\n\n      let waveBorderPath = `M ${x} ${topY}`;\n      for (let i = 0; i < waveCount; i++) {\n        const xStart = x + i * waveWidth;\n        const xMid = xStart + waveWidth / 2;\n        const xEnd = xStart + waveWidth;\n        const yCtrl = topY + (i % 2 === 0 ? -waveAmp : waveAmp);\n        waveBorderPath += ` Q ${xMid} ${yCtrl}, ${xEnd} ${topY}`;\n      }\n      waveBorderPath += ` V ${y + height} H ${x} Z`;\n\n      shape.setAttribute('d', wavePath);\n      shapeBorder.setAttribute('d', waveBorderPath);\n\n      shape.setAttribute('fill', _pc_waterColor);\n      shape.setAttribute('stroke', _pc_waterColor);\n      shape.setAttribute('stroke-width', '1');\n      shapeBorder.setAttribute('stroke', _pc_waterBorderColor);\n      shapeBorder.setAttribute('stroke-width', '4');\n      shape.setAttribute('stroke-linecap', 'round');\n      shapeBorder.setAttribute('stroke-linecap', 'round');\n    }\n\n    let animationTimer = null;\n\n    function putValue(id, value) {\n      switch(id) {\n        case '_pc_borderColor': _pc_borderColor = value; init(); break;\n        case '_pc_waterColor': _pc_waterColor = value; init(); break;\n        case '_pc_textColor': _pc_textColor = value; init(); break;\n        case '_pn_textSize': _pn_textSize = parseInt(value); init(); break;\n        case '_pn_value':\n          let newValue = parseFloat(value);\n\n          if (isNaN(newValue)) return;\n\n          newValue = Math.max(_pn_min, Math.min(_pn_max, newValue));\n\n          if (animationTimer !== null) {\n            clearTimeout(animationTimer);\n            animationTimer = null;\n          }\n\n          const animateStep = () => {\n            const diff = newValue - _pn_value;\n\n            // Stop when close enough\n            if (Math.abs(diff) < 0.01) {\n              _pn_value = newValue;\n              updateWaterLevel(_pn_value);\n              animationTimer = null;\n              return;\n            }\n\n            // Dynamic smooth step\n            const step = diff * 0.2;\n\n            _pn_value += step;\n\n            updateWaterLevel(_pn_value);\n\n            animationTimer = setTimeout(animateStep, 30);\n          };\n\n          animateStep();\n          break;\n      }\n    }\n\n    setTimeout(() => {\n      init();\n    }, 100);\n    \n  \nwModule_76b94bbb_10b6.init = init;\nwModule_76b94bbb_10b6.updateWaterLevel = updateWaterLevel;\nwModule_76b94bbb_10b6.putValue = putValue;\n})();\nwindow.wModule_76b94bbb_10b6=wModule_76b94bbb_10b6"
+                            },
+                            "varsToBind": [
+                                {
+                                    "originalName": "_pc_borderColor",
+                                    "name": "_pc_borderColor",
+                                    "type": "color",
+                                    "variableValue": "#898989ff"
+                                },
+                                {
+                                    "originalName": "_pc_waterColor",
+                                    "name": "_pc_waterColor",
+                                    "type": "color",
+                                    "variableValue": "#74b1e6ff"
+                                },
+                                {
+                                    "originalName": "_pc_waterBorderColor",
+                                    "name": "_pc_waterBorderColor",
+                                    "type": "color",
+                                    "variableValue": "#3781d8ff"
+                                },
+                                {
+                                    "originalName": "_pc_textColor",
+                                    "name": "_pc_textColor",
+                                    "type": "color",
+                                    "variableValue": "#000000ff",
+                                    "variableId": null,
+                                    "variableRaw": null
+                                },
+                                {
+                                    "originalName": "_pn_textSize",
+                                    "name": "_pn_textSize",
+                                    "type": "number",
+                                    "variableValue": "24",
+                                    "variableId": null,
+                                    "variableRaw": null
+                                },
+                                {
+                                    "originalName": "_pn_value",
+                                    "name": "_pn_value",
+                                    "type": "number",
+                                    "variableValue": "initValue",
+                                    "variableId": "t_level_ai",
+                                    "variableRaw": {
+                                        "id": "t_level_ai",
+                                        "name": "LEVEL_AI",
+                                        "type": "Int16",
+                                        "memaddress": "400000",
+                                        "address": 5,
+                                        "access": "readonly",
+                                        "value": 0,
+                                        "timestamp": 1779813281074,
+                                        "divisor": null,
+                                        "description": null
+                                    }
+                                },
+                                {
+                                    "originalName": "_pn_min",
+                                    "name": "_pn_min",
+                                    "type": "number",
+                                    "variableValue": "0"
+                                },
+                                {
+                                    "originalName": "_pn_max",
+                                    "name": "_pn_max",
+                                    "type": "number",
+                                    "variableValue": "100"
+                                }
+                            ]
+                        },
+                        "label": "HtmlImage",
+                        "hide": false,
+                        "lock": false
+                    },
+                    "HXT_8ea11c0d-28e645a0": {
+                        "id": "HXT_8ea11c0d-28e645a0",
+                        "type": "svg-ext-html_switch",
+                        "name": "switch_2",
+                        "property": {
+                            "variableId": "t_pump_cmd",
+                            "events": [],
+                            "actions": [],
+                            "options": {
+                                "offValue": 0,
+                                "onValue": 1,
+                                "offBackground": "#ccc",
+                                "onBackground": "#ccc",
+                                "offText": "",
+                                "onText": "",
+                                "offSliderColor": "#fff",
+                                "onSliderColor": "#0CC868",
+                                "offTextColor": "#000",
+                                "onTextColor": "#fff",
+                                "fontSize": 12,
+                                "fontFamily": "",
+                                "radius": 0,
+                                "height": 29
+                            }
+                        },
+                        "label": "HtmlSwitch",
+                        "hide": false,
+                        "lock": false
+                    },
+                    "PIE_757aee5d-15d340e0": {
+                        "id": "PIE_757aee5d-15d340e0",
+                        "type": "svg-ext-pipe",
+                        "name": "pipe_1",
+                        "property": {
+                            "events": [],
+                            "actions": [
+                                {
+                                    "variableId": "t_valve_cmd",
+                                    "range": {
+                                        "min": 1,
+                                        "max": 1
+                                    },
+                                    "type": "anticlockwise",
+                                    "options": {}
+                                },
+                                {
+                                    "variableId": "t_valve_cmd",
+                                    "range": {
+                                        "min": 0,
+                                        "max": 0
+                                    },
+                                    "type": "stop",
+                                    "options": {}
+                                }
+                            ],
+                            "options": {
+                                "border": "#3F4964",
+                                "borderWidth": 27,
+                                "pipe": "#eeece1ff",
+                                "pipeWidth": 21,
+                                "content": "#3358c0ff",
+                                "contentWidth": 21,
+                                "contentSpace": 20
+                            }
+                        },
+                        "label": "Pipe",
+                        "hide": false,
+                        "lock": false
+                    },
+                    "SLI_e78bf661-3f724471": {
+                        "id": "SLI_e78bf661-3f724471",
+                        "type": "svg-ext-html_slider",
+                        "name": "slider_1",
+                        "property": {
+                            "events": [],
+                            "actions": [],
+                            "options": {
+                                "orientation": "horizontal",
+                                "direction": "ltr",
+                                "fontFamily": "Sans-serif",
+                                "shape": {
+                                    "baseColor": "#cdcdcd",
+                                    "connectColor": "#262c3b",
+                                    "handleColor": "#3f4964"
+                                },
+                                "marker": {
+                                    "color": "#222222",
+                                    "subWidth": 5,
+                                    "subHeight": 1,
+                                    "fontSize": 18,
+                                    "divHeight": 2,
+                                    "divWidth": 12
+                                },
+                                "range": {
+                                    "min": 0,
+                                    "max": 100
+                                },
+                                "step": 10,
+                                "pips": {
+                                    "mode": "values",
+                                    "values": [
+                                        0,
+                                        50,
+                                        100
+                                    ],
+                                    "density": 4
+                                },
+                                "tooltip": {
+                                    "type": "none",
+                                    "decimals": 0,
+                                    "background": "#FFF",
+                                    "color": "#000",
+                                    "fontSize": 12
+                                }
+                            },
+                            "variableId": "t_pump_flow_sp"
+                        },
+                        "label": "HtmlSlider",
+                        "hide": false,
+                        "lock": false
+                    },
+                    "HXT_c743e129-e6294863": {
+                        "id": "HXT_c743e129-e6294863",
+                        "type": "svg-ext-html_switch",
+                        "name": "switch_1",
+                        "property": {
+                            "variableId": "t_valve_cmd",
+                            "events": [],
+                            "actions": [],
+                            "options": {
+                                "offValue": 0,
+                                "onValue": 1,
+                                "offBackground": "#ccc",
+                                "onBackground": "#ccc",
+                                "offText": "",
+                                "onText": "",
+                                "offSliderColor": "#fff",
+                                "onSliderColor": "#0CC868",
+                                "offTextColor": "#000",
+                                "onTextColor": "#fff",
+                                "fontSize": 12,
+                                "fontFamily": "",
+                                "radius": 0,
+                                "height": 29
+                            }
+                        },
+                        "label": "HtmlSwitch",
+                        "hide": false,
+                        "lock": false
+                    },
+                    "svg_2417a3e1-944f432c": {
+                        "id": "svg_2417a3e1-944f432c",
+                        "type": "svg-ext-shapes-rect",
+                        "name": "shape_2",
+                        "property": null,
+                        "label": "Shapes",
+                        "hide": false,
+                        "lock": false
+                    },
+                    "SLI_ce57ec99-293448e1": {
+                        "id": "SLI_ce57ec99-293448e1",
+                        "type": "svg-ext-html_slider",
+                        "name": "slider_2",
+                        "property": {
+                            "events": [],
+                            "actions": [],
+                            "options": {
+                                "orientation": "horizontal",
+                                "direction": "ltr",
+                                "fontFamily": "Sans-serif",
+                                "shape": {
+                                    "baseColor": "#cdcdcd",
+                                    "connectColor": "#262c3b",
+                                    "handleColor": "#3f4964"
+                                },
+                                "marker": {
+                                    "color": "#222222",
+                                    "subWidth": 5,
+                                    "subHeight": 1,
+                                    "fontSize": 18,
+                                    "divHeight": 2,
+                                    "divWidth": 12
+                                },
+                                "range": {
+                                    "min": 0,
+                                    "max": 100
+                                },
+                                "step": 10,
+                                "pips": {
+                                    "mode": "values",
+                                    "values": [
+                                        0,
+                                        50,
+                                        100
+                                    ],
+                                    "density": 4
+                                },
+                                "tooltip": {
+                                    "type": "none",
+                                    "decimals": 0,
+                                    "background": "#FFF",
+                                    "color": "#000",
+                                    "fontSize": 12
+                                }
+                            },
+                            "variableId": "t_valve_flow_sp"
+                        },
+                        "label": "HtmlSlider",
+                        "hide": false,
+                        "lock": false
+                    },
+                    "svg_c2bc0582-4e764bf2": {
+                        "id": "svg_c2bc0582-4e764bf2",
+                        "type": "svg-ext-shapes-rect",
+                        "name": "shape_2",
+                        "property": null,
+                        "label": "Shapes",
+                        "hide": false,
+                        "lock": false
+                    },
+                    "PIE_7f985acf-0de544db": {
+                        "id": "PIE_7f985acf-0de544db",
+                        "type": "svg-ext-pipe",
+                        "name": "pipe_2",
+                        "property": {
+                            "events": [],
+                            "actions": [
+                                {
+                                    "variableId": "t_pump_cmd",
+                                    "range": {
+                                        "min": 1,
+                                        "max": 1
+                                    },
+                                    "type": "clockwise",
+                                    "options": {}
+                                },
+                                {
+                                    "variableId": "t_pump_cmd",
+                                    "range": {
+                                        "min": 0,
+                                        "max": 0
+                                    },
+                                    "type": "stop",
+                                    "options": {}
+                                }
+                            ],
+                            "options": {
+                                "border": "#3F4964",
+                                "borderWidth": 27,
+                                "pipe": "#eeece1ff",
+                                "pipeWidth": 21,
+                                "content": "#3358c0ff",
+                                "contentWidth": 21,
+                                "contentSpace": 20
+                            }
+                        },
+                        "label": "Pipe",
+                        "hide": false,
+                        "lock": false
+                    },
+                    "SHE_3c510739-5e0e4c6f": {
+                        "id": "SHE_3c510739-5e0e4c6f",
+                        "type": "svg-ext-shapes-rectangle",
+                        "name": "",
+                        "property": null,
+                        "label": "Shapes",
+                        "hide": false,
+                        "lock": false
+                    },
+                    "SHE_14f65c67-2c9945a3": {
+                        "id": "SHE_14f65c67-2c9945a3",
+                        "type": "svg-ext-shapes-rectangle",
+                        "name": "shape_3",
+                        "property": null,
+                        "label": "Shapes",
+                        "hide": false,
+                        "lock": false
+                    },
+                    "SHE_ecaf45a2-d56f49b8": {
+                        "id": "SHE_ecaf45a2-d56f49b8",
+                        "type": "svg-ext-shapes-rect",
+                        "name": "shape_3",
+                        "property": null,
+                        "label": "Shapes",
+                        "hide": false,
+                        "lock": false
+                    }
+                },
+                "variables": {},
+                "svgcontent": "<svg width=\"1024\" height=\"768\" xmlns=\"http://www.w3.org/2000/svg\" xmlns:svg=\"http://www.w3.org/2000/svg\" xmlns:html=\"http://www.w3.org/1999/xhtml\">\n <filter height=\"200\" width=\"200\" y=\"-3\" x=\"-3\" id=\"blur-filter\">\n  <feGaussianBlur stdDeviation=\"3\"/>\n </filter>\n <g>\n  <title>Layer 1</title>\n  <g type=\"svg-ext-pipe\" id=\"PIE_7f985acf-0de544db\">\n   <path fill=\"none\" stroke=\"#3F4964\" d=\"M144,530L432,530L432,386\" id=\"bPIE_c739cb38-7d9a464c\" stroke-width=\"27\"/>\n   <path fill=\"none\" stroke=\"#eeece1ff\" d=\"M144,530L432,530L432,386\" id=\"pPIE_724f96b9-2d78464d\" stroke-width=\"21\"/>\n   <path fill=\"none\" stroke=\"#3358c0ff\" d=\"M144,530L432,530L432,386\" id=\"cPIE_397f4d13-494648ff\" stroke-dasharray=\"20 20\" stroke-width=\"21\"/>\n  </g>\n  <g text-anchor=\"middle\" font-family=\"sans-serif\" font-size=\"14\" fill=\"#ECECEC\" type=\"svg-ext-shapes-rectangle\" id=\"SHE_3c510739-5e0e4c6f\" stroke=\"#000000\">\n   <rect x=\"188\" y=\"548\" height=\"150\" width=\"195.99999\" id=\"SHE_c2b41470-0c104570\" stroke=\"null\"/>\n  </g>\n  <g data-name=\"slider_1\" text-anchor=\"right\" font-family=\"sans-serif\" font-size=\"14\" stroke=\"#000000\" fill=\"#FFFFFF\" type=\"svg-ext-html_slider\" id=\"SLI_e78bf661-3f724471\">\n   <rect fill=\"none\" id=\"svg_402ebda0-6eec4596\" height=\"200\" width=\"200\" y=\"546\" x=\"186\" stroke-width=\"0\"/>\n   <foreignObject id=\"H-SLI_3b6476de-4c1142cc\" width=\"200\" height=\"200\" y=\"546\" x=\"186\">\n    <DIV style=\"width:100%;height:100%;\" id=\"D-SLI_3b6476de-4c1142cc\">\n     <NGX-NOUISLIDER class=\"ng-star-inserted\"/>\n    </DIV>\n   </foreignObject>\n  </g>\n  <g stroke=\"null\" id=\"PIE_757aee5d-15d340e0\" type=\"svg-ext-pipe\">\n   <path stroke=\"#3F4964\" stroke-width=\"27\" id=\"bPIE_895102ed-3f4044d5\" d=\"M872,532L590,532L590,396\" fill=\"none\"/>\n   <path stroke=\"#eeece1ff\" stroke-width=\"21\" id=\"pPIE_4e037562-2c754e59\" d=\"M872,532L590,532L590,396\" fill=\"none\"/>\n   <path stroke=\"#3358c0ff\" stroke-width=\"21\" stroke-dasharray=\"20 20\" id=\"cPIE_5d8bd855-bf2f4fab\" d=\"M872,532L590,532L590,396\" fill=\"none\"/>\n  </g>\n  <path fill=\"rgba(0,0,0,0)\" stroke=\"rgba(41,171,226,1)\" stroke-width=\"10\" opacity=\"0.5\" d=\"M492,464\" id=\"PIE_17a11be9-53d447cc\" type=\"svg-ext-pipe\"/>\n  <g data-name=\"shape_1\" text-anchor=\"right\" font-family=\"sans-serif\" font-size=\"14\" fill=\"#FFFFFF\" type=\"svg-ext-own_ctrl-image\" id=\"OXC_f7f8c814-92b042f6\">\n   <rect stroke=\"null\" id=\"svg_367e7364-fc3a4191\" height=\"231\" width=\"238\" y=\"182.5\" x=\"393\" stroke-width=\"0\"/>\n   <foreignObject id=\"H-OXC_85a35d0a-0b2941cc\" width=\"238\" height=\"231\" y=\"182.5\" x=\"393\">\n    <DIV type=\"widget\" style=\"width: 100%; height: 100%; vector-effect: non-scaling-stroke;\" id=\"D-OXC_85a35d0a-0b2941cc\">\n     <svg stroke=\"null\" style=\"vector-effect: non-scaling-stroke;\" preserveAspectRatio=\"none\" viewBox=\"0 0 150 150\" height=\"231\" width=\"238\" xmlns=\"http://www.w3.org/2000/svg\">\n      <!-- Livello acqua con path -->\n      <path stroke=\"#74b1e6ff\" stroke-linecap=\"round\" style=\"fill: rgb(116, 177, 230); vector-effect: non-scaling-stroke;\" d=\"M9,101.4Q25.5,97.4 42,101.4Q58.5,105.4 75,101.4Q91.5,97.4 108,101.4Q124.5,105.4 141,101.4L141,141L9,141z\" fill=\"#74b1e6ff\" id=\"waterShape_76b94bbb_10b6\"/>\n      <path stroke=\"#3781d8ff\" style=\"vector-effect: non-scaling-stroke;\" d=\"M9,101.4Q25.5,97.4 42,101.4Q58.5,105.4 75,101.4Q91.5,97.4 108,101.4Q124.5,105.4 141,101.4L141,141L9,141z\" stroke-linecap=\"round\" stroke-width=\"4\" fill=\"none\" id=\"waterShapeBorder_76b94bbb_10b6\"/>\n      <rect stroke=\"#888888\" style=\"stroke: rgb(137, 137, 137); vector-effect: non-scaling-stroke;\" fill=\"none\" stroke-width=\"4\" height=\"136\" width=\"136\" y=\"7\" x=\"7\" id=\"tankBorder_76b94bbb_10b6\"/>\n      <!-- Static preview (used in <img>) -->\n      <path stroke=\"null\" style=\"display: none; vector-effect: non-scaling-stroke;\" d=\"M9,70Q42,66 75,70Q108,74 141,70L141,141L9,141z\" fill=\"#74b1e6\" id=\"previewWater_76b94bbb_10b6\"/>\n      <text stroke=\"null\" style=\"fill: rgb(0, 0, 0); font-size: 24px; vector-effect: non-scaling-stroke;\" font-family=\"Arial\" fill=\"#000000\" font-size=\"24\" text-anchor=\"middle\" y=\"85\" x=\"75\" id=\"tankText_76b94bbb_10b6\">30%</text>\n     </svg>\n    </DIV>\n   </foreignObject>\n  </g>\n  <rect fill=\"#FFFFFF\" stroke=\"#000000\" x=\"286\" y=\"270\" width=\"2\" height=\"0\" id=\"svg_9cf56244-82624fd3\"/>\n  <g data-name=\"switch_2\" id=\"HXT_8ea11c0d-28e645a0\" type=\"svg-ext-html_switch\" fill=\"rgba(0,0,0,0)\" stroke=\"rgba(0,0,0,0)\">\n   <rect stroke-width=\"0\" x=\"251\" y=\"650.5\" width=\"70\" height=\"35\" id=\"svg_696d7d5e-24704b91\" fill=\"none\"/>\n   <foreignObject x=\"251\" y=\"650.5\" height=\"35\" width=\"70\" id=\"H-HXT_211c12ec-b0fd444f\">\n    <LABEL style=\"width:calc(100% - 6px);height:calc(100% - 6px);text-align:center;background-color:#FFFFFF;color:#000000;margin: 3px 3px 3px 3px;\" class=\"md-switch\" id=\"T-HXT_211c12ec-b0fd444f\">\n     <NGX-SWITCH class=\"ng-star-inserted\">\n      <LABEL style=\"border-radius: 0px;\" class=\"md-switch\">\n       <DIV style=\"background-color: rgb(204, 204, 204); opacity: 1; pointer-events: auto;\" class=\"toggle-button\">\n        <INPUT type=\"checkbox\"/>\n        <DIV style=\"text-align: center; line-height: 29px; font-size: 12px; background-color: rgb(255, 255, 255); color: rgb(0, 0, 0);\" class=\"inner-circle\"></DIV>\n       </DIV>\n      </LABEL>\n     </NGX-SWITCH>\n    </LABEL>\n   </foreignObject>\n  </g>\n  <g data-name=\"shape_3\" id=\"SHE_14f65c67-2c9945a3\" text-anchor=\"middle\" font-family=\"sans-serif\" font-size=\"14\" fill=\"#ECECEC\" type=\"svg-ext-shapes-rectangle\" stroke=\"#000000\">\n   <rect data-name=\"shape_3\" id=\"SHE_ecaf45a2-d56f49b8\" x=\"632\" y=\"548\" height=\"150\" width=\"195.99999\" stroke=\"null\"/>\n  </g>\n  <g data-name=\"slider_2\" id=\"SLI_ce57ec99-293448e1\" text-anchor=\"right\" font-family=\"sans-serif\" font-size=\"14\" stroke=\"#000000\" fill=\"#FFFFFF\" type=\"svg-ext-html_slider\">\n   <rect data-name=\"shape_2\" id=\"svg_c2bc0582-4e764bf2\" fill=\"none\" height=\"200\" width=\"200\" y=\"546\" x=\"630\" stroke-width=\"0\"/>\n   <foreignObject id=\"H-SLI_dd73e1fa-a4ac4c44\" width=\"200\" height=\"200\" y=\"546\" x=\"630\">\n    <DIV id=\"D-SLI_f2ab4fed-5b3d4647\" style=\"width:100%;height:100%;\">\n     <NGX-NOUISLIDER class=\"ng-star-inserted\"/>\n    </DIV>\n   </foreignObject>\n  </g>\n  <g data-name=\"switch_1\" id=\"HXT_c743e129-e6294863\" type=\"svg-ext-html_switch\" fill=\"rgba(0,0,0,0)\" stroke=\"rgba(0,0,0,0)\">\n   <rect data-name=\"shape_2\" id=\"svg_2417a3e1-944f432c\" stroke-width=\"0\" x=\"695\" y=\"650.5\" width=\"70\" height=\"35\" fill=\"none\"/>\n   <foreignObject id=\"H-HXT_02476c36-d2bf4168\" x=\"695\" y=\"650.5\" height=\"35\" width=\"70\">\n    <LABEL id=\"T-HXT_75eec0eb-46fb4b0f\" style=\"width:calc(100% - 6px);height:calc(100% - 6px);text-align:center;background-color:#FFFFFF;color:#000000;margin: 3px 3px 3px 3px;\" class=\"md-switch\">\n     <NGX-SWITCH class=\"ng-star-inserted\">\n      <LABEL style=\"border-radius: 0px;\" class=\"md-switch\">\n       <DIV style=\"background-color: rgb(204, 204, 204); opacity: 1; pointer-events: auto;\" class=\"toggle-button\">\n        <INPUT type=\"checkbox\"/>\n        <DIV style=\"text-align: center; line-height: 29px; font-size: 12px; background-color: rgb(255, 255, 255); color: rgb(0, 0, 0);\" class=\"inner-circle\"></DIV>\n       </DIV>\n      </LABEL>\n     </NGX-SWITCH>\n    </LABEL>\n   </foreignObject>\n  </g>\n </g>\n</svg>",
+                "type": "svg"
+            }
+        ],
+        "layout": {
+            "autoresize": false,
+            "start": "v_239a41913-b025",
+            "navigation": {
+                "mode": "over",
+                "type": "block",
+                "bkcolor": "#F4F5F7",
+                "fgcolor": "#1D1D1D",
+                "logo": false
+            },
+            "header": {
+                "bkcolor": "#ffffff",
+                "fgcolor": "#000000",
+                "fontSize": 13,
+                "itemsAnchor": "left"
+            },
+            "showdev": true,
+            "inputdialog": "false",
+            "hidenavigation": false,
+            "theme": "",
+            "loginonstart": false,
+            "loginoverlaycolor": "none",
+            "show_connection_error": true,
+            "customStyles": ""
+        }
+    },
+    "version": "1.00",
+    "name": "Tank",
+    "server": {
+        "id": "0",
+        "name": "FUXA Server",
+        "type": "FuxaServer",
+        "property": {},
+        "polling": 1000
+    }
+}
