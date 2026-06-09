@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OT Lab v2</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260508v2ui31" />
+  <link rel="stylesheet" href="/static/style.css?v=20260608policy02" />
 </head>
 <body>
   <div class="page">
@@ -68,6 +68,7 @@
       <section class="card dock-card">
         <div class="bottom-dock">
           <button class="dock-btn" id="openNetworkScanBtn" type="button">Network Scan</button>
+          <button class="dock-btn" id="openPolicyDecisionsBtn" type="button">Policy Decisions</button>
           <button class="dock-btn" id="openPlcUrlBtn" type="button">PLC</button>
           <button class="dock-btn" id="openHmiUrlBtn" type="button">HMI</button>
           <button class="dock-btn" id="openAttackBtn" type="button">Attack</button>
@@ -308,6 +309,37 @@
     <div class="window-resize-handle" aria-hidden="true"></div>
   </div>
 
-  <script src="/static/app.js?v=20260510actions41"></script>
+  <div class="floating-window quick-config-window hidden" id="policyDecisionsWindow">
+    <div class="window-head">
+      <span>Policy Decisions</span>
+      <div class="window-tools">
+        <button id="refreshPolicyDecisionsBtn" class="small secondary" type="button">Refresh</button>
+        <button id="copyPolicyDecisionsBtn" class="small secondary" type="button">Copy</button>
+        <button id="exportPolicyDecisionsBtn" class="small secondary" type="button">Export JSON</button>
+        <button class="window-close" type="button" data-close-window="policyDecisionsWindow">✕</button>
+      </div>
+    </div>
+    <div class="window-body">
+      <div class="policy-summary-strip" id="policyDecisionSummary">No decisions loaded.</div>
+      <div class="policy-table-wrap">
+        <table class="policy-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Decision</th>
+              <th>Rule</th>
+              <th>Asset</th>
+              <th>Value</th>
+              <th>Reason</th>
+            </tr>
+          </thead>
+          <tbody id="policyDecisionRows"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="window-resize-handle" aria-hidden="true"></div>
+  </div>
+
+  <script src="/static/app.js?v=20260608policy02"></script>
 </body>
 </html>

@@ -880,6 +880,120 @@ OP_ACTION_TAG_MAP = {
     },
 }
 
+OBSERVED_POLICY_ID = "observed_modbus_tank_v1"
+OBSERVED_POLICY_VERSION = "0.1.0"
+OBSERVED_SETPOINT_MIN = 0
+OBSERVED_SETPOINT_MAX = 100
+OBSERVED_SENSITIVE_CONFIG_TAGS = {
+    "ALARM_HI_SP",
+    "ALARM_LO_SP",
+}
+
+
+def make_observed_policy_decision(
+    *,
+    action: dict,
+    decision: str,
+    rule_id: str,
+    rule_name: str,
+    reason: str,
+    severity: str,
+):
+    return {
+        "kind": "observed_semantic_policy_decision",
+        "policy_id": OBSERVED_POLICY_ID,
+        "policy_version": OBSERVED_POLICY_VERSION,
+        "timestamp": action.get("timestamp") or time.time(),
+        "mode": "observe",
+        "decision": decision,
+        "rule_id": rule_id,
+        "rule_name": rule_name,
+        "reason": reason,
+        "severity": severity,
+        "protocol": action.get("protocol") or "MODBUS/TCP",
+        "action_type": action.get("action_type"),
+        "asset": action.get("asset"),
+        "address": action.get("address"),
+        "value": action.get("value_to"),
+        "actor": action.get("actor"),
+        "target": action.get("target"),
+        "function_code": action.get("function_code"),
+    }
+
+
+def evaluate_observed_action_policy(action: dict, tag_map: dict):
+    action_type = str(action.get("action_type") or "")
+    asset = str(action.get("asset") or "").strip()
+    value = normalize_modbus_value(action.get("value_to"))
+    address = action.get("address")
+    is_register = action_type == "write_register"
+    is_coil = action_type == "write_coil"
+
+    try:
+        addr_int = int(address)
+    except Exception:
+        addr_int = None
+
+    mapped_tags = tag_map.get("register" if is_register else "coil", {}) if isinstance(tag_map, dict) else {}
+    is_mapped = addr_int in mapped_tags if addr_int is not None else False
+
+    if not is_mapped:
+        return make_observed_policy_decision(
+            action=action,
+            decision="ALERT",
+            rule_id="OBS-R003",
+            rule_name="Unknown or unmapped target",
+            reason=f"Write targets an address that is not mapped to the declared process model ({asset or address}).",
+            severity="medium",
+        )
+
+    if is_register and asset in OBSERVED_SENSITIVE_CONFIG_TAGS:
+        return make_observed_policy_decision(
+            action=action,
+            decision="ALERT",
+            rule_id="OBS-R002",
+            rule_name="Sensitive configuration write",
+            reason=f"{asset} is a process configuration parameter and should be changed only under authorised conditions.",
+            severity="medium",
+        )
+
+    if is_register and asset.endswith("_SP") and value is not None:
+        if value < OBSERVED_SETPOINT_MIN or value > OBSERVED_SETPOINT_MAX:
+            return make_observed_policy_decision(
+                action=action,
+                decision="ALERT",
+                rule_id="OBS-R001",
+                rule_name="Setpoint outside process envelope",
+                reason=f"{asset}={value} is outside the declared operational range {OBSERVED_SETPOINT_MIN}..{OBSERVED_SETPOINT_MAX}.",
+                severity="high",
+            )
+
+    if is_coil and asset in {"ALARM_HI_ACTIVE", "ALARM_LO_ACTIVE"}:
+        return make_observed_policy_decision(
+            action=action,
+            decision="ALERT",
+            rule_id="OBS-R004",
+            rule_name="Direct alarm-state write",
+            reason=f"{asset} is an alarm-state output and should not be directly commanded by an operator endpoint.",
+            severity="high",
+        )
+
+    return make_observed_policy_decision(
+        action=action,
+        decision="ALLOW",
+        rule_id="OBS-R000",
+        rule_name="Observed action accepted",
+        reason="Action is mapped to the process model and remains within the initial semantic policy.",
+        severity="info",
+    )
+
+
+def stronger_observed_policy_decision(current: dict | None, incoming: dict | None):
+    priority = {"BLOCK": 3, "ALERT": 2, "ALLOW_WITH_ALERT": 2, "ALLOW": 1}
+    current_score = priority.get(str((current or {}).get("decision") or "").upper(), 0)
+    incoming_score = priority.get(str((incoming or {}).get("decision") or "").upper(), 0)
+    return incoming if incoming_score >= current_score else current
+
 
 def get_effective_tag_map(state: dict):
     use_defaults = bool(state.get("tag_map_use_defaults", True))
@@ -1031,6 +1145,10 @@ def push_operational_action(state: dict, action: dict):
                     # Prefer HMI attribution when available.
                     if str(prev.get("actor") or "").upper() != "HMI" and str(action.get("actor") or "").upper() == "HMI":
                         prev["actor"] = action.get("actor")
+                    prev["policy_decision"] = stronger_observed_policy_decision(
+                        prev.get("policy_decision"),
+                        action.get("policy_decision"),
+                    )
                     return
                 except Exception:
                     continue
@@ -1111,6 +1229,14 @@ def ingest_operational_action_from_event(state: dict, payload: dict):
             else f"no-tx|{base_fc}|{int(register)}|{value}"
         ),
     }
+    policy_decision = evaluate_observed_action_policy(action, tag_map)
+    action["policy_decision"] = policy_decision
+    with lock:
+        decisions = state.get("policy_decisions")
+        if decisions is None:
+            decisions = deque(maxlen=600)
+            state["policy_decisions"] = decisions
+        decisions.append(policy_decision)
     push_operational_action(state, action)
 
 
@@ -2127,6 +2253,7 @@ def api_events(request: Request):
         "events": list(state["events"]),
         "alerts": list(state["alerts"]),
         "actions": list(state.get("operational_actions") or []),
+        "policy_decisions": list(state.get("policy_decisions") or []),
         "tag_map": get_effective_tag_map(state),
         "logs": list(state["logs"]),
         "modbus_summary": build_modbus_summary(state),

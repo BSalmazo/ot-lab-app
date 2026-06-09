@@ -24,9 +24,21 @@ PROCESS_PROFILES = {
             "ethercat": {"pump": "0x7000:02", "valve": "0x7000:03", "level": "0x6000:00"},
         },
         "constraints": {
+            "register_map": {
+                "pump_flow_sp": 1,
+                "valve_flow_sp": 2,
+                "alarm_hi_sp": 3,
+                "alarm_lo_sp": 4,
+                "level_ai": 6,
+            },
             "level_hi_block": 95,
             "level_lo_block": 5,
             "min_command_interval_s": 0.15,
+            "burst_block_threshold": 10,
+            "setpoint_rate_limit": 35,
+            "safe_alarm_hi_min": 50,
+            "safe_alarm_lo_max": 40,
+            "safe_alarm_gap_min": 10,
         },
     },
     "pumping_line_v1": {
@@ -55,10 +67,10 @@ SEMANTIC_POLICIES = {
         "version": "1.0.0",
         "rules": [
             {"id": "R001", "type": "critical", "name": "Write requires running process"},
-            {"id": "R002", "type": "critical", "name": "Prevent pump ON at high level"},
-            {"id": "R003", "type": "critical", "name": "Prevent valve ON at very low level"},
-            {"id": "R004", "type": "warning", "name": "Valve ON without recent pump activity"},
-            {"id": "R005", "type": "warning", "name": "Command burst / replay pattern"},
+            {"id": "R101", "type": "critical", "name": "Block unsafe alarm-setpoint tampering"},
+            {"id": "R102", "type": "critical", "name": "Block dangerous hydraulic setpoint conflicts"},
+            {"id": "R103", "type": "warning", "name": "Detect suspicious write bursts/replay"},
+            {"id": "R104", "type": "warning", "name": "Detect fast out-of-pattern setpoint ramps"},
         ],
     },
     "pumping_line_v1": {
@@ -73,50 +85,63 @@ SEMANTIC_POLICIES = {
 
 
 ATTACK_LIBRARY = {
-    "wrong_timing_write": {
-        "id": "wrong_timing_write",
-        "name": "Legitimate command at wrong timing",
+    "t0836_modify_parameter_setpoint_surge": {
+        "id": "t0836_modify_parameter_setpoint_surge",
+        "name": "Setpoint Surge Near Operational Limit",
         "framework": "ATT&CK ICS",
-        "technique": "T0855 (Change Operating Mode)",
+        "technique": "T0836 (Modify Parameter)",
         "profile": "tank_v1",
         "steps": [
-            {"address": 3, "value": 1, "delay_s": 0.1},
-            {"address": 3, "value": 0, "delay_s": 0.1},
+            {"address": 2, "value": 10, "delay_s": 0.08},
+            {"address": 1, "value": 95, "delay_s": 0.08},
+            {"address": 1, "value": 98, "delay_s": 0.08},
+            {"address": 2, "value": 5, "delay_s": 0.08},
         ],
     },
-    "setpoint_out_of_envelope": {
-        "id": "setpoint_out_of_envelope",
-        "name": "Out-of-envelope setpoint",
+    "t0838_modify_alarm_settings_blinding": {
+        "id": "t0838_modify_alarm_settings_blinding",
+        "name": "Alarm Threshold Blinding",
+        "framework": "ATT&CK ICS",
+        "technique": "T0838 (Modify Alarm Settings)",
+        "profile": "tank_v1",
+        "steps": [
+            {"address": 3, "value": 20, "delay_s": 0.10},
+            {"address": 4, "value": 19, "delay_s": 0.10},
+            {"address": 3, "value": 15, "delay_s": 0.10},
+        ],
+    },
+    "t0806_bruteforce_io_register_replay": {
+        "id": "t0806_bruteforce_io_register_replay",
+        "name": "High-Frequency Register Replay Burst",
+        "framework": "ATT&CK ICS",
+        "technique": "T0806 (Brute Force I/O)",
+        "profile": "tank_v1",
+        "steps": [
+            {"address": 1, "value": 80, "delay_s": 0.02},
+            {"address": 1, "value": 20, "delay_s": 0.02},
+            {"address": 1, "value": 80, "delay_s": 0.02},
+            {"address": 1, "value": 20, "delay_s": 0.02},
+            {"address": 1, "value": 80, "delay_s": 0.02},
+            {"address": 1, "value": 20, "delay_s": 0.02},
+            {"address": 1, "value": 80, "delay_s": 0.02},
+            {"address": 1, "value": 20, "delay_s": 0.02},
+            {"address": 1, "value": 80, "delay_s": 0.02},
+            {"address": 1, "value": 20, "delay_s": 0.02},
+            {"address": 1, "value": 80, "delay_s": 0.02},
+            {"address": 1, "value": 20, "delay_s": 0.02},
+        ],
+    },
+    "t0831_manipulation_of_control_conflict": {
+        "id": "t0831_manipulation_of_control_conflict",
+        "name": "Conflicting Control Manipulation",
         "framework": "ATT&CK ICS",
         "technique": "T0831 (Manipulation of Control)",
         "profile": "tank_v1",
         "steps": [
-            {"address": 8, "value": 99, "delay_s": 0.1},
-            {"address": 9, "value": 1, "delay_s": 0.1},
-        ],
-    },
-    "sequence_violation": {
-        "id": "sequence_violation",
-        "name": "Valid command with invalid sequence",
-        "framework": "ATT&CK ICS",
-        "technique": "T0806 (Command-Line Interface misuse analogue)",
-        "profile": "tank_v1",
-        "steps": [
-            {"address": 3, "value": 1, "delay_s": 0.05},
-            {"address": 2, "value": 0, "delay_s": 0.05},
-        ],
-    },
-    "write_burst_replay": {
-        "id": "write_burst_replay",
-        "name": "Write burst / replay",
-        "framework": "ATT&CK ICS",
-        "technique": "T0813 (Denial style via command flood)",
-        "profile": "tank_v1",
-        "steps": [
-            {"address": 2, "value": 1, "delay_s": 0.02},
-            {"address": 2, "value": 0, "delay_s": 0.02},
-            {"address": 2, "value": 1, "delay_s": 0.02},
-            {"address": 2, "value": 0, "delay_s": 0.02},
+            {"address": 1, "value": 95, "delay_s": 0.06},
+            {"address": 2, "value": 95, "delay_s": 0.06},
+            {"address": 1, "value": 99, "delay_s": 0.06},
+            {"address": 2, "value": 2, "delay_s": 0.06},
         ],
     },
 }
@@ -140,6 +165,17 @@ def _extract_level(register_values: list[int]) -> int:
         return 0
 
 
+def _read_reg(register_values: list[int], register_id: int, default: int = 0) -> int:
+    # Handle both 0-based and 1-based snapshots defensively.
+    for idx in (int(register_id), int(register_id) - 1):
+        if idx >= 0 and idx < len(register_values):
+            try:
+                return int(register_values[idx])
+            except Exception:
+                continue
+    return int(default)
+
+
 def evaluate_semantic_policy(
     *,
     profile_id: str,
@@ -152,16 +188,57 @@ def evaluate_semantic_policy(
 ) -> PolicyDecision:
     profile = PROCESS_PROFILES.get(profile_id) or PROCESS_PROFILES["tank_v1"]
     constraints = profile.get("constraints") or {}
-    level = _extract_level(register_values)
+    reg_map = constraints.get("register_map") or {}
+    level = _read_reg(register_values, int(reg_map.get("level_ai", 6)), _extract_level(register_values))
+    pump_flow = _read_reg(register_values, int(reg_map.get("pump_flow_sp", 1)), 0)
+    valve_flow = _read_reg(register_values, int(reg_map.get("valve_flow_sp", 2)), 0)
+    alarm_hi = _read_reg(register_values, int(reg_map.get("alarm_hi_sp", 3)), 0)
+    alarm_lo = _read_reg(register_values, int(reg_map.get("alarm_lo_sp", 4)), 0)
 
     if not process_running:
         return PolicyDecision("BLOCK", "R001", "Process is not running for command execution", 95, "Unsafe write while process offline")
 
-    if address == 2 and value == 1 and level >= int(constraints.get("level_hi_block", 95)):
-        return PolicyDecision("BLOCK", "R002", f"Pump ON denied: level={level} is above high bound", 92, "Overflow escalation avoided")
+    if int(address) == int(reg_map.get("alarm_hi_sp", 3)):
+        safe_hi_min = int(constraints.get("safe_alarm_hi_min", 50))
+        safe_gap_min = int(constraints.get("safe_alarm_gap_min", 10))
+        current_lo = alarm_lo
+        if int(value) < safe_hi_min:
+            return PolicyDecision(
+                "BLOCK",
+                "R101",
+                f"Alarm HI threshold too low ({value}); minimum safe bound is {safe_hi_min}",
+                94,
+                "Alarm blinding attempt prevented",
+            )
+        if int(value) <= (int(current_lo) + safe_gap_min):
+            return PolicyDecision(
+                "BLOCK",
+                "R101",
+                f"Alarm HI threshold ({value}) too close to LO ({current_lo})",
+                93,
+                "Unsafe alarm envelope compression prevented",
+            )
 
-    if address == 3 and value == 1 and level <= int(constraints.get("level_lo_block", 5)):
-        return PolicyDecision("BLOCK", "R003", f"Valve ON denied: level={level} is below low bound", 90, "Dry-run / drain-risk avoided")
+    if int(address) == int(reg_map.get("alarm_lo_sp", 4)):
+        safe_lo_max = int(constraints.get("safe_alarm_lo_max", 40))
+        safe_gap_min = int(constraints.get("safe_alarm_gap_min", 10))
+        current_hi = alarm_hi
+        if int(value) > safe_lo_max:
+            return PolicyDecision(
+                "BLOCK",
+                "R101",
+                f"Alarm LO threshold too high ({value}); maximum safe bound is {safe_lo_max}",
+                94,
+                "Alarm blinding attempt prevented",
+            )
+        if int(value) >= (int(current_hi) - safe_gap_min):
+            return PolicyDecision(
+                "BLOCK",
+                "R101",
+                f"Alarm LO threshold ({value}) too close to HI ({current_hi})",
+                93,
+                "Unsafe alarm envelope compression prevented",
+            )
 
     recent_same = [
         item for item in last_writes
@@ -169,17 +246,35 @@ def evaluate_semantic_policy(
         and (now_ts - float(item.get("ts", 0))) <= float(constraints.get("min_command_interval_s", 0.15))
     ]
     if recent_same:
-        return PolicyDecision("ALLOW_WITH_ALERT", "R005", "High-frequency repeated write pattern detected", 72, None)
+        if len(recent_same) >= int(constraints.get("burst_block_threshold", 10)):
+            return PolicyDecision("BLOCK", "R103", "High-frequency write burst/replay pattern detected", 88, "Burst write manipulation limited")
+        return PolicyDecision("ALLOW_WITH_ALERT", "R103", "High-frequency repeated write pattern detected", 72, None)
 
-    if address == 3 and value == 1:
-        recent_pump_on = any(
-            int(item.get("address", -1)) == 2
-            and int(item.get("value", 0)) == 1
-            and (now_ts - float(item.get("ts", 0))) <= 3.0
-            for item in last_writes
-        )
-        if not recent_pump_on:
-            return PolicyDecision("ALLOW_WITH_ALERT", "R004", "Valve ON without recent pump activation", 66, None)
+    if int(address) == int(reg_map.get("pump_flow_sp", 1)):
+        delta = abs(int(value) - int(pump_flow))
+        if delta > int(constraints.get("setpoint_rate_limit", 35)):
+            return PolicyDecision("ALLOW_WITH_ALERT", "R104", f"Fast pump setpoint ramp detected ({pump_flow} -> {value})", 68, None)
+        if int(value) >= 90 and int(valve_flow) <= 20 and int(level) >= 80:
+            return PolicyDecision(
+                "BLOCK",
+                "R102",
+                f"Unsafe control conflict: pump_flow={value}, valve_flow={valve_flow}, level={level}",
+                91,
+                "Potential overflow acceleration prevented",
+            )
+
+    if int(address) == int(reg_map.get("valve_flow_sp", 2)):
+        delta = abs(int(value) - int(valve_flow))
+        if delta > int(constraints.get("setpoint_rate_limit", 35)):
+            return PolicyDecision("ALLOW_WITH_ALERT", "R104", f"Fast valve setpoint ramp detected ({valve_flow} -> {value})", 68, None)
+        if int(value) >= 90 and int(level) <= 10 and int(pump_flow) <= 5:
+            return PolicyDecision(
+                "BLOCK",
+                "R102",
+                f"Unsafe drain command: valve_flow={value}, level={level}, pump_flow={pump_flow}",
+                90,
+                "Potential dry-run/depletion condition prevented",
+            )
 
     return PolicyDecision("ALLOW", "R000", "Command accepted by semantic policy", 25, None)
 
