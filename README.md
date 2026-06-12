@@ -89,7 +89,7 @@ This separation is important because the monitor is not just a UI widget. It is 
 
 Main file:
 
-- [app.py](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/app.py)
+- [app.py](app.py)
 
 Responsibilities:
 
@@ -112,7 +112,7 @@ Responsibilities:
 
 Main file:
 
-- [scripts/tshark_runtime.py](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/scripts/tshark_runtime.py)
+- [scripts/tshark_runtime.py](scripts/tshark_runtime.py)
 
 Responsibilities:
 
@@ -138,7 +138,7 @@ Role:
 
 The current example PLC logic is provided in:
 
-- [openplc_tank_v1.st](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/scripts/v2_seed/openplc_tank_v1.st)
+- [openplc_tank_v1.st](scripts/v2_seed/openplc_tank_v1.st)
 
 ### 4. FUXA
 
@@ -150,7 +150,7 @@ Role:
 
 The repo includes reusable FUXA project assets and recovered seeds under:
 
-- [scripts/v2_seed](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/scripts/v2_seed)
+- [scripts/v2_seed](scripts/v2_seed)
 
 ### 5. tshark
 
@@ -200,35 +200,35 @@ ot_lab_app/
 
 For ordinary public use, the important runtime files are:
 
-- [docker-compose.yml](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/docker-compose.yml)
-- [Dockerfile](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/Dockerfile)
-- [docker/fuxa.Dockerfile](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/docker/fuxa.Dockerfile)
-- [requirements.txt](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/requirements.txt)
-- [app.py](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/app.py)
-- [scripts/tshark_runtime.py](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/scripts/tshark_runtime.py)
-- [static/app.js](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/static/app.js)
-- [static/style.css](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/static/style.css)
-- [templates/index.html](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/templates/index.html)
-- [.env.example](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/.env.example)
+- [docker-compose.yml](docker-compose.yml)
+- [Dockerfile](Dockerfile)
+- [docker/fuxa.Dockerfile](docker/fuxa.Dockerfile)
+- [requirements.txt](requirements.txt)
+- [app.py](app.py)
+- [scripts/tshark_runtime.py](scripts/tshark_runtime.py)
+- [static/app.js](static/app.js)
+- [static/style.css](static/style.css)
+- [templates/index.html](templates/index.html)
+- [.env.example](.env.example)
 
 ### Files Useful for Initial Seeding
 
-- [openplc_tank_v1.st](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/scripts/v2_seed/openplc_tank_v1.st)
-- [fuxa_project_recovered_latest.json](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/scripts/v2_seed/fuxa_project_recovered_latest.json)
-- [load_fuxa_seed.sh](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/scripts/v2_seed/load_fuxa_seed.sh)
-- [backup_lab_state.sh](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/scripts/v2_seed/backup_lab_state.sh)
+- [openplc_tank_v1.st](scripts/v2_seed/openplc_tank_v1.st)
+- [fuxa_project_recovered_latest.json](scripts/v2_seed/fuxa_project_recovered_latest.json)
+- [load_fuxa_seed.sh](scripts/v2_seed/load_fuxa_seed.sh)
+- [backup_lab_state.sh](scripts/v2_seed/backup_lab_state.sh)
 
 ### Files Primarily for Research / Writing
 
-- [studies/README.md](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/studies/README.md)
-- [studies/chapter4_modbus_tcp_test_log.md](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/studies/chapter4_modbus_tcp_test_log.md)
-- [studies/dossiers/otlab_v2_chapter4_dossier.md](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/studies/dossiers/otlab_v2_chapter4_dossier.md)
+- [studies/README.md](studies/README.md)
+- [studies/chapter4_modbus_tcp_test_log.md](studies/chapter4_modbus_tcp_test_log.md)
+- [studies/dossiers/otlab_v2_chapter4_dossier.md](studies/dossiers/otlab_v2_chapter4_dossier.md)
 
 ## Networks, IPs, and Ports
 
 The lab is parameterized via:
 
-- [.env.example](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/.env.example)
+- [.env.example](.env.example)
 
 ### Default subnets
 
@@ -338,7 +338,7 @@ Login defaults:
 
 Upload and compile:
 
-- [openplc_tank_v1.st](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/scripts/v2_seed/openplc_tank_v1.st)
+- [openplc_tank_v1.st](scripts/v2_seed/openplc_tank_v1.st)
 
 Then start the PLC runtime from the OpenPLC web UI.
 
@@ -350,7 +350,7 @@ You have two main options.
 
 Use one of the included project exports, for example:
 
-- [fuxa_project_recovered_latest.json](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/scripts/v2_seed/fuxa_project_recovered_latest.json)
+- [fuxa_project_recovered_latest.json](scripts/v2_seed/fuxa_project_recovered_latest.json)
 
 You can also use:
 
@@ -585,7 +585,7 @@ Expected current outcomes:
 
 Included benchmark script:
 
-- [scripts/benchmark_modbus_latency.py](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/scripts/benchmark_modbus_latency.py)
+- [scripts/benchmark_modbus_latency.py](scripts/benchmark_modbus_latency.py)
 
 Purpose:
 
@@ -747,4 +747,4 @@ This project is licensed under the MIT License.
 
 See:
 
-- [LICENSE](/Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app/LICENSE)
+- [LICENSE](LICENSE)
