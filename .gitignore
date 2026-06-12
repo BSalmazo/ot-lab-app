@@ -8,6 +8,7 @@ venv/
 
 # Test/checkpoint artifacts
 artifacts/
+studies/evidence/liscere_baseline_v0_1/
 
 # Downloaded/generated agent binaries are published as GitHub release assets.
 downloads/
