@@ -1,17 +1,17 @@
-# OT Lab v2 (Docker) - Quick Start
+# OT Lab (Docker) - Quick Start
 
-This guide is only for `v2-dev`. Production `v1` remains unchanged.
+This guide describes the current Docker-based OT Lab environment.
 
-## 1) Start full v2 lab (web + runtime + OpenPLC + HMI)
+## 1) Start full lab (web + runtime + OpenPLC + HMI)
 
 ```bash
-cd /Users/salmazo/Library/CloudStorage/OneDrive-U.Porto-Microsoft365/PhD/02_labs/modbus_lab/ot_lab_app
+cd ot-lab-app
 cp .env.example .env
 docker compose up -d --build
 ```
 
 Open:
-- OT Lab v2: <http://localhost:8000/?session_id=sess_v2_docker_local>
+- OT Lab: <http://localhost:8000/?session_id=sess_v2_docker_local>
 - OpenPLC: <http://localhost:8081>
 - FUXA HMI: <http://localhost:1881>
 
@@ -56,5 +56,5 @@ docker compose down
 ## Notes
 
 - On macOS/Windows, Docker Desktop uses a VM. Packet-level behavior differs from Linux host mode.
-- For full monitor/sniffer parity, local native runtime remains the reference path.
-- This Docker baseline is for v2 migration and incremental integration testing.
+- For full monitor/sniffer parity, Linux host deployments remain the closest match to a native OT capture environment.
+- This Docker baseline is the main public OT Lab deployment path.

@@ -1,4 +1,4 @@
-"""OT Lab v2 agent package.
+"""OT Lab agent package.
 
 Legacy local-agent runtime modules were removed in the tshark-first cleanup.
 This package now exposes protocol/runtime helpers only.
