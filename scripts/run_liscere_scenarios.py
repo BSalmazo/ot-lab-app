@@ -21,7 +21,7 @@ except Exception:  # pragma: no cover - graceful fallback
 DEFAULT_BASE_URL = "http://localhost:8000"
 DEFAULT_SESSION_ID = "sess_v2_docker_local"
 DEFAULT_SCENARIO_DIR = Path("studies/liscere/scenarios")
-DEFAULT_OUTPUT_DIR = Path("studies/evidence/liscere_baseline_v0_1")
+DEFAULT_OUTPUT_DIR = Path("studies/evidence/liscere_contextual_v0_1")
 DEFAULT_WAIT_SECONDS = 1.25
 SCENARIO_DEDUP_PREFERENCE = ("json", "yaml", "yml")
 
@@ -36,6 +36,7 @@ SUMMARY_COLUMNS = [
     "artefact",
     "address",
     "value",
+    "maintenance_window",
     "evidence_complete",
     "notes",
 ]
@@ -51,7 +52,7 @@ BUILTIN_SCENARIOS: list[dict[str, Any]] = [
         "protocol_operation": {"function": "write_register", "target_register": 1, "value": 50},
         "industrial_action": {"type": "write_setpoint", "value": 50},
         "automation_artefact": {"id": "PUMP_FLOW_SP", "class": "setpoint", "allowed_range": {"min": 0, "max": 100}, "mapping_confidence": "known"},
-        "operational_context": {"operating_mode": "normal_operation", "maintenance_status": "not_in_maintenance"},
+        "operational_context": {"operating_mode": "normal_operation", "maintenance_status": "not_in_maintenance", "maintenance_window": False},
         "policy_constraint": {"id": "OBS-R000", "rule": "mapped write within expected range should be allowed"},
         "expected_decision": "ALLOW",
         "expected_rule": "OBS-R000",
@@ -66,7 +67,7 @@ BUILTIN_SCENARIOS: list[dict[str, Any]] = [
         "protocol_operation": {"function": "write_register", "target_register": 1, "value": 150},
         "industrial_action": {"type": "write_setpoint", "value": 150},
         "automation_artefact": {"id": "PUMP_FLOW_SP", "class": "setpoint", "allowed_range": {"min": 0, "max": 100}, "mapping_confidence": "known"},
-        "operational_context": {"operating_mode": "normal_operation", "maintenance_status": "not_in_maintenance"},
+        "operational_context": {"operating_mode": "normal_operation", "maintenance_status": "not_in_maintenance", "maintenance_window": False},
         "policy_constraint": {"id": "OBS-R001", "rule": "write outside declared operational envelope should alert"},
         "expected_decision": "ALERT",
         "expected_rule": "OBS-R001",
@@ -81,7 +82,7 @@ BUILTIN_SCENARIOS: list[dict[str, Any]] = [
         "protocol_operation": {"function": "write_register", "target_register": 3, "value": 5},
         "industrial_action": {"type": "modify_configuration", "value": 5},
         "automation_artefact": {"id": "ALARM_HI_SP", "class": "sensitive_configuration", "mapping_confidence": "known", "criticality": "high"},
-        "operational_context": {"operating_mode": "normal_operation", "maintenance_status": "not_in_maintenance"},
+        "operational_context": {"operating_mode": "normal_operation", "maintenance_status": "not_in_maintenance", "maintenance_window": False},
         "policy_constraint": {"id": "OBS-R002", "rule": "write to sensitive configuration parameter should alert"},
         "expected_decision": "ALERT",
         "expected_rule": "OBS-R002",
@@ -100,7 +101,7 @@ BUILTIN_SCENARIOS: list[dict[str, Any]] = [
         "protocol_operation": {"function": "write_register", "target_register": 65000, "value": 123},
         "industrial_action": {"type": "write_unknown_target", "value": 123},
         "automation_artefact": {"id": "unknown", "class": "unknown", "mapping_confidence": "unknown"},
-        "operational_context": {"operating_mode": "normal_operation", "maintenance_status": "not_in_maintenance"},
+        "operational_context": {"operating_mode": "normal_operation", "maintenance_status": "not_in_maintenance", "maintenance_window": False},
         "policy_constraint": {"id": "OBS-R003", "rule": "write to unmapped or unknown address should alert"},
         "expected_decision": "ALERT",
         "expected_rule": "OBS-R003",
@@ -109,6 +110,66 @@ BUILTIN_SCENARIOS: list[dict[str, Any]] = [
             "note": "ESCALATE should only be used if implemented as a distinct output in OT Lab.",
         },
         "rationale": "The operation is protocol-valid, but OT Lab cannot determine the affected automation artefact from the available mapping.",
+    },
+    {
+        "scenario_id": "SCN-MODBUS-CTX-CONFIG-PROD-001",
+        "title": "Sensitive configuration write during normal operation",
+        "description": "A client writes to ALARM_HI_SP outside a maintenance window.",
+        "protocol_carrier": "Modbus/TCP",
+        "api_action": {"endpoint": "/api/v2/lab/write-register", "method": "POST", "payload": {"register": 3, "value": 5, "unit_id": 1}},
+        "protocol_operation": {"function": "write_register", "target_register": 3, "value": 5},
+        "industrial_action": {"type": "modify_configuration", "value": 5},
+        "automation_artefact": {"id": "ALARM_HI_SP", "class": "sensitive_configuration", "mapping_confidence": "known", "criticality": "high"},
+        "operational_context": {"operating_mode": "normal_operation", "maintenance_status": "not_in_maintenance", "maintenance_window": False},
+        "policy_constraint": {"id": "OBS-R002", "rule": "write to sensitive configuration parameter should alert"},
+        "expected_decision": "ALERT",
+        "expected_rule": "OBS-R002",
+        "rationale": "The same protocol-valid action should alert while the monitor context declares no maintenance window.",
+    },
+    {
+        "scenario_id": "SCN-MODBUS-CTX-CONFIG-MAINT-001",
+        "title": "Sensitive configuration write during maintenance",
+        "description": "A client writes to ALARM_HI_SP during an active maintenance window.",
+        "protocol_carrier": "Modbus/TCP",
+        "api_action": {"endpoint": "/api/v2/lab/write-register", "method": "POST", "payload": {"register": 3, "value": 5, "unit_id": 1}},
+        "protocol_operation": {"function": "write_register", "target_register": 3, "value": 5},
+        "industrial_action": {"type": "modify_configuration", "value": 5},
+        "automation_artefact": {"id": "ALARM_HI_SP", "class": "sensitive_configuration", "mapping_confidence": "known", "criticality": "high"},
+        "operational_context": {"operating_mode": "maintenance", "maintenance_status": "in_maintenance", "maintenance_window": True},
+        "policy_constraint": {"id": "OBS-R004", "rule": "Sensitive configuration write permitted during active maintenance window"},
+        "expected_decision": "ALLOW",
+        "expected_rule": "OBS-R004",
+        "rationale": "The same protocol-valid action should be allowed because the monitor context declares an active maintenance window.",
+    },
+    {
+        "scenario_id": "SCN-MODBUS-CTX-RANGE-MAINT-001",
+        "title": "Out-of-range setpoint write during maintenance",
+        "description": "A client writes an out-of-range setpoint during maintenance; range validation must still alert.",
+        "protocol_carrier": "Modbus/TCP",
+        "api_action": {"endpoint": "/api/v2/lab/write-register", "method": "POST", "payload": {"register": 1, "value": 150, "unit_id": 1}},
+        "protocol_operation": {"function": "write_register", "target_register": 1, "value": 150},
+        "industrial_action": {"type": "write_setpoint", "value": 150},
+        "automation_artefact": {"id": "PUMP_FLOW_SP", "class": "setpoint", "allowed_range": {"min": 0, "max": 100}, "mapping_confidence": "known"},
+        "operational_context": {"operating_mode": "maintenance", "maintenance_status": "in_maintenance", "maintenance_window": True},
+        "policy_constraint": {"id": "OBS-R001", "rule": "write outside declared operational envelope should alert"},
+        "expected_decision": "ALERT",
+        "expected_rule": "OBS-R001",
+        "rationale": "Maintenance context must not override the declared operating envelope for mapped setpoints.",
+    },
+    {
+        "scenario_id": "SCN-MODBUS-CTX-NORMAL-MAINT-001",
+        "title": "Valid mapped setpoint write during maintenance",
+        "description": "A valid mapped setpoint write during maintenance should remain allowed.",
+        "protocol_carrier": "Modbus/TCP",
+        "api_action": {"endpoint": "/api/v2/lab/write-register", "method": "POST", "payload": {"register": 1, "value": 50, "unit_id": 1}},
+        "protocol_operation": {"function": "write_register", "target_register": 1, "value": 50},
+        "industrial_action": {"type": "write_setpoint", "value": 50},
+        "automation_artefact": {"id": "PUMP_FLOW_SP", "class": "setpoint", "allowed_range": {"min": 0, "max": 100}, "mapping_confidence": "known"},
+        "operational_context": {"operating_mode": "maintenance", "maintenance_status": "in_maintenance", "maintenance_window": True},
+        "policy_constraint": {"id": "OBS-R000", "rule": "mapped write within expected range should be allowed"},
+        "expected_decision": "ALLOW",
+        "expected_rule": "OBS-R000",
+        "rationale": "The maintenance window should not change the result for a normal mapped write inside the declared operating envelope.",
     },
 ]
 
@@ -211,6 +272,17 @@ def normalize_decision(value: Any) -> str | None:
     return text or None
 
 
+def maintenance_window_for_scenario(scenario: dict[str, Any]) -> bool:
+    op_context = scenario.get("operational_context") or {}
+    raw = op_context.get("maintenance_window", False)
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    text = str(raw).strip().lower()
+    return text in {"1", "true", "yes", "on"}
+
+
 def select_decision(
     new_entries: list[dict[str, Any]],
     all_entries: list[dict[str, Any]],
@@ -223,6 +295,7 @@ def select_decision(
     register = protocol_op.get("target_register", api_payload.get("register"))
     value = protocol_op.get("value", api_payload.get("value"))
     asset = ((scenario.get("automation_artefact") or {}).get("id") or "").strip()
+    maintenance_window = maintenance_window_for_scenario(scenario)
 
     candidates = new_entries if new_entries else all_entries
 
@@ -238,6 +311,8 @@ def select_decision(
             s += 20
         if asset and str(entry.get("asset") or "").strip() == asset:
             s += 10
+        if bool(entry.get("maintenance_window", False)) == maintenance_window:
+            s += 8
         ts = 0.0
         try:
             ts = float(entry.get("timestamp") or 0.0)
@@ -293,6 +368,7 @@ def make_summary_row(
     value = (selected or {}).get("value")
     if value is None:
         value = ((scenario.get("protocol_operation") or {}).get("value"))
+    maintenance_window = maintenance_window_for_scenario(scenario)
 
     match = bool(expected_decision and actual_decision == expected_decision)
     if expected_rule:
@@ -315,6 +391,7 @@ def make_summary_row(
         "artefact": artefact,
         "address": address,
         "value": value,
+        "maintenance_window": maintenance_window,
         "evidence_complete": evidence_complete,
         "notes": " | ".join(note for note in notes if note),
     }
@@ -328,6 +405,84 @@ def export_summary_csv(path: Path, rows: list[dict[str, Any]]) -> None:
             writer.writerow({key: row.get(key) for key in SUMMARY_COLUMNS})
 
 
+def set_monitor_context(
+    session: requests.Session,
+    *,
+    base_url: str,
+    session_id: str,
+    maintenance_window: bool,
+) -> dict[str, Any]:
+    return call_json(
+        session,
+        "POST",
+        f"{base_url}/api/v2/monitor/context",
+        params={"session_id": session_id},
+        json_body={"maintenance_window": bool(maintenance_window)},
+        timeout=10.0,
+    )
+
+
+def assert_control_pair(summary_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    by_id = {str(row.get("scenario_id") or ""): row for row in summary_rows}
+    prod = by_id.get("SCN-MODBUS-CTX-CONFIG-PROD-001")
+    maint = by_id.get("SCN-MODBUS-CTX-CONFIG-MAINT-001")
+    if not prod or not maint:
+        return {
+            "pair": ["SCN-MODBUS-CTX-CONFIG-PROD-001", "SCN-MODBUS-CTX-CONFIG-MAINT-001"],
+            "available": False,
+            "passed": False,
+            "reason": "Control-pair scenarios were not both executed.",
+        }
+
+    same_asset = prod.get("artefact") == maint.get("artefact")
+    same_address = prod.get("address") == maint.get("address")
+    same_value = prod.get("value") == maint.get("value")
+    different_context = bool(prod.get("maintenance_window")) != bool(maint.get("maintenance_window"))
+    different_decision_or_rule = (
+        prod.get("actual_decision") != maint.get("actual_decision")
+        or prod.get("matched_rule") != maint.get("matched_rule")
+    )
+    passed = all([same_asset, same_address, same_value, different_context, different_decision_or_rule])
+    return {
+        "pair": ["SCN-MODBUS-CTX-CONFIG-PROD-001", "SCN-MODBUS-CTX-CONFIG-MAINT-001"],
+        "available": True,
+        "same_asset": same_asset,
+        "same_address": same_address,
+        "same_value": same_value,
+        "different_context": different_context,
+        "different_decision_or_rule": different_decision_or_rule,
+        "prod": prod,
+        "maint": maint,
+        "passed": passed,
+    }
+
+
+def summarize_contextual_negative_controls(summary_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    by_id = {str(row.get("scenario_id") or ""): row for row in summary_rows}
+    targets = [
+        "SCN-MODBUS-CTX-RANGE-MAINT-001",
+        "SCN-MODBUS-CTX-NORMAL-MAINT-001",
+    ]
+    available_rows = [by_id[scenario_id] for scenario_id in targets if scenario_id in by_id]
+    if not available_rows:
+        return {
+            "available": False,
+            "targets": targets,
+            "passed": False,
+            "matched": 0,
+            "total": 0,
+        }
+    matched = sum(1 for row in available_rows if row.get("match"))
+    total = len(available_rows)
+    return {
+        "available": True,
+        "targets": targets,
+        "passed": matched == total,
+        "matched": matched,
+        "total": total,
+    }
+
+
 def run() -> int:
     parser = argparse.ArgumentParser(description="Run the initial Liscere Modbus/TCP OT Lab baseline scenarios.")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
@@ -338,6 +493,7 @@ def run() -> int:
     parser.add_argument("--start-openplc", action="store_true")
     parser.add_argument("--no-monitor-route", action="store_true")
     parser.add_argument("--use-builtin-if-missing", action="store_true")
+    parser.add_argument("--scenario-id-prefix", default="")
     args = parser.parse_args()
 
     base_url = str(args.base_url).rstrip("/")
@@ -346,6 +502,14 @@ def run() -> int:
     ensure_dir(output_dir)
 
     scenarios = load_scenarios(scenario_dir, use_builtin_if_missing=bool(args.use_builtin_if_missing))
+    scenario_id_prefix = str(args.scenario_id_prefix or "").strip()
+    if scenario_id_prefix:
+        scenarios = [
+            loaded for loaded in scenarios
+            if str((loaded.data or {}).get("scenario_id") or "").startswith(scenario_id_prefix)
+        ]
+        if not scenarios:
+            raise RuntimeError(f"No scenarios matched prefix: {scenario_id_prefix}")
     session = requests.Session()
 
     preflight = call_json(session, "GET", f"{base_url}/api/status", params={"session_id": args.session_id}, timeout=10.0)
@@ -380,6 +544,19 @@ def run() -> int:
 
         notes: list[str] = [f"source={loaded.path}"]
         write_json(scenario_dir_out / "scenario.json", scenario)
+
+        maintenance_window = maintenance_window_for_scenario(scenario)
+        context_request = {"maintenance_window": maintenance_window}
+        write_json(scenario_dir_out / "context_request.json", context_request)
+        context_response = set_monitor_context(
+            session,
+            base_url=base_url,
+            session_id=args.session_id,
+            maintenance_window=maintenance_window,
+        )
+        write_json(scenario_dir_out / "context_response.json", context_response)
+        if not context_response.get("ok_http", False):
+            notes.append(f"Context HTTP {context_response.get('status_code')}")
 
         before_export = call_json(
             session,
@@ -441,6 +618,8 @@ def run() -> int:
                 "policy_decisions_before.json",
                 "policy_decisions_after.json",
                 "selected_decision.json",
+                "context_request.json",
+                "context_response.json",
             ]
         )
 
@@ -455,6 +634,7 @@ def run() -> int:
         result_payload = {
             "scenario_id": row["scenario_id"],
             "title": row["title"],
+            "maintenance_window": row["maintenance_window"],
             "expected_decision": row["expected_decision"],
             "actual_decision": row["actual_decision"],
             "expected_rule": row["expected_rule"],
@@ -476,6 +656,7 @@ def run() -> int:
         print(
             f"{row['scenario_id']} -> expected={row['expected_decision']}/{row['expected_rule']} "
             f"actual={row['actual_decision'] or '-'} / {row['matched_rule'] or '-'} "
+            f"maintenance_window={'true' if row['maintenance_window'] else 'false'} "
             f"match={'YES' if row['match'] else 'NO'}"
         )
 
@@ -485,16 +666,46 @@ def run() -> int:
         "session_id": args.session_id,
         "scenario_dir": str(scenario_dir),
         "output_dir": str(output_dir),
+        "scenario_id_prefix": scenario_id_prefix,
         "results": results,
         "summary_rows": summary_rows,
     }
+    control_pair = assert_control_pair(summary_rows)
+    contextual_negative_controls = summarize_contextual_negative_controls(summary_rows)
+    write_json(output_dir / "control_pair_assertions.json", control_pair)
+    summary_payload["control_pair_assertion"] = control_pair
+    summary_payload["contextual_negative_controls"] = contextual_negative_controls
     write_json(output_dir / "summary.json", summary_payload)
     export_summary_csv(output_dir / "summary.csv", summary_rows)
 
-    failures = [row for row in summary_rows if not row.get("match")]
-    print(f"\nSummary: {len(summary_rows) - len(failures)}/{len(summary_rows)} scenarios matched expected decision/rule.")
+    scenario_failures = [row for row in summary_rows if not row.get("match")]
+    control_pair_failed = bool(control_pair.get("available") and not control_pair.get("passed"))
+    negative_controls_failed = bool(
+        contextual_negative_controls.get("available") and not contextual_negative_controls.get("passed")
+    )
+    print(f"\nSummary: {len(summary_rows) - len(scenario_failures)}/{len(summary_rows)} scenarios matched expected decision/rule.")
+    if control_pair.get("available"):
+        prod = control_pair.get("prod") or {}
+        maint = control_pair.get("maint") or {}
+        if control_pair.get("passed"):
+            print(
+                "context-flip verified: "
+                f"{prod.get('artefact', 'ALARM_HI_SP')}={prod.get('value', '-')}"
+                f" -> {prod.get('actual_decision', '-').upper()}(prod) / {maint.get('actual_decision', '-').upper()}(maint); "
+                "identical operation, artefact, value"
+            )
+        else:
+            print(
+                "context-flip failed: "
+                "(SCN-MODBUS-CTX-CONFIG-PROD-001 vs SCN-MODBUS-CTX-CONFIG-MAINT-001)"
+            )
+    if contextual_negative_controls.get("available"):
+        print(
+            "Negative controls: "
+            f"{contextual_negative_controls.get('matched', 0)}/{contextual_negative_controls.get('total', 0)} held"
+        )
     print(f"Evidence: {output_dir / 'summary.csv'}")
-    return 1 if failures else 0
+    return 1 if (scenario_failures or control_pair_failed or negative_controls_failed) else 0
 
 
 if __name__ == "__main__":

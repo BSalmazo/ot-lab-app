@@ -22,12 +22,18 @@ protocol operation × automation artefact × operational context × policy const
 
 The initial scenario set is intentionally small and aligned with the current Modbus/TCP process model and observed semantic policy already implemented in OT Lab.
 
+The pack now includes a second small contextual baseline. The contextual baseline keeps the protocol carrier and target artefact fixed while varying only declared operational context, allowing OT Lab to show that semantic interpretation can change without changing the underlying Modbus/TCP operation itself.
+
 ## Included scenarios
 
 - `SCN-MODBUS-SETPOINT-001`
 - `SCN-MODBUS-SETPOINT-002`
 - `SCN-MODBUS-CONFIG-001`
 - `SCN-MODBUS-UNKNOWN-001`
+- `SCN-MODBUS-CTX-CONFIG-PROD-001`
+- `SCN-MODBUS-CTX-CONFIG-MAINT-001`
+- `SCN-MODBUS-CTX-RANGE-MAINT-001`
+- `SCN-MODBUS-CTX-NORMAL-MAINT-001`
 
 ## Scenario file format and runner selection rule
 
@@ -50,6 +56,10 @@ The pack provides a minimal, reproducible baseline for showing that OT Lab can:
 4. evaluate the action against the current semantic policy baseline; and
 5. export structured evidence for later analysis.
 
+The contextual scenarios add one more claim to that baseline:
+
+6. preserve the same protocol-level action while changing only declared operational context and observe a different semantic decision when the policy explicitly depends on that context.
+
 ## Current semantic baseline
 
 The scenarios are aligned with the currently implemented observed-policy outcomes:
@@ -58,5 +68,15 @@ The scenarios are aligned with the currently implemented observed-policy outcome
 - `OBS-R001` -> `ALERT`
 - `OBS-R002` -> `ALERT`
 - `OBS-R003` -> `ALERT`
+- `OBS-R004` -> `ALLOW`
+- `OBS-R005` -> `ALERT`
+
+In the contextual baseline, `OBS-R004` represents:
+
+```text
+Sensitive configuration write permitted during active maintenance window
+```
+
+and `OBS-R005` preserves the existing direct alarm-state write alert as a separate rule so the contextual maintenance rule can remain unambiguous.
 
 No production enforcement is introduced here. This pack evaluates the current OT Lab baseline as implemented today.

@@ -321,7 +321,8 @@ Current observed-policy rules:
 | `OBS-R001` | `ALERT` | Setpoint write is outside the declared process envelope, currently `0..100`. |
 | `OBS-R002` | `ALERT` | Write targets a sensitive process configuration parameter. |
 | `OBS-R003` | `ALERT` | Write targets an address not mapped to the declared process model. |
-| `OBS-R004` | `ALERT` | Direct write to alarm-state output. |
+| `OBS-R004` | `ALLOW` | Sensitive configuration write during an active maintenance window. |
+| `OBS-R005` | `ALERT` | Direct write to alarm-state output. |
 
 Key contribution demonstrated:
 
