@@ -667,6 +667,12 @@ def default_modbus_summary():
     }
 
 
+def default_monitor_context():
+    return {
+        "maintenance_window": False,
+    }
+
+
 def ensure_session_state(session_id: str):
     with lock:
         if session_id not in agents_by_session:
@@ -699,6 +705,7 @@ def ensure_session_state(session_id: str):
                 "monitor_proxy_target": default_monitor_proxy_target(),
                 "monitor_operating_mode": default_monitor_operating_mode(),
                 "monitor_route_enabled": default_monitor_route_enabled(),
+                "monitor_context": default_monitor_context(),
                 "ui_endpoints": default_ui_endpoints(),
                 "tag_map_overrides": {"coil": {}, "register": {}},
                 "tag_map_use_defaults": True,
@@ -881,13 +888,35 @@ OP_ACTION_TAG_MAP = {
 }
 
 OBSERVED_POLICY_ID = "observed_modbus_tank_v1"
-OBSERVED_POLICY_VERSION = "0.1.0"
+OBSERVED_POLICY_VERSION = "0.2.0"
 OBSERVED_SETPOINT_MIN = 0
 OBSERVED_SETPOINT_MAX = 100
 OBSERVED_SENSITIVE_CONFIG_TAGS = {
     "ALARM_HI_SP",
     "ALARM_LO_SP",
 }
+
+
+def normalize_boolish(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off", ""}:
+        return False
+    return default
+
+
+def get_effective_monitor_context(state: dict):
+    current = state.get("monitor_context") or {}
+    out = default_monitor_context()
+    out["maintenance_window"] = normalize_boolish(current.get("maintenance_window"), False)
+    return out
 
 
 def make_observed_policy_decision(
@@ -918,6 +947,7 @@ def make_observed_policy_decision(
         "actor": action.get("actor"),
         "target": action.get("target"),
         "function_code": action.get("function_code"),
+        "maintenance_window": normalize_boolish(action.get("maintenance_window"), False),
     }
 
 
@@ -928,6 +958,7 @@ def evaluate_observed_action_policy(action: dict, tag_map: dict):
     address = action.get("address")
     is_register = action_type == "write_register"
     is_coil = action_type == "write_coil"
+    maintenance_window = normalize_boolish(action.get("maintenance_window"), False)
 
     try:
         addr_int = int(address)
@@ -947,16 +978,6 @@ def evaluate_observed_action_policy(action: dict, tag_map: dict):
             severity="medium",
         )
 
-    if is_register and asset in OBSERVED_SENSITIVE_CONFIG_TAGS:
-        return make_observed_policy_decision(
-            action=action,
-            decision="ALERT",
-            rule_id="OBS-R002",
-            rule_name="Sensitive configuration write",
-            reason=f"{asset} is a process configuration parameter and should be changed only under authorised conditions.",
-            severity="medium",
-        )
-
     if is_register and asset.endswith("_SP") and value is not None:
         if value < OBSERVED_SETPOINT_MIN or value > OBSERVED_SETPOINT_MAX:
             return make_observed_policy_decision(
@@ -968,11 +989,30 @@ def evaluate_observed_action_policy(action: dict, tag_map: dict):
                 severity="high",
             )
 
+    if is_register and asset in OBSERVED_SENSITIVE_CONFIG_TAGS:
+        if maintenance_window:
+            return make_observed_policy_decision(
+                action=action,
+                decision="ALLOW",
+                rule_id="OBS-R004",
+                rule_name="Sensitive configuration write during maintenance",
+                reason=f"{asset} is being modified during an active maintenance window declared in the monitor context.",
+                severity="info",
+            )
+        return make_observed_policy_decision(
+            action=action,
+            decision="ALERT",
+            rule_id="OBS-R002",
+            rule_name="Sensitive configuration write",
+            reason=f"{asset} is a process configuration parameter and should be changed only under authorised conditions.",
+            severity="medium",
+        )
+
     if is_coil and asset in {"ALARM_HI_ACTIVE", "ALARM_LO_ACTIVE"}:
         return make_observed_policy_decision(
             action=action,
             decision="ALERT",
-            rule_id="OBS-R004",
+            rule_id="OBS-R005",
             rule_name="Direct alarm-state write",
             reason=f"{asset} is an alarm-state output and should not be directly commanded by an operator endpoint.",
             severity="high",
@@ -1207,6 +1247,7 @@ def ingest_operational_action_from_event(state: dict, payload: dict):
     if (src_ip in monitor_alias_ips) and dst_ip == plc_ip:
         actor = "HMI"
     event_ts = resolve_event_time(payload)
+    monitor_context = get_effective_monitor_context(state)
 
     action = {
         "kind": "operational_action",
@@ -1223,6 +1264,7 @@ def ingest_operational_action_from_event(state: dict, payload: dict):
         "target": target,
         "path": "via_monitor_proxy",
         "function_code": base_fc,
+        "maintenance_window": bool(monitor_context.get("maintenance_window", False)),
         "_dedupe_sig": (
             f"{payload.get('transaction_id')}|{base_fc}|{int(register)}|{value}"
             if payload.get("transaction_id") is not None
@@ -2730,6 +2772,7 @@ def api_v2_monitor_context(request: Request):
     session_id, state = get_session_state_from_request(request)
     ui = state.get("ui_endpoints") or default_ui_endpoints()
     arch = _build_network_architecture(ui)
+    monitor_context = get_effective_monitor_context(state)
     response = JSONResponse(
         {
             "ok": True,
@@ -2739,6 +2782,7 @@ def api_v2_monitor_context(request: Request):
             "monitor_ip": endpoint_host((ui.get("monitor_proxy") or {}).get("ip")),
             "ot_subnet": str(state.get("ot_subnet_override") or arch.get("ot_subnet") or ""),
             "dmz_subnet": str(state.get("dmz_subnet_override") or arch.get("dmz_subnet") or ""),
+            "maintenance_window": bool(monitor_context.get("maintenance_window", False)),
             "tag_map": get_effective_tag_map(state),
         }
     )
@@ -2751,6 +2795,7 @@ def api_v2_set_monitor_context(request: Request, payload: dict = Body(default={}
     session_id, state = get_session_state_from_request(request)
     with lock:
         current = dict(state.get("ui_endpoints") or default_ui_endpoints())
+        monitor_context = get_effective_monitor_context(state)
         hmi_ip = endpoint_host(payload.get("hmi_ip"))
         plc_ip = endpoint_host(payload.get("plc_ip"))
         monitor_ip = endpoint_host(payload.get("monitor_ip"))
@@ -2769,21 +2814,35 @@ def api_v2_set_monitor_context(request: Request, payload: dict = Body(default={}
         if dmz_subnet:
             state["dmz_subnet_override"] = dmz_subnet
 
-        incoming = payload.get("tag_map") or {}
-        normalized = {"coil": {}, "register": {}}
-        for bucket in ("coil", "register"):
-            src = incoming.get(bucket) or {}
-            for k, v in dict(src).items():
-                try:
-                    kk = int(k)
-                except Exception:
-                    continue
-                vv = str(v or "").strip()
-                if vv:
-                    normalized[bucket][kk] = vv
-        state["tag_map_overrides"] = normalized
-        state["tag_map_use_defaults"] = bool(payload.get("tag_map_use_defaults", False)) if "tag_map_use_defaults" in payload else False
-    response = JSONResponse({"ok": True, "session_id": session_id, "ui_endpoints": state.get("ui_endpoints"), "tag_map": get_effective_tag_map(state)})
+        if "maintenance_window" in payload:
+            monitor_context["maintenance_window"] = normalize_boolish(payload.get("maintenance_window"), False)
+        state["monitor_context"] = monitor_context
+
+        if "tag_map" in payload:
+            incoming = payload.get("tag_map") or {}
+            normalized = {"coil": {}, "register": {}}
+            for bucket in ("coil", "register"):
+                src = incoming.get(bucket) or {}
+                for k, v in dict(src).items():
+                    try:
+                        kk = int(k)
+                    except Exception:
+                        continue
+                    vv = str(v or "").strip()
+                    if vv:
+                        normalized[bucket][kk] = vv
+            state["tag_map_overrides"] = normalized
+        if "tag_map_use_defaults" in payload:
+            state["tag_map_use_defaults"] = bool(payload.get("tag_map_use_defaults", False))
+    response = JSONResponse(
+        {
+            "ok": True,
+            "session_id": session_id,
+            "ui_endpoints": state.get("ui_endpoints"),
+            "tag_map": get_effective_tag_map(state),
+            "maintenance_window": bool(get_effective_monitor_context(state).get("maintenance_window", False)),
+        }
+    )
     set_session_cookie_if_needed(request, response, session_id)
     return response
 

@@ -512,10 +512,13 @@ Current rule family:
 | `OBS-R001` | write outside declared operational envelope -> alert |
 | `OBS-R002` | write to sensitive configuration parameter -> alert |
 | `OBS-R003` | write to unmapped/unknown address -> alert |
+| `OBS-R004` | sensitive configuration write during declared maintenance window -> allow |
+| `OBS-R005` | direct write to alarm-state output -> alert |
 
 This is enough to demonstrate a key research distinction:
 
 - protocol-valid does not automatically mean process-legitimate.
+- the same protocol-valid action can be interpreted differently once explicit operational context is introduced.
 
 ## APIs Already Implemented
 
