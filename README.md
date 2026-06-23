@@ -170,7 +170,7 @@ Why it is used:
 Top-level layout:
 
 ```text
-ot_lab_app/
+OT-Lab/
 ├── app.py
 ├── Dockerfile
 ├── docker-compose.yml
@@ -191,7 +191,6 @@ ot_lab_app/
 │   └── index.html
 ├── studies/
 │   ├── chapter4_modbus_tcp_test_log.md
-│   ├── dossiers/
 │   └── evidence/
 └── v2_engine.py
 ```
@@ -222,7 +221,6 @@ For ordinary public use, the important runtime files are:
 
 - [studies/README.md](studies/README.md)
 - [studies/chapter4_modbus_tcp_test_log.md](studies/chapter4_modbus_tcp_test_log.md)
-- [studies/dossiers/otlab_v2_chapter4_dossier.md](studies/dossiers/otlab_v2_chapter4_dossier.md)
 
 ## Networks, IPs, and Ports
 
@@ -287,8 +285,8 @@ docker compose version
 ### Clone the repository
 
 ```bash
-git clone https://github.com/BSalmazo/ot-lab-app.git
-cd ot-lab-app
+git clone https://github.com/LiscereSecurity/OT-Lab.git
+cd OT-Lab
 ```
 
 ### Create the environment file
