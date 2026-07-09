@@ -17,9 +17,13 @@ from typing import Any
 
 import requests
 
+# Make the repo root importable when this script is run as `python scripts/tshark_runtime.py`
+# (the interpreter puts scripts/ on sys.path, not the repo root).
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
-MODBUS_DEFAULT_PORTS = {502, 5020, 15020}
-WRITE_FUNCTIONS = {5, 6, 15, 16}
+from otlab_core.extractors.modbus import ModbusExtractor
 
 
 def _to_int(value: Any, default: int | None = None) -> int | None:
@@ -32,48 +36,6 @@ def _to_int(value: Any, default: int | None = None) -> int | None:
         return int(raw, 0)
     except Exception:
         return default
-
-
-def _parse_first_int(value: str | None) -> int | None:
-    if value is None:
-        return None
-    raw = str(value).strip()
-    if not raw:
-        return None
-    # tshark fields may contain comma-separated entries.
-    token = raw.split(",")[0].strip()
-    return _to_int(token)
-
-
-def _build_capture_filter(_port_mode: str, _custom_ports: list[int]) -> str:
-    # Wireshark-like baseline for v2: capture broad TCP traffic and let dissectors
-    # identify protocol layers. We still normalize to OT events later in parser.
-    return "tcp"
-
-
-def _event_type_for(func_code: int | None, dst_port: int | None) -> str:
-    if func_code is None:
-        return "UNKNOWN_REQUEST"
-    base_fc = func_code & 0x7F if func_code > 127 else func_code
-    if dst_port in MODBUS_DEFAULT_PORTS:
-        return "WRITE_REQUEST" if base_fc in WRITE_FUNCTIONS else "READ_REQUEST"
-    return "WRITE_RESPONSE" if base_fc in WRITE_FUNCTIONS else "READ_RESPONSE"
-
-
-def _build_summary(event: dict) -> str:
-    fc = event.get("function_code")
-    src = f"{event.get('src_ip')}:{event.get('src_port')}"
-    dst = f"{event.get('dst_ip')}:{event.get('dst_port')}"
-    et = str(event.get("type") or "UNKNOWN")
-    reg = event.get("register")
-    val = event.get("value")
-    start = event.get("start_addr")
-    qty = event.get("quantity")
-    if et.startswith("WRITE"):
-        if reg is not None:
-            return f"FC{fc} write from {src} to {dst} | register={reg} value={val}"
-        return f"FC{fc} write from {src} to {dst}"
-    return f"FC{fc} read from {src} to {dst} | start={start} qty={qty}"
 
 
 @dataclass
@@ -89,6 +51,7 @@ class TsharkRuntime:
         self.session_id = session_id
         self.default_iface = default_iface
         self.poll_s = poll_s
+        self.extractor = ModbusExtractor()
         self.agent_id = f"tshark-{os.getenv('HOSTNAME', 'runtime')}"
         self.hostname = os.getenv("HOSTNAME", "runtime")
         self.running = True
@@ -276,25 +239,8 @@ class TsharkRuntime:
         return MonitorConfig(iface=iface or self.default_iface, port_mode=port_mode, custom_ports=sorted(set(custom)))
 
     def _build_cmd(self, cfg: MonitorConfig) -> list[str]:
-        cap_filter = _build_capture_filter(cfg.port_mode, cfg.custom_ports)
-        fields = [
-            "frame.time_epoch",
-            "frame.protocols",
-            "ip.src",
-            "tcp.srcport",
-            "ip.dst",
-            "tcp.dstport",
-            "mbtcp.trans_id",
-            "mbtcp.unit_id",
-            "modbus.func_code",
-            "modbus.reference_num",
-            "modbus.read_reference_num",
-            "modbus.word_cnt",
-            "modbus.bit_cnt",
-            "modbus.regval_uint16",
-            "modbus.bitval",
-            "modbus.exception_code",
-        ]
+        cap_filter = self.extractor.capture_filter()
+        fields = self.extractor.tshark_fields()
         cmd = [
             "tshark",
             "-l",
@@ -318,67 +264,15 @@ class TsharkRuntime:
         return cmd
 
     def _parse_line(self, line: str) -> dict | None:
+        # Parsing is delegated to the protocol extractor; the runtime stays
+        # protocol-neutral. The extractor returns a NormalizedEvent, which
+        # serialises back to the exact legacy wire dict (same JSON as before).
         cols = line.rstrip("\n").split("\t")
-        if len(cols) < 15:
+        evt = self.extractor.parse_line(cols)
+        if evt is None:
             return None
-        ts = float(cols[0]) if cols[0] else time.time()
-        protocols = str(cols[1] or "").lower()
-        src_ip = cols[2] or None
-        src_port = _to_int(cols[3])
-        dst_ip = cols[4] or None
-        dst_port = _to_int(cols[5])
-        tx_id = _parse_first_int(cols[6])
-        unit_id = _parse_first_int(cols[7])
-        func_code = _parse_first_int(cols[8])
-        ref_write = _parse_first_int(cols[9])
-        ref_read = _parse_first_int(cols[10])
-        word_cnt = _parse_first_int(cols[11])
-        bit_cnt = _parse_first_int(cols[12])
-        reg_val = _parse_first_int(cols[13])
-        bit_val = _parse_first_int(cols[14])
-        exc = _parse_first_int(cols[15]) if len(cols) > 15 else None
-
-        # For now we emit only Modbus events into current UI pipelines.
-        # Detection is automatic by dissector (no hardcoded port filter).
-        if "modbus" not in protocols:
-            return None
-        if not src_ip or not dst_ip or func_code is None:
-            return None
-
-        event_type = _event_type_for(func_code, dst_port)
-        register = ref_write if ref_write is not None else ref_read
-        quantity = word_cnt if word_cnt is not None else bit_cnt
-        value = reg_val if reg_val is not None else bit_val
-
-        is_req = event_type.endswith("REQUEST")
-        client_ep = f"{src_ip}:{src_port}" if is_req else f"{dst_ip}:{dst_port}"
-        server_ep = f"{dst_ip}:{dst_port}" if is_req else f"{src_ip}:{src_port}"
-
-        event = {
-            "session_id": self.session_id,
-            "agent_id": self.agent_id,
-            "timestamp": ts,
-            "src_ip": src_ip,
-            "src_port": src_port,
-            "dst_ip": dst_ip,
-            "dst_port": dst_port,
-            "client": client_ep,
-            "server": server_ep,
-            "direction": "request" if is_req else "response",
-            "transaction_id": tx_id,
-            "function_code": func_code,
-            "unit_id": unit_id,
-            "protocol": "MODBUS/TCP",
-            "type": event_type,
-            "register": register,
-            "start_addr": register,
-            "quantity": quantity,
-            "value": value,
-            "exception_code": exc,
-            "iface": self.current.iface if self.current else self.default_iface,
-        }
-        event["summary"] = _build_summary(event)
-        return event
+        iface = self.current.iface if self.current else self.default_iface
+        return evt.to_wire_dict(self.session_id, self.agent_id, iface)
 
     def _pump(self, proc: subprocess.Popen[str]) -> None:
         batch: list[dict] = []
