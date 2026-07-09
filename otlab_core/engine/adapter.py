@@ -1,0 +1,56 @@
+"""Thin adapter from a NormalizedEvent stream to the learned core (Phase 1C).
+
+``LearnedEngineAdapter`` wires PhaseTracker + GrammarLearner + graded evaluator together over a
+stream of ``NormalizedEvent`` objects. It consumes only protocol-neutral fields
+(``state_signal_value`` to drive phase inference, and ``(op, target, value)`` to judge writes) —
+never Modbus-specific fields.
+
+IMPORTANT: this adapter is deliberately NOT wired into the live OT Lab passive path in Phase 1.
+The existing declarative rules in ``app.py`` remain the default and current verdicts are
+unchanged. This module exists so the protocol-neutral core can be exercised and, in a later
+explicit step, switched into the passive path.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, Optional
+
+from ..contract import NormalizedEvent
+from .evaluator import Verdict, evaluate
+from .grammar import GrammarLearner
+from .phase_tracker import PhaseTracker
+
+
+class LearnedEngineAdapter:
+    def __init__(self, grammar: Optional[Dict[str, Any]] = None, learning: bool = False):
+        self.tracker = PhaseTracker()
+        self.grammar = grammar or {}
+        self.learning = learning
+        self.learner = GrammarLearner() if learning else None
+
+    def observe_event(self, evt: NormalizedEvent) -> Optional[Verdict]:
+        """Feed one event. Returns a Verdict for a judged write, else None.
+
+        - Events carrying a reconstructed state signal advance phase inference.
+        - Write requests are either learned (learning mode) or judged (evaluation mode).
+        """
+        if evt.state_signal_value is not None:
+            self.tracker.update(evt.state_signal_value)
+            return None
+
+        if evt.op == "WRITE_REQUEST" and evt.target is not None:
+            phase = self.tracker.phase
+            conf = self.tracker.confidence
+            trans = self.tracker.transitioning
+            if self.learning and self.learner is not None:
+                self.learner.observe(evt.target, phase, conf, trans)
+                return None
+            return evaluate(self.grammar, evt.target, phase, conf, trans)
+
+        return None
+
+    def export_grammar(self) -> Dict[str, Any]:
+        """Export the learned grammar document (learning mode only)."""
+        if self.learner is None:
+            raise RuntimeError("adapter is not in learning mode")
+        return self.learner.export_document()
