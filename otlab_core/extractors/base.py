@@ -18,6 +18,15 @@ class ProtocolExtractor(ABC):
     #: Human-readable protocol label; also used as ``NormalizedEvent.protocol``.
     name = "GENERIC"
 
+    def occurrence(self) -> str:
+        """tshark ``-E occurrence=`` mode for this protocol.
+
+        Default ``"f"`` (first occurrence only) — the historical Modbus behaviour, which
+        must stay byte-identical. Protocols whose fields are legitimately multi-valued
+        (e.g. OPC UA NodeId / value lists) override this to ``"a"`` (all occurrences).
+        """
+        return "f"
+
     @abstractmethod
     def tshark_fields(self) -> List[str]:
         """The ``-e`` field list this protocol needs from tshark."""

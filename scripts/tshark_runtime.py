@@ -255,7 +255,7 @@ class TsharkRuntime:
             "-E",
             "separator=\t",
             "-E",
-            "occurrence=f",
+            f"occurrence={self.extractor.occurrence()}",
             "-E",
             "quote=n",
         ]
