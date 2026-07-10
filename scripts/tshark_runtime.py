@@ -23,7 +23,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from otlab_core.extractors.modbus import ModbusExtractor
+from otlab_core.extractors import get_extractor
 
 
 def _to_int(value: Any, default: int | None = None) -> int | None:
@@ -51,7 +51,8 @@ class TsharkRuntime:
         self.session_id = session_id
         self.default_iface = default_iface
         self.poll_s = poll_s
-        self.extractor = ModbusExtractor()
+        # Default "modbus" keeps the live passive path unchanged; OPC UA is opt-in via env.
+        self.extractor = get_extractor(os.getenv("OTLAB_PROTOCOL", "modbus"))
         self.agent_id = f"tshark-{os.getenv('HOSTNAME', 'runtime')}"
         self.hostname = os.getenv("HOSTNAME", "runtime")
         self.running = True
