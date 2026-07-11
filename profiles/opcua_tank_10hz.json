@@ -1,0 +1,9 @@
+{
+  "description": "Phase-inference parameters MANUALLY calibrated for the ~10 Hz OPC UA tank testbed during live bench work. Load with PhaseConfig.from_json(). To be superseded by Level-2 auto-calibration, which will derive these from observed sample cadence (frame.time_epoch deltas) and process dynamics rather than hand-tuning.",
+  "window": 20,
+  "slope_rising": 0.05,
+  "slope_falling": -0.05,
+  "reversal_n": 5,
+  "stable_n": 30,
+  "conf_full_slope": 0.15
+}

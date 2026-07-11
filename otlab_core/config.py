@@ -1,30 +1,37 @@
-"""Observer configuration (Phase 2).
+"""Observer configuration.
 
 Process-specific knobs live here as configuration, not as constants buried in the extractor or
 the engine. Defaults reproduce the LTR-2026-03 tank values so nothing changes for the existing
 setup, but they are now overridable per deployment.
 
-DEBT D3 (recalibration): the phase-inference defaults below were tuned on the LTR-2026-03 tank at
-a ~1 Hz Modbus poll. OPC UA telemetry on the lab runs at ~5 Hz (and the level is a Float, not an
-integer), so WINDOW / slope thresholds / hysteresis will need recalibration before the learned
-engine is trusted on the OPC UA channel. They are carried here, with those defaults, precisely so
-that recalibration is a config change rather than a code edit.
-
-NOTE: in Phase 2 these values are NOT yet injected into otlab_core.engine (engine/ is untouched and
-still holds its own module-level defaults). This object is the intended single source of truth to
-be threaded into the engine at the later, explicit enablement step; for now it governs the
-extractor (state-signal identity, port) and stages the phase params for that step.
+As of the consolidation step, ``PhaseTracker`` reads its six phase-inference parameters from
+``PhaseConfig`` (defaults = LTR-2026-03). The runtime / lean observer selects a profile — the
+built-in defaults, or a named JSON such as ``profiles/opcua_tank_10hz.json`` loaded via
+``PhaseConfig.from_json`` — without editing engine code. The engine only READS these numbers; it
+never sets them.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import json
+from dataclasses import dataclass, field, fields
 from typing import Optional
 
 
 @dataclass
 class PhaseConfig:
-    """Phase-inference parameters (defaults = LTR-2026-03; see DEBT D3)."""
+    """Phase-inference parameters.
+
+    Defaults = the LTR-2026-03 tank values (~1 Hz Modbus), so ``PhaseTracker()`` with no config
+    behaves exactly as before. These parameters are rate/dynamics-specific: the right values
+    depend on the process's sampling cadence and how fast it fills / drains.
+
+    DEBT D3 / Level-2 (auto-calibration): today these are set MANUALLY — the defaults here, or a
+    named profile such as ``profiles/opcua_tank_10hz.json`` loaded via ``from_json``. Level-2
+    auto-calibration will DERIVE them from observed sample cadence (``frame.time_epoch`` deltas)
+    and process dynamics, replacing hand-tuned profiles. Not implemented here; the engine only
+    reads this config and never sets these numbers itself.
+    """
 
     window: int = 8
     slope_rising: float = 0.25
@@ -33,6 +40,19 @@ class PhaseConfig:
     stable_n: int = 6
     conf_full_slope: float = 1.0
     conf_hold: float = 0.9
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "PhaseConfig":
+        """Build from a dict, ignoring unknown keys (e.g. a ``description`` field in a profile)."""
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
+
+    @classmethod
+    def from_json(cls, path) -> "PhaseConfig":
+        """Load a named phase profile from a JSON file (see ``profiles/``)."""
+        with open(path) as f:
+            data = json.load(f)
+        return cls.from_dict(data)
 
 
 @dataclass
