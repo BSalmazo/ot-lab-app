@@ -99,6 +99,25 @@ def _int_list(value):
     return out
 
 
+def _float_list(value):
+    """Parse a comma-list of floats in wire order (empty/keep-alive -> [])."""
+    if value is None:
+        return []
+    raw = str(value).strip()
+    if not raw:
+        return []
+    out = []
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            out.append(float(token))
+        except Exception:
+            continue
+    return out
+
+
 def _col(cols: List[str], idx: int) -> str:
     return cols[idx] if idx < len(cols) else ""
 
@@ -165,6 +184,9 @@ class OpcUaExtractor(ProtocolExtractor):
         # --- value: read the typed field indicated by the variant type ---
         variant = _to_int(_first(_col(cols, 13)))
         value, value_is_float = self._read_value(cols, variant)
+        # A response may carry MANY Float samples in one message (occurrence=a comma-list),
+        # in wire order (first = older, last = newest). Keep them ALL; never assume a count.
+        float_samples = _float_list(_col(cols, 10))
 
         is_req = op.endswith("REQUEST")
         is_resp = op.endswith("RESPONSE")
@@ -206,6 +228,7 @@ class OpcUaExtractor(ProtocolExtractor):
                 "auth_token": auth_token,   # ns=0 nodeid element: session/actor signal (mainly on requests)
                 "variant_type": variant,
                 "value_is_float": value_is_float,
+                "float_samples": float_samples,   # ALL Float samples in this message, wire order
                 "transport_type": transport_type,
             },
         )
@@ -251,22 +274,36 @@ class OpcUaExtractor(ProtocolExtractor):
         except Exception:
             return None, is_float
 
-    def extract_state_signal(self, evt: NormalizedEvent) -> Optional[float]:
-        # Replaces Modbus "element [5]": the process variable is the Float value carried in a
-        # read/publish response.
-        #
-        # DEBT D1 (single-tag assumption): with no configured state_signal_node we infer the
-        # state signal as "the Float in a read/publish response". This is valid ONLY because a
-        # single tag is subscribed. For multiple monitored items, a PublishResponse conveys the
-        # value keyed by ClientHandle (not NodeId), so correct attribution needs a
-        # ClientHandle->NodeId map built from CreateMonitoredItems. Not handled in Phase 2.
+    def extract_state_samples(self, evt: NormalizedEvent) -> List[float]:
+        """ALL process-variable samples carried by this event, in wire order (oldest -> newest).
+
+        A single OPC UA response can batch several Float samples in one message (the
+        ``opcua.Float`` comma-list under ``-E occurrence=a``). This returns every one of them,
+        in order, making NO assumption about how many a message carries or about the sampling
+        rate: 1, 2, ... N are all returned as-is; a keep-alive with no Float returns ``[]``.
+
+        Replaces Modbus "element [5]": the process variable is the Float value(s) carried in a
+        read/publish response.
+
+        DEBT D1 (single-tag assumption): with no configured state_signal_node we infer the state
+        signal as "the Float(s) in a read/publish response". Valid ONLY because a single tag is
+        subscribed. For multiple monitored items, a PublishResponse conveys values keyed by
+        ClientHandle (not NodeId), so correct attribution needs a ClientHandle->NodeId map built
+        from CreateMonitoredItems. Not handled here.
+        """
         if evt.op not in ("READ_RESPONSE", "PUBLISH_RESPONSE"):
-            return None
-        if not evt.raw.get("value_is_float"):
-            return None
-        if not isinstance(evt.value, (int, float)):
-            return None
+            return []
         node = self.config.state_signal_node
         if node and evt.target is not None and evt.target != node:
-            return None
-        return float(evt.value)
+            return []
+        return list(evt.raw.get("float_samples") or [])
+
+    def extract_state_signal(self, evt: NormalizedEvent) -> Optional[float]:
+        """The single newest state sample, or None.
+
+        Convenience for callers that want one value per event: returns the LAST (newest) element
+        of ``extract_state_samples(evt)``. Consumers driving phase inference should prefer
+        ``extract_state_samples`` and feed every sample, in order, so no samples are dropped.
+        """
+        samples = self.extract_state_samples(evt)
+        return samples[-1] if samples else None
