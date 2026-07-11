@@ -35,6 +35,12 @@ class LearnedEngineAdapter:
         - Write requests are either learned (learning mode) or judged (evaluation mode).
         """
         if evt.state_signal_value is not None:
+            # DEBT D4: consumer reads only the newest sample; a response may carry multiple state samples
+            # (extract_state_samples returns all, in order). Feeding all samples to the PhaseTracker is
+            # required for correct phase inference, but is deferred: how many samples per event and at what
+            # cadence they are fed ties into automatic rate/parameter self-calibration (a separate research
+            # task). Do NOT wire multi-sample feeding here until that design is settled. For now the Phase-3
+            # lean observer feeds samples directly, bypassing this adapter.
             self.tracker.update(evt.state_signal_value)
             return None
 
