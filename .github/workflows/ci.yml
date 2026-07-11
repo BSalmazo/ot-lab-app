@@ -35,6 +35,7 @@ jobs:
         run: |
           python tests/test_autocalibrate.py
           python tests/test_discover.py
+          python tests/test_observer_pipeline.py
 
       - name: Docker Compose validation
         run: docker compose config --quiet
