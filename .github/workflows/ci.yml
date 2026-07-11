@@ -32,7 +32,9 @@ jobs:
           python -m compileall -q otlab_core
 
       - name: Unit tests
-        run: python tests/test_autocalibrate.py
+        run: |
+          python tests/test_autocalibrate.py
+          python tests/test_discover.py
 
       - name: Docker Compose validation
         run: docker compose config --quiet

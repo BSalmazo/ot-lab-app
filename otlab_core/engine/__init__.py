@@ -18,6 +18,13 @@ from .autocalibrate import (
     learn_phase_config,
     write_profile,
 )
+from .discover import (
+    DiscoveryResult,
+    Flow,
+    FlowFeatures,
+    FlowVerdict,
+    classify_flows,
+)
 from .evaluator import Verdict, evaluate, phase_fraction
 from .grammar import GrammarLearner
 from .phase_tracker import PhaseTracker
@@ -33,4 +40,9 @@ __all__ = [
     "learn_phase_config",
     "write_profile",
     "CalibrationResult",
+    "classify_flows",
+    "Flow",
+    "FlowFeatures",
+    "FlowVerdict",
+    "DiscoveryResult",
 ]

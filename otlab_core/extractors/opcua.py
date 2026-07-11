@@ -307,3 +307,40 @@ class OpcUaExtractor(ProtocolExtractor):
         """
         samples = self.extract_state_samples(evt)
         return samples[-1] if samples else None
+
+    def group_flows(self, events) -> list:
+        """Group parsed OPC UA events into role-hinted flows for the behavioural classifier.
+
+        Protocol-specific ROLE HINTS reinforce (they do not replace) the core's behavioural
+        decision (otlab_core.engine.discover):
+
+        - PublishResponse (829) Floats -> ONE flow, role_hint="telemetry" (the state candidate),
+          unfolding each message's multi-sample Float list into the full per-sample series.
+          DEBT D1 (single-tag): all publish Floats are treated as one flow. Multi-tag correlation
+          (ClientHandle -> NodeId from CreateMonitoredItems) is level 4b.
+        - WriteRequest (673) -> flows keyed by target NodeId (the ns!=0 element, from the existing
+          tail-aligned target parse), role_hint="command".
+        - ReadResponse (634) -> a "read" flow, role_hint="read" (metadata).
+        """
+        from ..engine.discover import Flow  # local import: keep extractor import lightweight
+
+        telemetry: list = []
+        commands: dict = {}
+        reads: list = []
+        for evt in events:
+            if evt.op == "PUBLISH_RESPONSE":
+                for s in self.extract_state_samples(evt):
+                    telemetry.append((evt.timestamp, float(s)))
+            elif evt.op == "WRITE_REQUEST" and evt.target is not None and evt.value is not None:
+                commands.setdefault(evt.target, []).append((evt.timestamp, float(evt.value)))
+            elif evt.op == "READ_RESPONSE" and evt.value is not None:
+                reads.append((evt.timestamp, float(evt.value)))
+
+        flows: list = []
+        if telemetry:
+            flows.append(Flow(key="opcua:publish:telemetry", samples=telemetry, role_hint="telemetry"))
+        for target, samples in commands.items():
+            flows.append(Flow(key=f"opcua:write:{target}", samples=samples, role_hint="command"))
+        if reads:
+            flows.append(Flow(key="opcua:read", samples=reads, role_hint="read"))
+        return flows
