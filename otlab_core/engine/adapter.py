@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from ..config import PhaseConfig
 from ..contract import NormalizedEvent
 from .evaluator import Verdict, evaluate
 from .grammar import GrammarLearner
@@ -22,8 +23,16 @@ from .phase_tracker import PhaseTracker
 
 
 class LearnedEngineAdapter:
-    def __init__(self, grammar: Optional[Dict[str, Any]] = None, learning: bool = False):
-        self.tracker = PhaseTracker()
+    def __init__(
+        self,
+        grammar: Optional[Dict[str, Any]] = None,
+        learning: bool = False,
+        phase_config: Optional[PhaseConfig] = None,
+    ):
+        # phase_config is produced by Level-2 auto-calibration (autocalibrate.learn_phase_config)
+        # during the learn first pass, then passed here for the evaluate phase. None => LTR-03
+        # defaults, so existing callers are unchanged.
+        self.tracker = PhaseTracker(phase_config)
         self.grammar = grammar or {}
         self.learning = learning
         self.learner = GrammarLearner() if learning else None

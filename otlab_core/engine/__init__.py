@@ -12,6 +12,12 @@ app.py remain the default), so current OT Lab behaviour is unchanged.
 """
 
 from .adapter import LearnedEngineAdapter
+from .autocalibrate import (
+    CalibrationResult,
+    calibrate_phase_config,
+    learn_phase_config,
+    write_profile,
+)
 from .evaluator import Verdict, evaluate, phase_fraction
 from .grammar import GrammarLearner
 from .phase_tracker import PhaseTracker
@@ -23,4 +29,8 @@ __all__ = [
     "phase_fraction",
     "Verdict",
     "LearnedEngineAdapter",
+    "calibrate_phase_config",
+    "learn_phase_config",
+    "write_profile",
+    "CalibrationResult",
 ]

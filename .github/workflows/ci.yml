@@ -31,5 +31,8 @@ jobs:
           python -m py_compile app.py v2_engine.py scripts/tshark_runtime.py scripts/benchmark_modbus_latency.py
           python -m compileall -q otlab_core
 
+      - name: Unit tests
+        run: python tests/test_autocalibrate.py
+
       - name: Docker Compose validation
         run: docker compose config --quiet

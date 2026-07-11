@@ -1,5 +1,5 @@
 {
-  "description": "Phase-inference parameters MANUALLY calibrated for the ~10 Hz OPC UA tank testbed during live bench work. Load with PhaseConfig.from_json(). To be superseded by Level-2 auto-calibration, which will derive these from observed sample cadence (frame.time_epoch deltas) and process dynamics rather than hand-tuning.",
+  "description": "REFERENCE ONLY. Phase-inference parameters MANUALLY calibrated for the ~10 Hz OPC UA tank testbed during live bench work. SUPERSEDED by Level-2 auto-calibration (otlab_core/engine/autocalibrate.py), which derives these from observed sample cadence and process dynamics at learn time rather than hand-tuning; the auto-generated profile replaces this one. Kept as a documented reference target.",
   "window": 20,
   "slope_rising": 0.05,
   "slope_falling": -0.05,
