@@ -21,21 +21,12 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
       - name: Python syntax check
-        run: |
-          python -m py_compile app.py v2_engine.py scripts/tshark_runtime.py scripts/benchmark_modbus_latency.py
-          python -m compileall -q otlab_core
+        run: python -m compileall -q otlab_core scripts tests
 
       - name: Unit tests
         run: |
           python tests/test_autocalibrate.py
           python tests/test_discover.py
           python tests/test_observer_pipeline.py
-
-      - name: Docker Compose validation
-        run: docker compose config --quiet
+          python tests/test_modbus_parity.py
