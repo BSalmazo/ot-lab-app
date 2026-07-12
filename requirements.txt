@@ -1,6 +1,2 @@
-fastapi
-uvicorn[standard]
-python-multipart
-jinja2
-requests
-PyYAML
+# The Liscere passive observer runs on the Python standard library only (plus the system
+# `tshark` binary for capture). No third-party Python dependencies are required.
