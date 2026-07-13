@@ -121,6 +121,44 @@ def main():
         check("read is static (<=5 unique)", read.features.unique_values <= 5)
         check("read datatype uncertain (no variant on the wire)", read.datatype_certain is False)
 
+    # FIX #1: a command whose value did NOT parse (unknown type / encrypted) must STILL produce a
+    # COMMAND flow — the flow is gated on the target, like the evaluator, not on a parsed value.
+    valueless = [write_event(0.0, "ns=4;i=99", None)]
+    vflows = {v.key: v for v in classify_flows(ex.group_flows(valueless)).flows}
+    vc = vflows.get("opcua:write:ns=4;i=99")
+    check("value-less command still produces a flow (FIX #1)", vc is not None)
+    if vc:
+        check("value-less command classified COMMAND", vc.verdict == "COMMAND")
+        check("value-less command has zero samples", vc.features.n == 0, f"(n={vc.features.n})")
+
+    # FIX #3: the extractor decodes the common OPC UA built-in types from their typed tshark
+    # columns (not just Float/Int32). Exercise parse_line at the column level for each.
+    from otlab_core.extractors.opcua import _FIELDS
+    NC = len(_FIELDS)
+    def _row(d):
+        c = [""] * NC
+        for i, val in d.items():
+            c[i] = val
+        return c
+    base = {0: "1.0", 1: "opcua", 2: "10.0.0.9", 3: "10.0.0.1", 4: "5001", 5: "4840",
+            6: "MSG", 7: "673", 8: "1,0,5", 9: "0,4"}  # WRITE to ns=4;i=5
+    cases = [  # (name, variant hex, column index, wire text, expected value, expected typename)
+        ("Boolean", "0x01", 16, "1", 1, "Boolean"),
+        ("Int16",   "0x04", 19, "250", 250, "Int16"),
+        ("UInt16",  "0x05", 20, "65000", 65000, "UInt16"),
+        ("Int32",   "0x06", 11, "-42", -42, "Int32"),
+        ("Int64",   "0x08", 22, "9000000000", 9000000000, "Int64"),
+        ("Double",  "0x0b", 24, "3.5", 3.5, "Double"),
+    ]
+    for name, vhex, col, text, expval, expname in cases:
+        d = dict(base); d[13] = vhex; d[col] = text
+        e = ex.parse_line(_row(d))
+        check(f"parse_line decodes {name} value ({text})", e is not None and e.value == expval,
+              f"(={None if e is None else e.value!r})")
+        vflow = ex.group_flows([e]) if e else []
+        dt = vflow[0].datatype if vflow else None
+        check(f"parse_line decodes {name} datatype", dt == expname, f"(={dt})")
+
     states = result.state_flows()
     check("exactly ONE flow discovered as STATE", len(states) == 1, f"(={[s.key for s in states]})")
     check("the STATE flow is the telemetry (level) flow",
