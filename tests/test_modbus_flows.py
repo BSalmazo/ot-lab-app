@@ -90,7 +90,12 @@ def main():
     # --- FC6 write parsing: regval and modbus.data hex fallback ---
     w_regval = fc6_write(ex, 1.0, reg=0, val=90)
     w_hex = fc6_write(ex, 1.1, reg=1, data="0064")
-    check("FC6 write register from reference_num", w_regval.target == 0, f"(={w_regval.target})")
+    check("FC6 write raw register from reference_num", w_regval.raw["register"] == 0,
+          f"(={w_regval.raw['register']})")
+    check("FC6 write target is the flow-key string", w_regval.target == "modbus:hr:0",
+          f"(={w_regval.target})")
+    check("FC6 write target aligns with variable_key",
+          w_regval.target == ex.variable_key(w_regval), f"(={w_regval.target})")
     check("FC6 write value from regval_uint16", w_regval.value == 90, f"(={w_regval.value})")
     check("FC6 write value from modbus.data hex (0064 -> 100)", w_hex.value == 100, f"(={w_hex.value})")
     check("write produces no state sample", ex.extract_state_samples(w_regval) == [])

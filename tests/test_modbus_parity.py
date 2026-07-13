@@ -81,13 +81,14 @@ CASES = [
                        summary=f"FC3 read from {PLC}:502 to {HMI}:50000 | start=2 qty=None")},
 
     # FC6 write HR[0]=90, value in regval_uint16 (tshark 4.4.15).
+    # A write REQUEST's target/register is the flow-key STRING; the summary keeps the int register.
     {"name": "WRITE_REQ fc6 HR0=90 (regval)",
      "line": L(src=HMI, sport=50000, dst=PLC, dport=502, trans=11, unit=1, func=6,
                ref_write=0, regval=90),
      "expected": _wire(src_ip=HMI, src_port=50000, dst_ip=PLC, dst_port=502,
                        client=f"{HMI}:50000", server=f"{PLC}:502", direction="request",
                        transaction_id=11, function_code=6, type="WRITE_REQUEST",
-                       register=0, value=90,
+                       register="modbus:hr:0", value=90,
                        summary=f"FC6 write from {HMI}:50000 to {PLC}:502 | register=0 value=90")},
 
     # FC6 write HR[1]=100, value only as modbus.data hex (tshark 4.2.2 fallback).
@@ -97,7 +98,7 @@ CASES = [
      "expected": _wire(src_ip=HMI, src_port=50000, dst_ip=PLC, dst_port=502,
                        client=f"{HMI}:50000", server=f"{PLC}:502", direction="request",
                        transaction_id=12, function_code=6, type="WRITE_REQUEST",
-                       register=1, value=100,
+                       register="modbus:hr:1", value=100,
                        summary=f"FC6 write from {HMI}:50000 to {PLC}:502 | register=1 value=100")},
 
     # FC5 write single coil, value in bitval (unchanged fallback after regval/data).
@@ -107,7 +108,7 @@ CASES = [
      "expected": _wire(src_ip=HMI, src_port=50000, dst_ip=PLC, dst_port=502,
                        client=f"{HMI}:50000", server=f"{PLC}:502", direction="request",
                        transaction_id=13, function_code=5, type="WRITE_REQUEST",
-                       register=2, value=1,
+                       register="modbus:hr:2", value=1,
                        summary=f"FC5 write from {HMI}:50000 to {PLC}:502 | register=2 value=1")},
 
     # FC16 write-multiple RESPONSE: register 1, quantity 2.

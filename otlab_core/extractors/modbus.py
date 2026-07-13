@@ -230,6 +230,13 @@ class ModbusExtractor(ProtocolExtractor):
             func_code, src_ip, src_port, dst_ip, dst_port, event_type, register, value, quantity
         )
 
+        # A WRITE_REQUEST's target is the flow-key STRING ("modbus:hr:<n>"), aligning it with
+        # variable_key, so the grammar/verdict key is self-describing and survives JSON persistence
+        # (no int-vs-str key friction). The raw int register is kept in raw["register"]. Reads and
+        # responses keep the int register as their target.
+        target = (f"modbus:hr:{register}"
+                  if event_type == "WRITE_REQUEST" and register is not None else register)
+
         evt = NormalizedEvent(
             timestamp=ts,
             protocol="MODBUS/TCP",
@@ -241,7 +248,7 @@ class ModbusExtractor(ProtocolExtractor):
             dst_port=dst_port,
             client=client_ep,
             server=server_ep,
-            target=register,
+            target=target,
             value=value,
             quantity=quantity,
             summary=summary,
@@ -251,6 +258,7 @@ class ModbusExtractor(ProtocolExtractor):
                 "function_code": func_code,
                 "unit_id": unit_id,
                 "exception_code": exc,
+                "register": register,       # the raw int register (target may be the flow-key string)
                 # Kept internal (not serialised to the wire dict).
                 "reg_val_list": reg_val_list,
                 "reg_values": reg_values,   # [(register, value), ...] for the flow / state path
@@ -309,8 +317,10 @@ class ModbusExtractor(ProtocolExtractor):
         """
         if evt.raw.get("exception_code") is not None:
             return "modbus:metadata"
-        if evt.op in ("READ_RESPONSE", "WRITE_REQUEST") and evt.target is not None:
-            return f"modbus:hr:{evt.target}"
+        # Derived from the raw int register (a write's target is the flow-key string, not the int).
+        reg = evt.raw.get("register")
+        if reg is not None and evt.op in ("READ_RESPONSE", "WRITE_REQUEST"):
+            return f"modbus:hr:{reg}"
         return None
 
     def coalesce_writes(self, events):
@@ -386,8 +396,8 @@ class ModbusExtractor(ProtocolExtractor):
                     num = _as_number(val)
                     if num is not None:
                         samples.setdefault(key, []).append((evt.timestamp, num))
-            elif evt.op == "WRITE_REQUEST" and evt.target is not None:
-                key = f"modbus:hr:{evt.target}"
+            elif evt.op == "WRITE_REQUEST" and evt.raw.get("register") is not None:
+                key = self.variable_key(evt)   # "modbus:hr:<n>" from the raw int register
                 if roles.setdefault(key, "command") != "command":
                     continue   # already a polled register; do not mix write values in
                 num = _as_number(evt.value)
