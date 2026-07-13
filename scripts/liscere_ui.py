@@ -169,21 +169,21 @@ def build_phase(model):
     return Panel(body, title="current phase", border_style="magenta")
 
 
-def build_verdicts(model):
+def build_events(model):
+    # Newest-first feed (most recent verdict on top). The 'rule' field still arrives in the event
+    # data (kept in model.verdicts); it is simply not shown here — the observer's emission is unchanged.
     tbl = Table(expand=True, show_edge=False, header_style="bold")
     tbl.add_column("target", overflow="fold")
     tbl.add_column("phase")
     tbl.add_column("result")
-    tbl.add_column("rule")
-    for v in model.verdicts:
+    for v in reversed(model.verdicts):
         tbl.add_row(
             _fmt(v.get("target")), _fmt(v.get("phase")),
             Text(_fmt(v.get("result")), style=RESULT_STYLES.get(v.get("result"), "white")),
-            _fmt(v.get("rule")),
         )
     if not model.verdicts:
-        tbl.add_row(Text("no verdicts yet", style="dim"), "", "", "")
-    return Panel(tbl, title="verdicts (last 10)", border_style="cyan")
+        tbl.add_row(Text("no events yet", style="dim"), "", "")
+    return Panel(tbl, title="Events", border_style="cyan")
 
 
 def build_grammar(model):
@@ -208,7 +208,7 @@ def build_others(model):
 def render(model):
     layout = Layout()
     status = "ENDED" if model.ended else "LIVE"
-    live_parts = [build_phase(model), build_verdicts(model)]
+    live_parts = [build_phase(model), build_events(model)]
     for extra in (build_grammar(model), build_others(model)):
         if extra is not None:
             live_parts.append(extra)
@@ -216,7 +216,7 @@ def render(model):
     layout.split_row(Layout(name="map", ratio=3), Layout(name="live", ratio=2))
     layout["map"].update(Panel(build_tree(model), border_style="cyan"))
     layout["live"].update(
-        Panel(Group(*live_parts), title=f"LIVE  ·  {status}  ·  {model.event_count} events",
+        Panel(Group(*live_parts), title=f"{status}  ·  {model.event_count} events",
               border_style=("green" if not model.ended else "dim"))
     )
     return layout
