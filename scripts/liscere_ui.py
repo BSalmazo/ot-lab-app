@@ -44,9 +44,10 @@ class DiscoveryModel:
     """Accumulated view state, updated one event at a time. Knows only what the events carry."""
 
     def __init__(self):
-        self.protocols = OrderedDict()   # label -> {"port": ..., "flows": OrderedDict(key -> flow)}
+        self.protocols = OrderedDict()   # label -> {"port": ..., "flows": OrderedDict(key -> flow)}  (left map)
         self.current_protocol = None
-        self.phase = None                # the latest phase event dict
+        # key -> {nature, datatype, datatype_certain, features, value, phase}  (VARIABLES table)
+        self.variables = OrderedDict()
         self.verdicts = deque(maxlen=10)
         self.grammar = deque(maxlen=5)
         self.others = deque(maxlen=8)
@@ -60,7 +61,8 @@ class DiscoveryModel:
         handler = {
             "protocol_seen": self._protocol_seen,
             "flow_found": self._flow_found,
-            "flow_classified": self._flow_classified,
+            "variable_found": self._variable_found,
+            "variable_value": self._variable_value,
             "state_signal_discovered": self._state_signal,
             "phase": self._phase,
             "verdict": self._verdict,
@@ -96,13 +98,31 @@ class DiscoveryModel:
                 return p["flows"][key]
         return None
 
-    def _flow_classified(self, ev):
-        fl = self._find_flow(str(ev.get("key")))
-        if fl is None:                              # classified before found: create it
-            self._flow_found(ev)
-            fl = self._find_flow(str(ev.get("key")))
-        fl["verdict"] = ev.get("verdict")
+    def _ensure_var(self, key):
+        return self.variables.setdefault(key, {
+            "nature": None, "datatype": None, "datatype_certain": False,
+            "features": None, "value": None, "phase": None,
+        })
+
+    def _variable_found(self, ev):
+        key = str(ev.get("key"))
+        # left map: attach nature + features to the flow node (create if unseen)
+        fl = self._find_flow(key)
+        if fl is None:
+            self._flow_found({"key": key, "role_hint": None})
+            fl = self._find_flow(key)
+        fl["verdict"] = ev.get("nature")
         fl["features"] = ev.get("features") or {}
+        # VARIABLES table row
+        v = self._ensure_var(key)
+        v["nature"] = ev.get("nature")
+        v["datatype"] = ev.get("datatype")
+        v["datatype_certain"] = bool(ev.get("datatype_certain"))
+        v["features"] = ev.get("features") or {}
+
+    def _variable_value(self, ev):
+        # update the value column (create a minimal row if the variable wasn't announced yet)
+        self._ensure_var(str(ev.get("key")))["value"] = ev.get("value")
 
     def _state_signal(self, ev):
         fl = self._find_flow(str(ev.get("key")))
@@ -110,7 +130,9 @@ class DiscoveryModel:
             fl["state"] = True
 
     def _phase(self, ev):
-        self.phase = ev
+        key = ev.get("state_key")
+        if key is not None:                          # phase belongs to a specific state variable
+            self._ensure_var(str(key))["phase"] = ev.get("phase")
 
     def _verdict(self, ev):
         self.verdicts.append(ev)
@@ -159,14 +181,34 @@ def _flow_label(key, fl):
     return t
 
 
-def build_phase(model):
-    p = model.phase
-    if not p:
-        return Panel(Text("waiting for phase…", style="dim"), title="phase", border_style="dim")
-    body = Text()
-    body.append(str(p.get("phase", "?")) + "\n", style="bold")
-    body.append(f"confidence {_fmt(p.get('confidence'))}    level {_fmt(p.get('level'))}", style="dim")
-    return Panel(body, title="current phase", border_style="magenta")
+# Glyph per nature (cosmetic only). Unknown nature -> "?".
+NATURE_SYMBOL = {"STATE": "●", "COMMAND": "○", "CONSTANT_METADATA": "·", "AMBIGUOUS": "?"}
+
+
+def build_variables(model):
+    # One row per discovered variable. Everything is driven by events: variable_found builds rows,
+    # variable_value updates the value, phase updates the phase for the matching state variable.
+    tbl = Table(expand=True, show_edge=False, header_style="bold")
+    tbl.add_column("", width=1)                    # symbol
+    tbl.add_column("key", overflow="fold")
+    tbl.add_column("nature")
+    tbl.add_column("datatype")
+    tbl.add_column("value", justify="right")
+    tbl.add_column("phase")
+    if not model.variables:
+        tbl.add_row("", Text("discovering…", style="dim"), "", "", "", "")
+    for key, v in model.variables.items():
+        nature = v["nature"]
+        style = VERDICT_STYLES.get(nature, "white")
+        sym = Text(NATURE_SYMBOL.get(nature, "?"), style=style)
+        dtype = v["datatype"] if (v["datatype_certain"] and v["datatype"]) else "?"
+        if nature == "CONSTANT_METADATA":
+            value = "—"
+        else:
+            value = _fmt(v["value"]) if v["value"] is not None else "—"
+        phase = _fmt(v["phase"]) if (nature == "STATE" and v["phase"]) else "—"
+        tbl.add_row(sym, key, Text(_fmt(nature), style=style), dtype, value, phase)
+    return Panel(tbl, title="VARIABLES", border_style="magenta")
 
 
 def build_events(model):
@@ -208,12 +250,13 @@ def build_others(model):
 def render(model):
     layout = Layout()
     status = "ENDED" if model.ended else "LIVE"
-    live_parts = [build_phase(model), build_events(model)]
+    live_parts = [build_variables(model), build_events(model)]
     for extra in (build_grammar(model), build_others(model)):
         if extra is not None:
             live_parts.append(extra)
 
-    layout.split_row(Layout(name="map", ratio=3), Layout(name="live", ratio=2))
+    # VARIABLES (right) is now the primary panel, so give it the wider share.
+    layout.split_row(Layout(name="map", ratio=2), Layout(name="live", ratio=3))
     layout["map"].update(Panel(build_tree(model), border_style="cyan"))
     layout["live"].update(
         Panel(Group(*live_parts), title=f"{status}  ·  {model.event_count} events",
