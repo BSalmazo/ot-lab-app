@@ -24,7 +24,8 @@ def get_extractor(name: str = "modbus", config=None) -> ProtocolExtractor:
     """
     key = (name or "modbus").strip().lower()
     if key in ("modbus", "modbus/tcp"):
-        return ModbusExtractor()
+        modbus_cfg = getattr(config, "modbus", None) if config is not None else None
+        return ModbusExtractor(config=modbus_cfg)
     if key in ("opcua", "opc-ua", "opcua/binary", "opc.tcp"):
         opcua_cfg = getattr(config, "opcua", None) if config is not None else None
         return OpcUaExtractor(config=opcua_cfg)

@@ -68,6 +68,30 @@ class OpcUaConfig:
 
 
 @dataclass
+class ModbusConfig:
+    """Modbus/TCP extractor configuration."""
+
+    #: Which holding register carries the process state signal, e.g. 2 for HR[2].
+    #: None => treat every FC3 read-response value as a state sample (valid when a single
+    #: register is polled; see the single-polled-register note in modbus.py). The behavioural
+    #: classifier still keys a separate flow per register regardless of this value.
+    state_signal_register: Optional[int] = None
+
+    #: Write-coalescing window, in seconds. Consecutive WRITE_REQUEST events with an IDENTICAL
+    #: (target register, value) that arrive within this many seconds of the previous one are
+    #: folded into a single COMMAND event (first timestamp wins; a repeat_count is kept). This
+    #: removes protocol-level repetition: an HMI holding a button re-issues the same write every
+    #: ~230 ms at the wire, which is one operator action, not many.
+    #:
+    #: The default 1.0 s is deliberately well below the observed process phase timescales (tens
+    #: of seconds per half-cycle), so coalescing collapses wire repetition without merging two
+    #: genuinely separate actions across a quiet gap. Deriving this window from calibration
+    #: (sample cadence / phase period) is a noted future refinement, not done here.
+    coalesce_window_s: float = 1.0
+
+
+@dataclass
 class ObserverConfig:
     phase: PhaseConfig = field(default_factory=PhaseConfig)
     opcua: OpcUaConfig = field(default_factory=OpcUaConfig)
+    modbus: ModbusConfig = field(default_factory=ModbusConfig)
