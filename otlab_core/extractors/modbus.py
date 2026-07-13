@@ -299,3 +299,66 @@ class ModbusExtractor(ProtocolExtractor):
                 continue
             out.append(float(val))
         return out
+
+    def variable_key(self, evt: NormalizedEvent) -> Optional[str]:
+        """The flow/variable key an event belongs to (the same keys group_flows produces).
+
+        Keyed per holding register ("modbus:hr:<n>"). Exceptions carry no usable register, so they
+        route to a single metadata flow. Used both by group_flows and by the observer to attach a
+        live value to the right variable.
+        """
+        if evt.raw.get("exception_code") is not None:
+            return "modbus:metadata"
+        if evt.op in ("READ_RESPONSE", "WRITE_REQUEST") and evt.target is not None:
+            return f"modbus:hr:{evt.target}"
+        return None
+
+    def group_flows(self, events) -> list:
+        """Group parsed Modbus events into role-hinted flows for the behavioural classifier.
+
+        Mirrors the OPC UA extractor. Role hints reinforce (they do not replace) the core's
+        behavioural decision (otlab_core.engine.discover):
+
+        - FC3 read responses -> one telemetry flow per register (a STATE candidate). A
+          multi-register response routes each value to its own register's flow.
+        - FC6 / FC16 writes -> one COMMAND flow per target register (target-gated, so a command
+          always surfaces even when its value did not parse).
+        - Exceptions -> a single metadata flow.
+
+        datatype is always uncertain ("?"): Modbus declares no types on the wire, so the extractor
+        does not infer one. Values are raw uint16.
+
+        Single-role-per-register assumption: a register is treated as either polled OR commanded
+        (first-seen role wins); read and write values are never mixed into one series. The bench's
+        read and write registers are disjoint, and the core classifier still sees the behaviour.
+        """
+        from ..engine.discover import Flow  # local import: keep extractor import lightweight
+
+        samples: dict = {}    # key -> list[(t, value)]
+        roles: dict = {}      # key -> role_hint
+        for evt in events:
+            if evt.raw.get("exception_code") is not None:
+                roles.setdefault("modbus:metadata", "read")   # no register -> metadata, no sample
+                continue
+            if evt.op == "READ_RESPONSE":
+                for reg, val in evt.raw.get("reg_values") or []:
+                    key = f"modbus:hr:{reg}"
+                    if roles.setdefault(key, "telemetry") != "telemetry":
+                        continue   # already a command register; do not mix read values in
+                    num = _as_number(val)
+                    if num is not None:
+                        samples.setdefault(key, []).append((evt.timestamp, num))
+            elif evt.op == "WRITE_REQUEST" and evt.target is not None:
+                key = f"modbus:hr:{evt.target}"
+                if roles.setdefault(key, "command") != "command":
+                    continue   # already a polled register; do not mix write values in
+                num = _as_number(evt.value)
+                if num is not None:
+                    samples.setdefault(key, []).append((evt.timestamp, num))
+            # READ_REQUEST / WRITE_RESPONSE carry no state or command value -> ignored.
+
+        flows: list = []
+        for key, role in roles.items():
+            flows.append(Flow(key=key, samples=samples.get(key, []), role_hint=role,
+                              datatype=None, datatype_certain=False))
+        return flows
