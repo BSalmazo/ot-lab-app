@@ -313,6 +313,39 @@ class ModbusExtractor(ProtocolExtractor):
             return f"modbus:hr:{evt.target}"
         return None
 
+    def coalesce_writes(self, events):
+        """Fold protocol-level write repetition, yielding events for the rest of the pipeline.
+
+        An HMI holding a button re-issues the SAME write (target register, value) every ~230 ms at
+        the wire. That is one operator action, not many. Consecutive WRITE_REQUEST events with an
+        identical (target, value) arriving within config.coalesce_window_s of the previous such
+        write are folded into the first one (its timestamp wins; raw["repeat_count"] counts the
+        repeats); the duplicates are dropped. A change of value or target, or a gap longer than the
+        window, breaks the run and starts a fresh event.
+
+        Non-write events (reads, responses) pass straight through and do NOT break a run, so writes
+        interleaved with the FC3 poll still coalesce. The window is measured between consecutive
+        writes (sliding), so a continuous burst keeps folding while it stays within the window.
+
+        This is a stateful generator over the event stream, applied identically in the observe,
+        learn and evaluate paths (see the observer's capture layer). It is protocol repetition
+        removal only; it changes no verdict logic.
+        """
+        window = self.config.coalesce_window_s
+        last = None   # {"reg", "val", "ts", "evt"} of the last emitted (kept) write
+        for evt in events:
+            if evt.op == "WRITE_REQUEST" and evt.target is not None:
+                reg, val, ts = evt.target, evt.value, evt.timestamp
+                if (last is not None and last["reg"] == reg and last["val"] == val
+                        and (ts - last["ts"]) <= window):
+                    kept = last["evt"]
+                    kept.raw["repeat_count"] = kept.raw.get("repeat_count", 1) + 1
+                    last["ts"] = ts        # slide the window onto this repeat
+                    continue               # drop the wire repetition
+                evt.raw["repeat_count"] = 1
+                last = {"reg": reg, "val": val, "ts": ts, "evt": evt}
+            yield evt
+
     def group_flows(self, events) -> list:
         """Group parsed Modbus events into role-hinted flows for the behavioural classifier.
 

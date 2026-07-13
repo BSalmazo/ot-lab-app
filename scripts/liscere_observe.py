@@ -185,19 +185,35 @@ def _kill(proc):
             pass
 
 
+def _postprocess(extractor, events):
+    """Apply any extractor-provided stream stage (e.g. Modbus write coalescing).
+
+    Neutral hook: an extractor may expose ``coalesce_writes(events) -> events`` to fold wire-level
+    repetition. Extractors without it (OPC UA) are passed through unchanged. This keeps all
+    protocol-specific stream logic in the extractor while the observer stays protocol-neutral.
+    """
+    stage = getattr(extractor, "coalesce_writes", None)
+    return stage(events) if callable(stage) else events
+
+
 def capture_events(extractor, iface, seconds, log=print):
     """Capture for `seconds`, returning the parsed NormalizedEvents (bounded)."""
     log(f"[capture] {seconds:.0f}s on {iface} ({extractor.name}, filter='{extractor.capture_filter()}')")
     proc = _spawn(extractor, iface)
-    events = []
     start = time.time()
-    try:
+
+    def _parsed():
         for line in proc.stdout:
             evt = extractor.parse_line(line.rstrip("\n").split("\t"))
             if evt is not None:
-                events.append(evt)
+                yield evt
             if time.time() - start >= seconds:
                 break
+
+    events = []
+    try:
+        for evt in _postprocess(extractor, _parsed()):
+            events.append(evt)
     finally:
         _kill(proc)
     log(f"[capture] {len(events)} events")
@@ -207,11 +223,15 @@ def capture_events(extractor, iface, seconds, log=print):
 def capture_stream(extractor, iface):
     """Yield parsed NormalizedEvents until interrupted (for continuous evaluate)."""
     proc = _spawn(extractor, iface)
-    try:
+
+    def _parsed():
         for line in proc.stdout:
             evt = extractor.parse_line(line.rstrip("\n").split("\t"))
             if evt is not None:
                 yield evt
+
+    try:
+        yield from _postprocess(extractor, _parsed())
     finally:
         _kill(proc)
 
