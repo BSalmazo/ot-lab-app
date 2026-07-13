@@ -53,6 +53,7 @@ class DiscoveryModel:
         self.others = deque(maxlen=8)
         self.event_count = 0
         self.ended = False
+        self.stage = None                # pipeline stage: "observe" | "learn" | "evaluate" | None
 
     # -- event intake -----------------------------------------------------
     def update(self, ev):
@@ -67,6 +68,7 @@ class DiscoveryModel:
             "phase": self._phase,
             "verdict": self._verdict,
             "grammar_learned": self._grammar,
+            "stage": self._stage,
         }.get(t)
         if handler:
             handler(ev)
@@ -140,6 +142,9 @@ class DiscoveryModel:
     def _grammar(self, ev):
         self.grammar.append(ev)
 
+    def _stage(self, ev):
+        self.stage = ev.get("stage")
+
 
 # -- rendering ------------------------------------------------------------
 
@@ -203,23 +208,27 @@ def _fmt_value(x):
 
 
 def build_variables(model):
-    # One row per discovered variable. Everything is driven by events: variable_found builds rows,
+    # One row per PROCESS variable. Everything is driven by events: variable_found builds rows,
     # variable_value updates the value, phase updates the phase for the matching state variable.
+    # Metadata (CONSTANT_METADATA) is not part of the process, so it is not shown here — it stays
+    # in the DISCOVERY MAP on the left. All non-key columns have FIXED widths so the table never
+    # reflows as values change digits; only the flexible "key" column absorbs the panel width.
     tbl = Table(expand=True, show_edge=False, header_style="bold")
-    tbl.add_column("", width=1)                    # symbol
-    tbl.add_column("key", overflow="fold")
-    tbl.add_column("nature")
-    tbl.add_column("datatype")
-    tbl.add_column("value", justify="right")
-    tbl.add_column("phase")
-    if not model.variables:
+    tbl.add_column("", width=1)                                  # symbol
+    tbl.add_column("key", overflow="fold")                       # flexible: absorbs remaining width
+    tbl.add_column("nature", width=9, no_wrap=True)
+    tbl.add_column("datatype", width=8, no_wrap=True)
+    tbl.add_column("value", justify="right", width=11, no_wrap=True)
+    tbl.add_column("phase", width=8, no_wrap=True)
+    rows = [(k, v) for k, v in model.variables.items() if v["nature"] != "CONSTANT_METADATA"]
+    if not rows:
         tbl.add_row("", Text("discovering…", style="dim"), "", "", "", "")
-    for key, v in model.variables.items():
+    for key, v in rows:
         nature = v["nature"]
         style = VERDICT_STYLES.get(nature, "white")
         sym = Text(NATURE_SYMBOL.get(nature, "?"), style=style)
         dtype = v["datatype"] if (v["datatype_certain"] and v["datatype"]) else "?"
-        value = "—" if nature == "CONSTANT_METADATA" else _fmt_value(v["value"])
+        value = _fmt_value(v["value"])
         phase = _fmt(v["phase"]) if (nature == "STATE" and v["phase"]) else "—"
         label = NATURE_LABEL.get(nature, _fmt(nature))
         tbl.add_row(sym, key, Text(label, style=style), dtype, value, phase)
@@ -253,9 +262,21 @@ def build_others(model):
     return Panel(t, title="other events (unorganised)", border_style="yellow")
 
 
+# Pipeline stage -> header label. "evaluate" (continuous watch) reads "LIVE".
+_STAGE_LABEL = {"observe": "OBSERVE", "learn": "LEARN", "evaluate": "LIVE"}
+
+
+def _status_label(model):
+    if model.ended:
+        return "ENDED"
+    # Before the first stage event, the run has just begun -> OBSERVE (the pipeline always
+    # starts by observing).
+    return _STAGE_LABEL.get(model.stage, "OBSERVE")
+
+
 def render(model):
     layout = Layout()
-    status = "ENDED" if model.ended else "LIVE"
+    status = _status_label(model)
     live_parts = [build_variables(model), build_events(model)]
     # The "grammar (learn)" panel was intentionally removed; grammar_learned events are still
     # accepted by the model, just no longer shown.
