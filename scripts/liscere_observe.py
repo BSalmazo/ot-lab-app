@@ -290,14 +290,40 @@ def run_evaluate(extractor, events, tracker, grammar, log=None, emitter=None):
     return out
 
 
+def evaluate_continuous(extractor, iface, tracker, grammar, log=None, emitter=None):
+    """Phase 3: watch continuously and judge every write against the FROZEN grammar until SIGINT.
+
+    DESIGN INVARIANT — no re-learning in phase 3. ``grammar`` is passed READ-ONLY into run_evaluate,
+    which constructs no GrammarLearner and only reads the grammar via ``evaluate()``. The baseline
+    learned in phase 2 is therefore never updated while evaluating: continuous watching, not
+    continuous learning. This is deliberate — it prevents baseline poisoning, i.e. an anomalous
+    action seen during evaluate can never be absorbed into "normal".
+
+    On Ctrl-C the capture stream is torn down (capture_stream's finally kills tshark), stdout is
+    already flushed per line, and we return cleanly so the JSON stream ends and the UI freezes its
+    final frame. No traceback on SIGINT.
+    """
+    log = log or (lambda _m: None)
+    log("[evaluate] continuous — judging writes against the frozen grammar (Ctrl-C to stop)")
+    try:
+        run_evaluate(extractor, capture_stream(extractor, iface), tracker, grammar, log=log, emitter=emitter)
+    except KeyboardInterrupt:
+        log("[evaluate] stopped")
+    return 0
+
+
 # --------------------------------------------------------------------------- CLI
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Liscere passive observer (discover -> calibrate -> learn/evaluate)")
+    ap = argparse.ArgumentParser(
+        description="Liscere passive observer — single run: observe -> learn -> continuous evaluate (Ctrl-C to stop)")
     ap.add_argument("--iface", required=True, help="capture interface (mirror port)")
-    ap.add_argument("--observe", type=float, default=60.0, help="observe window seconds (discover + calibrate)")
-    ap.add_argument("--learn", type=float, default=None, help="learn-mode window seconds (writes grammar)")
-    ap.add_argument("--grammar", default=None, help="grammar JSON: input for evaluate, or output path for --learn")
+    ap.add_argument("--observe", type=float, default=60.0, help="phase 1: observe window seconds (discover + calibrate)")
+    ap.add_argument("--learn", type=float, default=None,
+                    help="phase 2: learn-window seconds; then phase 3 evaluates continuously until Ctrl-C")
+    ap.add_argument("--grammar", default=None,
+                    help="with --learn: write the learned grammar here and stop (legacy learn-to-file); "
+                         "without --learn: load this grammar and evaluate continuously")
     ap.add_argument("--profile", default=None, help="optional path to write the auto-calibrated phase profile")
     ap.add_argument("--emit-json", action=argparse.BooleanOptionalAction, default=True,
                     help="emit structured discovery events as JSON Lines on stdout (human logs go to "
@@ -315,37 +341,48 @@ def main(argv=None):
         return 2
     emitter.protocol_seen(extractor)
 
+    # Phase 1 — OBSERVE: discover flows, identify the state signal, auto-calibrate.
     obs = capture_events(extractor, args.iface, args.observe, log=log)
     calib, _disc, _state = discover_and_calibrate(extractor, obs, profile_path=args.profile, log=log, emitter=emitter)
     if calib is None:
         return 2
+    # One tracker carries phase inference continuously through learn and into evaluate.
     tracker = PhaseTracker(calib.config)
 
     if args.learn is not None:
+        # Phase 2 — LEARN: learn the coherence grammar from this window. Temporal trust: the
+        # environment is controlled during learn, so what is seen here is the baseline "normal".
         ev = capture_events(extractor, args.iface, args.learn, log=log)
         doc = run_learn(extractor, ev, tracker, emitter=emitter)
-        out = args.grammar or "learned_grammar.json"
-        with open(out, "w") as f:
-            json.dump(doc, f, indent=2)
-        log(f"[learn] grammar -> {out}")
         for k, info in doc.get("grammar", {}).items():
-            log(f"  {k}: coherent_phases={info.get('learned_coherent_phases')} "
+            log(f"[learn] {k}: coherent_phases={info.get('learned_coherent_phases')} "
                 f"from {info.get('total_writes_observed')} writes")
-        return 0
+
+        if args.grammar:
+            # Legacy learn-to-file flow: write the grammar and stop (no evaluate).
+            with open(args.grammar, "w") as f:
+                json.dump(doc, f, indent=2)
+            log(f"[learn] grammar -> {args.grammar} (stopping; omit --grammar to chain into continuous evaluate)")
+            return 0
+
+        # Phase 3 — EVALUATE (continuous), the single-run default: freeze the just-learned grammar
+        # and watch until Ctrl-C. No re-learning (see evaluate_continuous).
+        return evaluate_continuous(extractor, args.iface, tracker, doc.get("grammar", {}), log=log, emitter=emitter)
 
     if args.grammar:
+        # Evaluate a previously saved grammar (no learn window): watch continuously.
         with open(args.grammar) as f:
             grammar = json.load(f).get("grammar", {})
-        log("[evaluate] judging writes against learned grammar (Ctrl-C to stop)")
-        try:
-            run_evaluate(extractor, capture_stream(extractor, args.iface), tracker, grammar, log=log, emitter=emitter)
-        except KeyboardInterrupt:
-            log("[evaluate] stopped")
-        return 0
+        return evaluate_continuous(extractor, args.iface, tracker, grammar, log=log, emitter=emitter)
 
-    print("nothing to do: pass --learn <secs> or --grammar <path>", file=sys.stderr)
+    print("nothing to do: pass --learn <secs> for a single observe->learn->evaluate run, "
+          "or --grammar <path> to evaluate a saved grammar", file=sys.stderr)
     return 1
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        # Ctrl-C outside the evaluate loop (e.g. during observe/learn): exit cleanly, no traceback.
+        sys.exit(130)
