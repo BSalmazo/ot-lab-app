@@ -84,6 +84,7 @@ class Emitter:
         self.enabled = enabled
         self.out = out or sys.stdout
         self._last_phase = None
+        self._last_values = {}   # key -> last emitted value, to de-dup variable_value events
 
     def _emit(self, event):
         if self.enabled:
@@ -99,10 +100,12 @@ class Emitter:
     def flow_found(self, flow):
         self._emit({"type": "flow_found", "key": flow.key, "role_hint": flow.role_hint})
 
-    def flow_classified(self, verdict):
+    def variable_found(self, verdict):
+        # A discovered variable, first-class. `nature` is literally the behavioural verdict.
         f = verdict.features
         self._emit({
-            "type": "flow_classified", "key": verdict.key, "verdict": verdict.verdict,
+            "type": "variable_found", "key": verdict.key, "nature": verdict.verdict,
+            "datatype": verdict.datatype, "datatype_certain": verdict.datatype_certain,
             "features": {
                 "unique_values": f.unique_values,
                 "value_range": round(f.value_range, 4),
@@ -111,15 +114,26 @@ class Emitter:
             },
         })
 
+    def variable_value(self, key, value):
+        # The current value of a variable (latest state sample / last written command value),
+        # de-duped so an unchanged value is not re-emitted. Only key + value; no name or meaning.
+        if key is None:
+            return
+        if self._last_values.get(key) != value:
+            self._last_values[key] = value
+            self._emit({"type": "variable_value", "key": key, "value": value})
+
     def state_signal_discovered(self, key):
         self._emit({"type": "state_signal_discovered", "key": key})
 
-    def phase(self, tracker):
+    def phase(self, tracker, state_key=None):
+        # state_key identifies which state variable this phase refers to (prep for multi-state;
+        # today there is one). `level` is that variable's current value, not a domain "level".
         if tracker.phase != self._last_phase:
             self._last_phase = tracker.phase
             level = tracker.last_level
             self._emit({
-                "type": "phase", "phase": tracker.phase,
+                "type": "phase", "state_key": state_key, "phase": tracker.phase,
                 "confidence": round(tracker.confidence, 3),
                 "level": round(level, 4) if level is not None else None,
             })
@@ -215,7 +229,7 @@ def discover_and_calibrate(extractor, events, profile_path=None, log=print, emit
     disc = classify_flows(flows)
     if emitter:
         for v in disc.flows:
-            emitter.flow_classified(v)
+            emitter.variable_found(v)
 
     log("[discover] flows:")
     for v in disc.flows:
@@ -247,16 +261,20 @@ def discover_and_calibrate(extractor, events, profile_path=None, log=print, emit
     return calib, disc, state_flow
 
 
-def _feed_or_judge(extractor, evt, tracker, grammar, learner=None, log=None, emitter=None):
+def _feed_or_judge(extractor, evt, tracker, grammar, learner=None, log=None, emitter=None, state_key=None):
     """Advance the tracker with any state samples, or learn/judge a write. Returns a Verdict or None."""
     samples = extractor.extract_state_samples(evt)
     if samples:
         for s in samples:
             tracker.update(s)
             if emitter:
-                emitter.phase(tracker)   # de-duped: emits only on phase change
+                emitter.phase(tracker, state_key)     # de-duped: emits only on phase change
+                emitter.variable_value(state_key, s)  # live current value of the state variable
         return None
     if evt.op == "WRITE_REQUEST" and evt.target is not None:
+        if emitter:
+            # last written value of this command variable (key as group_flows produced it)
+            emitter.variable_value(_variable_key(extractor, evt), evt.value)
         if learner is not None:
             learned = learner.observe(evt.target, tracker.phase, tracker.confidence, tracker.transitioning)
             if emitter and learned:
@@ -272,25 +290,31 @@ def _feed_or_judge(extractor, evt, tracker, grammar, learner=None, log=None, emi
     return None
 
 
-def run_learn(extractor, events, tracker, emitter=None):
+def _variable_key(extractor, evt):
+    """The variable key for an event, if the extractor exposes the mapping; else None."""
+    fn = getattr(extractor, "variable_key", None)
+    return fn(evt) if fn else None
+
+
+def run_learn(extractor, events, tracker, emitter=None, state_key=None):
     """Learn mode: feed state samples, accumulate the artefact->phase grammar from writes."""
     learner = GrammarLearner()
     for evt in events:
-        _feed_or_judge(extractor, evt, tracker, None, learner=learner, emitter=emitter)
+        _feed_or_judge(extractor, evt, tracker, None, learner=learner, emitter=emitter, state_key=state_key)
     return learner.export_document()
 
 
-def run_evaluate(extractor, events, tracker, grammar, log=None, emitter=None):
+def run_evaluate(extractor, events, tracker, grammar, log=None, emitter=None, state_key=None):
     """Evaluate mode: feed state samples, judge each write against the learned grammar."""
     out = []
     for evt in events:
-        v = _feed_or_judge(extractor, evt, tracker, grammar, log=log, emitter=emitter)
+        v = _feed_or_judge(extractor, evt, tracker, grammar, log=log, emitter=emitter, state_key=state_key)
         if v is not None:
             out.append(v)
     return out
 
 
-def evaluate_continuous(extractor, iface, tracker, grammar, log=None, emitter=None):
+def evaluate_continuous(extractor, iface, tracker, grammar, log=None, emitter=None, state_key=None):
     """Phase 3: watch continuously and judge every write against the FROZEN grammar until SIGINT.
 
     DESIGN INVARIANT — no re-learning in phase 3. ``grammar`` is passed READ-ONLY into run_evaluate,
@@ -306,7 +330,8 @@ def evaluate_continuous(extractor, iface, tracker, grammar, log=None, emitter=No
     log = log or (lambda _m: None)
     log("[evaluate] continuous — judging writes against the frozen grammar (Ctrl-C to stop)")
     try:
-        run_evaluate(extractor, capture_stream(extractor, iface), tracker, grammar, log=log, emitter=emitter)
+        run_evaluate(extractor, capture_stream(extractor, iface), tracker, grammar,
+                     log=log, emitter=emitter, state_key=state_key)
     except KeyboardInterrupt:
         log("[evaluate] stopped")
     return 0
@@ -343,9 +368,10 @@ def main(argv=None):
 
     # Phase 1 — OBSERVE: discover flows, identify the state signal, auto-calibrate.
     obs = capture_events(extractor, args.iface, args.observe, log=log)
-    calib, _disc, _state = discover_and_calibrate(extractor, obs, profile_path=args.profile, log=log, emitter=emitter)
+    calib, _disc, state_flow = discover_and_calibrate(extractor, obs, profile_path=args.profile, log=log, emitter=emitter)
     if calib is None:
         return 2
+    state_key = state_flow.key   # the discovered state variable's key (for phase / variable_value)
     # One tracker carries phase inference continuously through learn and into evaluate.
     tracker = PhaseTracker(calib.config)
 
@@ -353,7 +379,7 @@ def main(argv=None):
         # Phase 2 — LEARN: learn the coherence grammar from this window. Temporal trust: the
         # environment is controlled during learn, so what is seen here is the baseline "normal".
         ev = capture_events(extractor, args.iface, args.learn, log=log)
-        doc = run_learn(extractor, ev, tracker, emitter=emitter)
+        doc = run_learn(extractor, ev, tracker, emitter=emitter, state_key=state_key)
         for k, info in doc.get("grammar", {}).items():
             log(f"[learn] {k}: coherent_phases={info.get('learned_coherent_phases')} "
                 f"from {info.get('total_writes_observed')} writes")
@@ -367,13 +393,15 @@ def main(argv=None):
 
         # Phase 3 — EVALUATE (continuous), the single-run default: freeze the just-learned grammar
         # and watch until Ctrl-C. No re-learning (see evaluate_continuous).
-        return evaluate_continuous(extractor, args.iface, tracker, doc.get("grammar", {}), log=log, emitter=emitter)
+        return evaluate_continuous(extractor, args.iface, tracker, doc.get("grammar", {}),
+                                   log=log, emitter=emitter, state_key=state_key)
 
     if args.grammar:
         # Evaluate a previously saved grammar (no learn window): watch continuously.
         with open(args.grammar) as f:
             grammar = json.load(f).get("grammar", {})
-        return evaluate_continuous(extractor, args.iface, tracker, grammar, log=log, emitter=emitter)
+        return evaluate_continuous(extractor, args.iface, tracker, grammar,
+                                   log=log, emitter=emitter, state_key=state_key)
 
     print("nothing to do: pass --learn <secs> for a single observe->learn->evaluate run, "
           "or --grammar <path> to evaluate a saved grammar", file=sys.stderr)

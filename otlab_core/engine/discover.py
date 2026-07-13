@@ -45,6 +45,10 @@ class Flow:
     key: str
     samples: List[Tuple[float, float]]     # (timestamp, value) in order
     role_hint: str = "unknown"             # "telemetry" | "command" | "read" | "unknown"
+    # The wire data type, WHEN the protocol declares it (OPC UA Variant Type). None when the
+    # protocol carries no type (Modbus) or the variant is unmapped; datatype_certain says which.
+    datatype: Optional[str] = None
+    datatype_certain: bool = False
 
 
 @dataclass
@@ -62,6 +66,8 @@ class FlowVerdict:
     role_hint: str
     features: FlowFeatures
     verdict: str                            # STATE | COMMAND | CONSTANT_METADATA | AMBIGUOUS
+    datatype: Optional[str] = None          # carried through from the Flow (protocol-declared type)
+    datatype_certain: bool = False
 
 
 @dataclass
@@ -143,7 +149,8 @@ def classify_flows(flows: Sequence[Flow]) -> DiscoveryResult:
         values = [float(v) for _, v in fl.samples]
         feat = _features(values)
         verdicts.append(FlowVerdict(key=fl.key, role_hint=fl.role_hint, features=feat,
-                                    verdict=_classify(feat, fl.role_hint)))
+                                    verdict=_classify(feat, fl.role_hint),
+                                    datatype=fl.datatype, datatype_certain=fl.datatype_certain))
     states = [v for v in verdicts if v.verdict == "STATE"]
     state_key = max(states, key=lambda v: v.features.unique_values).key if states else None
     return DiscoveryResult(flows=verdicts, state_flow_key=state_key)

@@ -44,14 +44,14 @@ def publish_event(t, samples):
     return NormalizedEvent(
         timestamp=t, protocol="OPCUA/binary", op="PUBLISH_RESPONSE", direction="response",
         target=None, value=(samples[0] if samples else None),
-        raw={"float_samples": list(samples), "value_is_float": True},
+        raw={"float_samples": list(samples), "value_is_float": True, "variant_type": 0x0A},
     )
 
 
 def write_event(t, target, value):
     return NormalizedEvent(
         timestamp=t, protocol="OPCUA/binary", op="WRITE_REQUEST", direction="request",
-        target=target, value=value, raw={},
+        target=target, value=value, raw={"variant_type": 0x0A},
     )
 
 
@@ -109,12 +109,17 @@ def main():
         check("telemetry range ~= 100", 95.0 <= f.value_range <= 105.0, f"(={f.value_range:.2f})")
         check("telemetry median_step ~= 0.167", 0.14 <= f.median_step <= 0.19, f"(={f.median_step:.4f})")
         check("telemetry reversals >= 1 (measured ~3)", f.reversals >= 1, f"(={f.reversals})")
+        check("telemetry datatype == Float (certain, from variant 0x0a)",
+              tele.datatype == "Float" and tele.datatype_certain is True,
+              f"(={tele.datatype}, certain={tele.datatype_certain})")
     if write:
         check("write verdict == COMMAND", write.verdict == "COMMAND")
         check("write is static (1 unique)", write.features.unique_values == 1)
+        check("write datatype == Float (certain)", write.datatype == "Float" and write.datatype_certain)
     if read:
         check("read verdict == CONSTANT_METADATA", read.verdict == "CONSTANT_METADATA")
         check("read is static (<=5 unique)", read.features.unique_values <= 5)
+        check("read datatype uncertain (no variant on the wire)", read.datatype_certain is False)
 
     states = result.state_flows()
     check("exactly ONE flow discovered as STATE", len(states) == 1, f"(={[s.key for s in states]})")

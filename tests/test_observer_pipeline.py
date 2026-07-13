@@ -30,12 +30,12 @@ def pub(t, samples):
     return NormalizedEvent(timestamp=t, protocol="OPCUA/binary", op="PUBLISH_RESPONSE",
                            direction="response", target=None,
                            value=(samples[0] if samples else None),
-                           raw={"float_samples": list(samples), "value_is_float": True})
+                           raw={"float_samples": list(samples), "value_is_float": True, "variant_type": 0x0A})
 
 
 def wr(t, target, value):
     return NormalizedEvent(timestamp=t, protocol="OPCUA/binary", op="WRITE_REQUEST",
-                           direction="request", target=target, value=value, raw={})
+                           direction="request", target=target, value=value, raw={"variant_type": 0x0A})
 
 
 def triangle(step=0.167, turns=(0, 100, 40, 60, 40), noise=0.01, seed=0):

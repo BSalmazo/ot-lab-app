@@ -23,6 +23,7 @@ already consumes (state_signal_value + a normalized target/value). engine/ is un
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any, List, Optional
 
 from ..config import OpcUaConfig
@@ -42,6 +43,23 @@ SERVICE_OP = {
 # OPC UA BuiltInType ids we read a scalar value from.
 VARIANT_FLOAT = 0x0A
 VARIANT_INT32 = 0x06
+
+# OPC UA Variant Type (BuiltInType id) -> human type name. The wire DECLARES this
+# (opcua.variant.has_value), so a datatype here is certain. Unmapped ids -> None (uncertain).
+VARIANT_TYPES = {
+    0x01: "Boolean", 0x02: "SByte", 0x03: "Byte",
+    0x04: "Int16", 0x05: "UInt16", 0x06: "Int32", 0x07: "UInt32",
+    0x08: "Int64", 0x09: "UInt64", 0x0A: "Float", 0x0B: "Double",
+    0x0C: "String",
+}
+
+
+def variant_typename(variant):
+    """(typename, certain). Certain iff the protocol declared a variant we recognise."""
+    if variant is None:
+        return None, False
+    name = VARIANT_TYPES.get(variant)
+    return name, (name is not None)
 
 # Column order MUST match tshark_fields() below (the runtime builds `-e` from it in order).
 _FIELDS = [
@@ -324,23 +342,55 @@ class OpcUaExtractor(ProtocolExtractor):
         """
         from ..engine.discover import Flow  # local import: keep extractor import lightweight
 
-        telemetry: list = []
-        commands: dict = {}
-        reads: list = []
+        # Per flow: (t, value) samples plus the variant type ids seen, so each flow's declared
+        # data type (the modal Variant Type) travels with it.
+        samples: dict = {}    # key -> list[(t, value)]
+        roles: dict = {}      # key -> role_hint
+        variants: dict = {}   # key -> list[variant_type id]
         for evt in events:
+            key = self.variable_key(evt)
+            if key is None:
+                continue
+            vt = evt.raw.get("variant_type")
             if evt.op == "PUBLISH_RESPONSE":
                 for s in self.extract_state_samples(evt):
-                    telemetry.append((evt.timestamp, float(s)))
-            elif evt.op == "WRITE_REQUEST" and evt.target is not None and evt.value is not None:
-                commands.setdefault(evt.target, []).append((evt.timestamp, float(evt.value)))
+                    samples.setdefault(key, []).append((evt.timestamp, float(s)))
+                roles.setdefault(key, "telemetry")
+            elif evt.op == "WRITE_REQUEST" and evt.value is not None:
+                samples.setdefault(key, []).append((evt.timestamp, float(evt.value)))
+                roles.setdefault(key, "command")
             elif evt.op == "READ_RESPONSE" and evt.value is not None:
-                reads.append((evt.timestamp, float(evt.value)))
+                samples.setdefault(key, []).append((evt.timestamp, float(evt.value)))
+                roles.setdefault(key, "read")
+            else:
+                continue
+            if vt is not None:
+                variants.setdefault(key, []).append(vt)
 
         flows: list = []
-        if telemetry:
-            flows.append(Flow(key="opcua:publish:telemetry", samples=telemetry, role_hint="telemetry"))
-        for target, samples in commands.items():
-            flows.append(Flow(key=f"opcua:write:{target}", samples=samples, role_hint="command"))
-        if reads:
-            flows.append(Flow(key="opcua:read", samples=reads, role_hint="read"))
+        for key, series in samples.items():
+            datatype, certain = self._modal_datatype(variants.get(key, []))
+            flows.append(Flow(key=key, samples=series, role_hint=roles[key],
+                              datatype=datatype, datatype_certain=certain))
         return flows
+
+    @staticmethod
+    def _modal_datatype(variant_ids):
+        """The declared type for a flow: the most common Variant Type across its samples."""
+        if not variant_ids:
+            return None, False
+        modal = Counter(variant_ids).most_common(1)[0][0]
+        return variant_typename(modal)
+
+    def variable_key(self, evt):
+        """The flow/variable key an event belongs to (the same keys group_flows produces).
+
+        Used both by group_flows and by the observer to attach a live value to the right variable.
+        """
+        if evt.op == "PUBLISH_RESPONSE":
+            return "opcua:publish:telemetry"      # DEBT D1: single merged telemetry flow (level 4b)
+        if evt.op == "READ_RESPONSE":
+            return "opcua:read"
+        if evt.op == "WRITE_REQUEST" and evt.target is not None:
+            return f"opcua:write:{evt.target}"
+        return None
