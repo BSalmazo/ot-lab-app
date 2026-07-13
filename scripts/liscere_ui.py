@@ -166,7 +166,8 @@ def _flow_label(key, fl):
     t.append(key)
     if fl["verdict"]:
         t.append("  → ")
-        t.append(fl["verdict"], style=VERDICT_STYLES.get(fl["verdict"], "white"))
+        t.append(NATURE_LABEL.get(fl["verdict"], fl["verdict"]),
+                 style=VERDICT_STYLES.get(fl["verdict"], "white"))
         f = fl["features"] or {}
         if f:
             t.append(
@@ -183,6 +184,22 @@ def _flow_label(key, fl):
 
 # Glyph per nature (cosmetic only). Unknown nature -> "?".
 NATURE_SYMBOL = {"STATE": "●", "COMMAND": "○", "CONSTANT_METADATA": "·", "AMBIGUOUS": "?"}
+# Shorter display label per nature (the underlying nature value is unchanged in the data).
+NATURE_LABEL = {"CONSTANT_METADATA": "METADATA"}
+
+
+def _fmt_value(x):
+    """VARIABLES value cell: floats to at most one decimal (36.4, not 36.406); integer types as
+    integers; whole-valued floats without a trailing .0; None -> em dash."""
+    if x is None:
+        return "—"
+    if isinstance(x, bool):
+        return str(int(x))
+    if isinstance(x, int):
+        return str(x)
+    if isinstance(x, float):
+        return str(int(x)) if x.is_integer() else f"{x:.1f}"
+    return str(x)
 
 
 def build_variables(model):
@@ -202,12 +219,10 @@ def build_variables(model):
         style = VERDICT_STYLES.get(nature, "white")
         sym = Text(NATURE_SYMBOL.get(nature, "?"), style=style)
         dtype = v["datatype"] if (v["datatype_certain"] and v["datatype"]) else "?"
-        if nature == "CONSTANT_METADATA":
-            value = "—"
-        else:
-            value = _fmt(v["value"]) if v["value"] is not None else "—"
+        value = "—" if nature == "CONSTANT_METADATA" else _fmt_value(v["value"])
         phase = _fmt(v["phase"]) if (nature == "STATE" and v["phase"]) else "—"
-        tbl.add_row(sym, key, Text(_fmt(nature), style=style), dtype, value, phase)
+        label = NATURE_LABEL.get(nature, _fmt(nature))
+        tbl.add_row(sym, key, Text(label, style=style), dtype, value, phase)
     return Panel(tbl, title="VARIABLES", border_style="magenta")
 
 
@@ -228,15 +243,6 @@ def build_events(model):
     return Panel(tbl, title="Events", border_style="cyan")
 
 
-def build_grammar(model):
-    if not model.grammar:
-        return None
-    t = Text()
-    for g in model.grammar:
-        t.append(f"learned {_fmt(g.get('target'))} → {_fmt(g.get('phase'))}\n", style="green")
-    return Panel(t, title="grammar (learn)", border_style="green")
-
-
 def build_others(model):
     if not model.others:
         return None
@@ -251,9 +257,11 @@ def render(model):
     layout = Layout()
     status = "ENDED" if model.ended else "LIVE"
     live_parts = [build_variables(model), build_events(model)]
-    for extra in (build_grammar(model), build_others(model)):
-        if extra is not None:
-            live_parts.append(extra)
+    # The "grammar (learn)" panel was intentionally removed; grammar_learned events are still
+    # accepted by the model, just no longer shown.
+    others = build_others(model)
+    if others is not None:
+        live_parts.append(others)
 
     # VARIABLES (right) is now the primary panel, so give it the wider share.
     layout.split_row(Layout(name="map", ratio=2), Layout(name="live", ratio=3))
