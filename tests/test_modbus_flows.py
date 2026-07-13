@@ -134,12 +134,26 @@ def main():
           tracker.phase == "RISING", f"(={tracker.phase})")
 
     # --- write coalescing ---
+    # A SHORT burst (span < window) collapses to one event.
     exc = ModbusExtractor(ModbusConfig(coalesce_window_s=1.0))
-    burst = [fc6_write(exc, i * 0.23, reg=0, val=100) for i in range(6)]
-    out = list(exc.coalesce_writes(iter(burst)))
-    check("burst of 6 identical writes collapses to 1", len(out) == 1, f"(n={len(out)})")
-    check("collapsed write keeps repeat_count", out and out[0].raw.get("repeat_count") == 6,
+    short = [fc6_write(exc, i * 0.23, reg=0, val=100) for i in range(4)]   # span 0.69 s < 1.0 s
+    out = list(exc.coalesce_writes(iter(short)))
+    check("short burst (span < window) collapses to 1", len(out) == 1, f"(n={len(out)})")
+    check("collapsed write keeps repeat_count", out and out[0].raw.get("repeat_count") == 4,
           f"(={out[0].raw.get('repeat_count') if out else None})")
+
+    # A GAPLESS burst longer than the window splits into ceil(duration / window) events, so a phase
+    # reversal inside a held button is not masked. 17 writes at 0.25 s span 4.0 s, window 1.0 s.
+    import math
+    excL = ModbusExtractor(ModbusConfig(coalesce_window_s=1.0))
+    longburst = [fc6_write(excL, i * 0.25, reg=0, val=100) for i in range(17)]
+    outL = list(excL.coalesce_writes(iter(longburst)))
+    span = longburst[-1].timestamp - longburst[0].timestamp
+    check("gapless burst longer than window splits (ceil(duration/window))",
+          len(outL) == math.ceil(span / 1.0), f"(n={len(outL)}, expected {math.ceil(span/1.0)})")
+    check("split preserves every repeat (counts sum to input)",
+          sum(e.raw.get("repeat_count", 0) for e in outL) == 17,
+          f"(sum={sum(e.raw.get('repeat_count', 0) for e in outL)})")
 
     exc2 = ModbusExtractor(ModbusConfig(coalesce_window_s=1.0))
     vch = [fc6_write(exc2, 0.0, reg=0, val=100), fc6_write(exc2, 0.2, reg=0, val=100),

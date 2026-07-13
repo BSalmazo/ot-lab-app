@@ -318,32 +318,37 @@ class ModbusExtractor(ProtocolExtractor):
 
         An HMI holding a button re-issues the SAME write (target register, value) every ~230 ms at
         the wire. That is one operator action, not many. Consecutive WRITE_REQUEST events with an
-        identical (target, value) arriving within config.coalesce_window_s of the previous such
-        write are folded into the first one (its timestamp wins; raw["repeat_count"] counts the
-        repeats); the duplicates are dropped. A change of value or target, or a gap longer than the
-        window, breaks the run and starts a fresh event.
+        identical (register, value) are folded into the first event of the run (its timestamp wins;
+        raw["repeat_count"] counts the repeats); the duplicates are dropped.
+
+        A run breaks -- the next write starts a fresh event -- on ANY of:
+          - a change of value or target register;
+          - a gap from the previous write greater than config.coalesce_window_s;
+          - the run's total span (this write minus the run's FIRST timestamp) exceeding
+            config.coalesce_window_s.
+        The last, span-based bound is what keeps a CONTINUOUS burst from collapsing without limit: a
+        gapless 230 ms burst longer than the window splits into ceil(duration / window) events, so a
+        phase reversal inside a held button still yields distinct verdicts on each side.
 
         Non-write events (reads, responses) pass straight through and do NOT break a run, so writes
-        interleaved with the FC3 poll still coalesce. The window is measured between consecutive
-        writes (sliding), so a continuous burst keeps folding while it stays within the window.
-
-        This is a stateful generator over the event stream, applied identically in the observe,
-        learn and evaluate paths (see the observer's capture layer). It is protocol repetition
-        removal only; it changes no verdict logic.
+        interleaved with the FC3 poll still coalesce. Stateful generator, applied identically in the
+        observe / learn / evaluate paths (see the observer's capture layer); it removes protocol
+        repetition only and changes no verdict logic.
         """
         window = self.config.coalesce_window_s
-        last = None   # {"reg", "val", "ts", "evt"} of the last emitted (kept) write
+        run = None   # {"reg", "val", "start_ts", "last_ts", "evt"} of the open run
         for evt in events:
             if evt.op == "WRITE_REQUEST" and evt.target is not None:
                 reg, val, ts = evt.target, evt.value, evt.timestamp
-                if (last is not None and last["reg"] == reg and last["val"] == val
-                        and (ts - last["ts"]) <= window):
-                    kept = last["evt"]
+                if (run is not None and run["reg"] == reg and run["val"] == val
+                        and (ts - run["last_ts"]) <= window
+                        and (ts - run["start_ts"]) <= window):
+                    kept = run["evt"]
                     kept.raw["repeat_count"] = kept.raw.get("repeat_count", 1) + 1
-                    last["ts"] = ts        # slide the window onto this repeat
-                    continue               # drop the wire repetition
+                    run["last_ts"] = ts        # slide the gap check onto this repeat
+                    continue                   # drop the wire repetition
                 evt.raw["repeat_count"] = 1
-                last = {"reg": reg, "val": val, "ts": ts, "evt": evt}
+                run = {"reg": reg, "val": val, "start_ts": ts, "last_ts": ts, "evt": evt}
             yield evt
 
     def group_flows(self, events) -> list:
