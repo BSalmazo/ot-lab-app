@@ -23,6 +23,7 @@ already consumes (state_signal_value + a normalized target/value). engine/ is un
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any, List, Optional
 
 from ..config import OpcUaConfig
@@ -39,9 +40,44 @@ SERVICE_OP = {
     826: "PUBLISH_REQUEST",
 }
 
-# OPC UA BuiltInType ids we read a scalar value from.
-VARIANT_FLOAT = 0x0A
-VARIANT_INT32 = 0x06
+# OPC UA Variant Type (BuiltInType id) -> human type name. The wire DECLARES this
+# (opcua.variant.has_value), so a datatype here is certain. Unmapped ids -> None (uncertain).
+VARIANT_TYPES = {
+    0x01: "Boolean", 0x02: "SByte", 0x03: "Byte",
+    0x04: "Int16", 0x05: "UInt16", 0x06: "Int32", 0x07: "UInt32",
+    0x08: "Int64", 0x09: "UInt64", 0x0A: "Float", 0x0B: "Double",
+    0x0C: "String",
+}
+
+# Variant BuiltInType id -> (column index in _FIELDS, parse kind). tshark exposes a typed field
+# per built-in scalar (verified with `tshark -G fields`: opcua.Boolean=FT_BOOLEAN, the integer
+# types FT_INT*/FT_UINT*, opcua.Float/Double FT_FLOAT/FT_DOUBLE, opcua.String FT_STRING).
+# Float(10)/Int32(11)/Value(12) predate this expansion; every other typed column is APPENDED to
+# _FIELDS (indices 16+) so the existing 0-15 indices never shift. Unmapped ids fall back to the
+# generic opcua.Value (FT_FLOAT) field.
+_VARIANT_COL = {
+    0x01: (16, "bool"),    # Boolean -> opcua.Boolean
+    0x02: (17, "int"),     # SByte   -> opcua.SByte
+    0x03: (18, "int"),     # Byte    -> opcua.Byte
+    0x04: (19, "int"),     # Int16   -> opcua.Int16
+    0x05: (20, "int"),     # UInt16  -> opcua.UInt16
+    0x06: (11, "int"),     # Int32   -> opcua.Int32   (pre-existing column)
+    0x07: (21, "int"),     # UInt32  -> opcua.UInt32
+    0x08: (22, "int"),     # Int64   -> opcua.Int64
+    0x09: (23, "int"),     # UInt64  -> opcua.UInt64
+    0x0A: (10, "float"),   # Float   -> opcua.Float   (pre-existing column)
+    0x0B: (24, "float"),   # Double  -> opcua.Double
+    0x0C: (25, "str"),     # String  -> opcua.String
+}
+_VALUE_FALLBACK_COL = 12   # opcua.Value (FT_FLOAT), for an unknown/unmapped variant type
+
+
+def variant_typename(variant):
+    """(typename, certain). Certain iff the protocol declared a variant we recognise."""
+    if variant is None:
+        return None, False
+    name = VARIANT_TYPES.get(variant)
+    return name, (name is not None)
 
 # Column order MUST match tshark_fields() below (the runtime builds `-e` from it in order).
 _FIELDS = [
@@ -61,6 +97,17 @@ _FIELDS = [
     "opcua.variant.has_value", # 13
     "opcua.transport.scid",    # 14
     "opcua.transport.size",    # 15
+    # --- typed value columns (APPENDED so indices 0-15 above never shift; see _VARIANT_COL) ---
+    "opcua.Boolean",           # 16
+    "opcua.SByte",             # 17
+    "opcua.Byte",              # 18
+    "opcua.Int16",             # 19
+    "opcua.UInt16",            # 20
+    "opcua.UInt32",            # 21
+    "opcua.Int64",             # 22
+    "opcua.UInt64",            # 23
+    "opcua.Double",            # 24
+    "opcua.String",            # 25
 ]
 
 
@@ -120,6 +167,31 @@ def _float_list(value):
 
 def _col(cols: List[str], idx: int) -> str:
     return cols[idx] if idx < len(cols) else ""
+
+
+def _parse_bool(raw):
+    """tshark FT_BOOLEAN under -T fields -> 1/0 (or True/False). Returns int 1/0 or None."""
+    s = str(raw).strip().lower()
+    if s in ("1", "true", "0x1"):
+        return 1
+    if s in ("0", "false", "0x0"):
+        return 0
+    n = _to_int(s)
+    return None if n is None else (1 if n != 0 else 0)
+
+
+def _as_number(value):
+    """Coerce a parsed OPC UA value to a float for the sample series, or None.
+
+    Numeric types (int/float/bool/numeric string) become a float; a String value (or anything
+    non-numeric) returns None so it is NOT appended as a phase/step sample — the flow still
+    exists via its role hint (see group_flows)."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class OpcUaExtractor(ProtocolExtractor):
@@ -257,20 +329,26 @@ class OpcUaExtractor(ProtocolExtractor):
         return None, auth_token
 
     def _read_value(self, cols: List[str], variant: Optional[int]):
-        """Return (value, value_is_float) reading the field indicated by the variant type."""
-        if variant == VARIANT_FLOAT:
-            raw = _first(_col(cols, 10))  # opcua.Float
-            is_float = True
-        elif variant == VARIANT_INT32:
-            raw = _first(_col(cols, 11))  # opcua.Int32
-            is_float = False
-        else:
-            raw = _first(_col(cols, 12))  # opcua.Value (FT_FLOAT)
-            is_float = True
+        """Return (value, value_is_float) reading the typed field the variant type declares.
+
+        Decodes the common OPC UA built-in scalars — Boolean, SByte, Byte, Int16, UInt16, Int32,
+        UInt32, Int64, UInt64, Float, Double, String (see _VARIANT_COL). Integers come back as
+        int, floats/doubles as float, Boolean as int 0/1, String as the raw text. An unknown or
+        unmapped variant falls back to the generic opcua.Value (FT_FLOAT) field, as before.
+        """
+        col, kind = _VARIANT_COL.get(variant, (_VALUE_FALLBACK_COL, "float"))
+        is_float = (kind == "float")
+        raw = _first(_col(cols, col))
         if raw is None:
             return None, is_float
         try:
-            return (float(raw) if is_float else int(raw, 0)), is_float
+            if kind == "float":
+                return float(raw), True
+            if kind == "int":
+                return int(raw, 0), False
+            if kind == "bool":
+                return _parse_bool(raw), False
+            return raw, False  # str
         except Exception:
             return None, is_float
 
@@ -324,23 +402,66 @@ class OpcUaExtractor(ProtocolExtractor):
         """
         from ..engine.discover import Flow  # local import: keep extractor import lightweight
 
-        telemetry: list = []
-        commands: dict = {}
-        reads: list = []
+        # Per flow: (t, value) samples plus the variant type ids seen, so each flow's declared
+        # data type (the modal Variant Type) travels with it.
+        samples: dict = {}    # key -> list[(t, value)]
+        roles: dict = {}      # key -> role_hint
+        variants: dict = {}   # key -> list[variant_type id]
         for evt in events:
+            key = self.variable_key(evt)
+            if key is None:
+                continue
             if evt.op == "PUBLISH_RESPONSE":
+                roles.setdefault(key, "telemetry")
                 for s in self.extract_state_samples(evt):
-                    telemetry.append((evt.timestamp, float(s)))
-            elif evt.op == "WRITE_REQUEST" and evt.target is not None and evt.value is not None:
-                commands.setdefault(evt.target, []).append((evt.timestamp, float(evt.value)))
-            elif evt.op == "READ_RESPONSE" and evt.value is not None:
-                reads.append((evt.timestamp, float(evt.value)))
+                    samples.setdefault(key, []).append((evt.timestamp, float(s)))
+            elif evt.op == "WRITE_REQUEST":
+                # FIX #1: the command flow exists as soon as its target NodeId is seen — the same
+                # target-based gate the evaluator uses — so a command ALWAYS yields a variable_found
+                # (hence a VARIABLES row), even when its value did not parse to a number (unknown
+                # type / encrypted). A numeric value, when present, is recorded as a sample.
+                roles.setdefault(key, "command")
+                num = _as_number(evt.value)
+                if num is not None:
+                    samples.setdefault(key, []).append((evt.timestamp, num))
+            elif evt.op == "READ_RESPONSE":
+                num = _as_number(evt.value)
+                if num is None:
+                    continue
+                roles.setdefault(key, "read")
+                samples.setdefault(key, []).append((evt.timestamp, num))
+            else:
+                continue
+            vt = evt.raw.get("variant_type")
+            if vt is not None:
+                variants.setdefault(key, []).append(vt)
 
+        # Build one Flow per discovered role key (NOT per sample key): a value-less command has a
+        # role but no samples, and must still become a Flow so it is classified and surfaced.
         flows: list = []
-        if telemetry:
-            flows.append(Flow(key="opcua:publish:telemetry", samples=telemetry, role_hint="telemetry"))
-        for target, samples in commands.items():
-            flows.append(Flow(key=f"opcua:write:{target}", samples=samples, role_hint="command"))
-        if reads:
-            flows.append(Flow(key="opcua:read", samples=reads, role_hint="read"))
+        for key, role in roles.items():
+            datatype, certain = self._modal_datatype(variants.get(key, []))
+            flows.append(Flow(key=key, samples=samples.get(key, []), role_hint=role,
+                              datatype=datatype, datatype_certain=certain))
         return flows
+
+    @staticmethod
+    def _modal_datatype(variant_ids):
+        """The declared type for a flow: the most common Variant Type across its samples."""
+        if not variant_ids:
+            return None, False
+        modal = Counter(variant_ids).most_common(1)[0][0]
+        return variant_typename(modal)
+
+    def variable_key(self, evt):
+        """The flow/variable key an event belongs to (the same keys group_flows produces).
+
+        Used both by group_flows and by the observer to attach a live value to the right variable.
+        """
+        if evt.op == "PUBLISH_RESPONSE":
+            return "opcua:publish:telemetry"      # DEBT D1: single merged telemetry flow (level 4b)
+        if evt.op == "READ_RESPONSE":
+            return "opcua:read"
+        if evt.op == "WRITE_REQUEST" and evt.target is not None:
+            return f"opcua:write:{evt.target}"
+        return None

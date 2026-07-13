@@ -56,6 +56,101 @@ from otlab_core.engine.phase_tracker import PhaseTracker
 from otlab_core.extractors import get_extractor
 
 
+# --------------------------------------------------------------------------- event emission (JSON Lines)
+
+def emit(event, out=None):
+    """Write one JSON object per line to `out` (default stdout), flushed immediately.
+
+    The whole emission primitive: a downstream UI reads these lines live from stdout. Stamps a
+    wall-clock `ts` if the caller did not set one. It knows nothing about any UI, colours, or
+    rendering; it just prints a structured fact.
+    """
+    out = out or sys.stdout
+    if "ts" not in event:
+        event = {**event, "ts": round(time.time(), 3)}
+    out.write(json.dumps(event) + "\n")
+    out.flush()
+
+
+class Emitter:
+    """Emits structured discovery events as JSON Lines, in the order they are discovered.
+
+    Every field comes from real observed data; nothing about the process or protocol is hardcoded.
+    When ``enabled`` is False (``--no-emit-json``) every method is a no-op. Phase events are
+    de-duplicated: one is emitted only when the inferred phase actually changes.
+    """
+
+    def __init__(self, enabled=True, out=None):
+        self.enabled = enabled
+        self.out = out or sys.stdout
+        self._last_phase = None
+        self._last_values = {}   # key -> last emitted value, to de-dup variable_value events
+
+    def _emit(self, event):
+        if self.enabled:
+            emit(event, out=self.out)
+
+    def stage(self, stage):
+        # A pipeline-stage transition ("observe" | "learn" | "evaluate"), emitted once per move so
+        # the UI header can reflect the current stage instead of always reading "LIVE".
+        self._emit({"type": "stage", "stage": stage})
+
+    def protocol_seen(self, extractor):
+        event = {"type": "protocol_seen", "protocol": extractor.name.split("/")[0].upper()}
+        port = getattr(getattr(extractor, "config", None), "port", None)
+        if port is not None:
+            event["port"] = port
+        self._emit(event)
+
+    def flow_found(self, flow):
+        self._emit({"type": "flow_found", "key": flow.key, "role_hint": flow.role_hint})
+
+    def variable_found(self, verdict):
+        # A discovered variable, first-class. `nature` is literally the behavioural verdict.
+        f = verdict.features
+        self._emit({
+            "type": "variable_found", "key": verdict.key, "nature": verdict.verdict,
+            "datatype": verdict.datatype, "datatype_certain": verdict.datatype_certain,
+            "features": {
+                "unique_values": f.unique_values,
+                "value_range": round(f.value_range, 4),
+                "median_step": round(f.median_step, 4),
+                "reversals": f.reversals,
+            },
+        })
+
+    def variable_value(self, key, value):
+        # The current value of a variable (latest state sample / last written command value),
+        # de-duped so an unchanged value is not re-emitted. Only key + value; no name or meaning.
+        if key is None:
+            return
+        if self._last_values.get(key) != value:
+            self._last_values[key] = value
+            self._emit({"type": "variable_value", "key": key, "value": value})
+
+    def state_signal_discovered(self, key):
+        self._emit({"type": "state_signal_discovered", "key": key})
+
+    def phase(self, tracker, state_key=None):
+        # state_key identifies which state variable this phase refers to (prep for multi-state;
+        # today there is one). `level` is that variable's current value, not a domain "level".
+        if tracker.phase != self._last_phase:
+            self._last_phase = tracker.phase
+            level = tracker.last_level
+            self._emit({
+                "type": "phase", "state_key": state_key, "phase": tracker.phase,
+                "confidence": round(tracker.confidence, 3),
+                "level": round(level, 4) if level is not None else None,
+            })
+
+    def grammar_learned(self, target, phase):
+        self._emit({"type": "grammar_learned", "target": target, "phase": phase})
+
+    def verdict(self, target, phase, v):
+        self._emit({"type": "verdict", "target": target, "phase": phase,
+                    "result": v.verdict, "rule": v.rule})
+
+
 # --------------------------------------------------------------------------- tshark I/O
 
 def _tshark_cmd(extractor, iface):
@@ -123,7 +218,7 @@ def capture_stream(extractor, iface):
 
 # --------------------------------------------------------------------------- pipeline (pure, testable)
 
-def discover_and_calibrate(extractor, events, profile_path=None, log=print):
+def discover_and_calibrate(extractor, events, profile_path=None, log=print, emitter=None):
     """First pass: discover the state flow, then auto-calibrate the phase params from it.
 
     Returns (CalibrationResult, DiscoveryResult, state_flow) or (None, DiscoveryResult, None) when
@@ -133,7 +228,13 @@ def discover_and_calibrate(extractor, events, profile_path=None, log=print):
         raise RuntimeError(f"{extractor.name} does not support state-signal discovery yet")
 
     flows = extractor.group_flows(events)
+    if emitter:
+        for fl in flows:
+            emitter.flow_found(fl)
     disc = classify_flows(flows)
+    if emitter:
+        for v in disc.flows:
+            emitter.variable_found(v)
 
     log("[discover] flows:")
     for v in disc.flows:
@@ -146,6 +247,8 @@ def discover_and_calibrate(extractor, events, profile_path=None, log=print):
         return None, disc, None
 
     state_flow = next(f for f in flows if f.key == disc.state_flow_key)
+    if emitter:
+        emitter.state_signal_discovered(state_flow.key)
     log(f"[discover] state signal = {state_flow.key} ({len(state_flow.samples)} samples)")
 
     calib = calibrate_phase_config(state_flow.samples)
@@ -163,90 +266,160 @@ def discover_and_calibrate(extractor, events, profile_path=None, log=print):
     return calib, disc, state_flow
 
 
-def _feed_or_judge(extractor, evt, tracker, grammar, learner=None, log=None):
+def _feed_or_judge(extractor, evt, tracker, grammar, learner=None, log=None, emitter=None, state_key=None):
     """Advance the tracker with any state samples, or learn/judge a write. Returns a Verdict or None."""
     samples = extractor.extract_state_samples(evt)
     if samples:
         for s in samples:
             tracker.update(s)
+            if emitter:
+                emitter.phase(tracker, state_key)     # de-duped: emits only on phase change
+                emitter.variable_value(state_key, s)  # live current value of the state variable
         return None
     if evt.op == "WRITE_REQUEST" and evt.target is not None:
+        if emitter:
+            # last written value of this command variable (key as group_flows produced it)
+            emitter.variable_value(_variable_key(extractor, evt), evt.value)
         if learner is not None:
-            learner.observe(evt.target, tracker.phase, tracker.confidence, tracker.transitioning)
+            learned = learner.observe(evt.target, tracker.phase, tracker.confidence, tracker.transitioning)
+            if emitter and learned:
+                emitter.grammar_learned(evt.target, tracker.phase)
             return None
         v = evaluate(grammar, evt.target, tracker.phase, tracker.confidence, tracker.transitioning)
         if log:
             log(f"[{v.verdict:11s}] write {evt.target} phase={tracker.phase} "
                 f"conf={tracker.confidence:.2f} | {v.rule} | {v.reason}")
+        if emitter:
+            emitter.verdict(evt.target, tracker.phase, v)
         return v
     return None
 
 
-def run_learn(extractor, events, tracker):
+def _variable_key(extractor, evt):
+    """The variable key for an event, if the extractor exposes the mapping; else None."""
+    fn = getattr(extractor, "variable_key", None)
+    return fn(evt) if fn else None
+
+
+def run_learn(extractor, events, tracker, emitter=None, state_key=None):
     """Learn mode: feed state samples, accumulate the artefact->phase grammar from writes."""
     learner = GrammarLearner()
     for evt in events:
-        _feed_or_judge(extractor, evt, tracker, None, learner=learner)
+        _feed_or_judge(extractor, evt, tracker, None, learner=learner, emitter=emitter, state_key=state_key)
     return learner.export_document()
 
 
-def run_evaluate(extractor, events, tracker, grammar, log=None):
+def run_evaluate(extractor, events, tracker, grammar, log=None, emitter=None, state_key=None):
     """Evaluate mode: feed state samples, judge each write against the learned grammar."""
     out = []
     for evt in events:
-        v = _feed_or_judge(extractor, evt, tracker, grammar, log=log)
+        v = _feed_or_judge(extractor, evt, tracker, grammar, log=log, emitter=emitter, state_key=state_key)
         if v is not None:
             out.append(v)
     return out
 
 
+def evaluate_continuous(extractor, iface, tracker, grammar, log=None, emitter=None, state_key=None):
+    """Phase 3: watch continuously and judge every write against the FROZEN grammar until SIGINT.
+
+    DESIGN INVARIANT — no re-learning in phase 3. ``grammar`` is passed READ-ONLY into run_evaluate,
+    which constructs no GrammarLearner and only reads the grammar via ``evaluate()``. The baseline
+    learned in phase 2 is therefore never updated while evaluating: continuous watching, not
+    continuous learning. This is deliberate — it prevents baseline poisoning, i.e. an anomalous
+    action seen during evaluate can never be absorbed into "normal".
+
+    On Ctrl-C the capture stream is torn down (capture_stream's finally kills tshark), stdout is
+    already flushed per line, and we return cleanly so the JSON stream ends and the UI freezes its
+    final frame. No traceback on SIGINT.
+    """
+    log = log or (lambda _m: None)
+    if emitter:
+        emitter.stage("evaluate")   # phase 3 begins -> UI header reads "LIVE"
+    log("[evaluate] continuous — judging writes against the frozen grammar (Ctrl-C to stop)")
+    try:
+        run_evaluate(extractor, capture_stream(extractor, iface), tracker, grammar,
+                     log=log, emitter=emitter, state_key=state_key)
+    except KeyboardInterrupt:
+        log("[evaluate] stopped")
+    return 0
+
+
 # --------------------------------------------------------------------------- CLI
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Liscere passive observer (discover -> calibrate -> learn/evaluate)")
+    ap = argparse.ArgumentParser(
+        description="Liscere passive observer — single run: observe -> learn -> continuous evaluate (Ctrl-C to stop)")
     ap.add_argument("--iface", required=True, help="capture interface (mirror port)")
-    ap.add_argument("--observe", type=float, default=60.0, help="observe window seconds (discover + calibrate)")
-    ap.add_argument("--learn", type=float, default=None, help="learn-mode window seconds (writes grammar)")
-    ap.add_argument("--grammar", default=None, help="grammar JSON: input for evaluate, or output path for --learn")
+    ap.add_argument("--observe", type=float, default=60.0, help="phase 1: observe window seconds (discover + calibrate)")
+    ap.add_argument("--learn", type=float, default=None,
+                    help="phase 2: learn-window seconds; then phase 3 evaluates continuously until Ctrl-C")
+    ap.add_argument("--grammar", default=None,
+                    help="with --learn: write the learned grammar here and stop (legacy learn-to-file); "
+                         "without --learn: load this grammar and evaluate continuously")
     ap.add_argument("--profile", default=None, help="optional path to write the auto-calibrated phase profile")
+    ap.add_argument("--emit-json", action=argparse.BooleanOptionalAction, default=True,
+                    help="emit structured discovery events as JSON Lines on stdout (human logs go to "
+                         "stderr). --no-emit-json restores plain human output on stdout, no JSON.")
     args = ap.parse_args(argv)
+
+    # With JSON emission on, stdout is a pure JSON stream and human logs go to stderr, so
+    # `liscere_observe.py 2>/dev/null | ui` yields clean JSON. With --no-emit-json, behave as before.
+    log = (lambda m: print(m, file=sys.stderr)) if args.emit_json else print
+    emitter = Emitter(enabled=args.emit_json)
 
     extractor = get_extractor(os.getenv("OTLAB_PROTOCOL", "opcua"))
     if not hasattr(extractor, "group_flows"):
         print(f"protocol {extractor.name} does not support state-signal discovery yet", file=sys.stderr)
         return 2
+    emitter.protocol_seen(extractor)
 
-    obs = capture_events(extractor, args.iface, args.observe)
-    calib, _disc, _state = discover_and_calibrate(extractor, obs, profile_path=args.profile)
+    # Phase 1 — OBSERVE: discover flows, identify the state signal, auto-calibrate.
+    emitter.stage("observe")
+    obs = capture_events(extractor, args.iface, args.observe, log=log)
+    calib, _disc, state_flow = discover_and_calibrate(extractor, obs, profile_path=args.profile, log=log, emitter=emitter)
     if calib is None:
         return 2
+    state_key = state_flow.key   # the discovered state variable's key (for phase / variable_value)
+    # One tracker carries phase inference continuously through learn and into evaluate.
     tracker = PhaseTracker(calib.config)
 
     if args.learn is not None:
-        ev = capture_events(extractor, args.iface, args.learn)
-        doc = run_learn(extractor, ev, tracker)
-        out = args.grammar or "learned_grammar.json"
-        with open(out, "w") as f:
-            json.dump(doc, f, indent=2)
-        print(f"[learn] grammar -> {out}")
+        # Phase 2 — LEARN: learn the coherence grammar from this window. Temporal trust: the
+        # environment is controlled during learn, so what is seen here is the baseline "normal".
+        emitter.stage("learn")
+        ev = capture_events(extractor, args.iface, args.learn, log=log)
+        doc = run_learn(extractor, ev, tracker, emitter=emitter, state_key=state_key)
         for k, info in doc.get("grammar", {}).items():
-            print(f"  {k}: coherent_phases={info.get('learned_coherent_phases')} "
-                  f"from {info.get('total_writes_observed')} writes")
-        return 0
+            log(f"[learn] {k}: coherent_phases={info.get('learned_coherent_phases')} "
+                f"from {info.get('total_writes_observed')} writes")
+
+        if args.grammar:
+            # Legacy learn-to-file flow: write the grammar and stop (no evaluate).
+            with open(args.grammar, "w") as f:
+                json.dump(doc, f, indent=2)
+            log(f"[learn] grammar -> {args.grammar} (stopping; omit --grammar to chain into continuous evaluate)")
+            return 0
+
+        # Phase 3 — EVALUATE (continuous), the single-run default: freeze the just-learned grammar
+        # and watch until Ctrl-C. No re-learning (see evaluate_continuous).
+        return evaluate_continuous(extractor, args.iface, tracker, doc.get("grammar", {}),
+                                   log=log, emitter=emitter, state_key=state_key)
 
     if args.grammar:
+        # Evaluate a previously saved grammar (no learn window): watch continuously.
         with open(args.grammar) as f:
             grammar = json.load(f).get("grammar", {})
-        print("[evaluate] judging writes against learned grammar (Ctrl-C to stop)")
-        try:
-            run_evaluate(extractor, capture_stream(extractor, args.iface), tracker, grammar, log=print)
-        except KeyboardInterrupt:
-            print("\n[evaluate] stopped")
-        return 0
+        return evaluate_continuous(extractor, args.iface, tracker, grammar,
+                                   log=log, emitter=emitter, state_key=state_key)
 
-    print("nothing to do: pass --learn <secs> or --grammar <path>", file=sys.stderr)
+    print("nothing to do: pass --learn <secs> for a single observe->learn->evaluate run, "
+          "or --grammar <path> to evaluate a saved grammar", file=sys.stderr)
     return 1
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        # Ctrl-C outside the evaluate loop (e.g. during observe/learn): exit cleanly, no traceback.
+        sys.exit(130)

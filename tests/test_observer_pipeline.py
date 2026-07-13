@@ -30,12 +30,12 @@ def pub(t, samples):
     return NormalizedEvent(timestamp=t, protocol="OPCUA/binary", op="PUBLISH_RESPONSE",
                            direction="response", target=None,
                            value=(samples[0] if samples else None),
-                           raw={"float_samples": list(samples), "value_is_float": True})
+                           raw={"float_samples": list(samples), "value_is_float": True, "variant_type": 0x0A})
 
 
 def wr(t, target, value):
     return NormalizedEvent(timestamp=t, protocol="OPCUA/binary", op="WRITE_REQUEST",
-                           direction="request", target=target, value=value, raw={})
+                           direction="request", target=target, value=value, raw={"variant_type": 0x0A})
 
 
 def triangle(step=0.167, turns=(0, 100, 40, 60, 40), noise=0.01, seed=0):
@@ -92,32 +92,32 @@ def main():
 
     cfg = calib.config
 
-    # LEARN window: level rises; operator writes ns=4;i=23 during FILLING
+    # LEARN window: level rises; operator writes ns=4;i=23 during RISING
     print("run_learn:")
     learn_events, _, _ = ramp_events(0.0, 40, +1, 0.0, write_at=(25, 30, 35))
     doc = obs.run_learn(ex, learn_events, obs.PhaseTracker(cfg))
     g = doc.get("grammar", {})
     check("grammar learned for ns=4;i=23", "ns=4;i=23" in g)
     if "ns=4;i=23" in g:
-        check("ns=4;i=23 learned coherent in FILLING",
-              "FILLING" in g["ns=4;i=23"].get("learned_coherent_phases", []),
+        check("ns=4;i=23 learned coherent in RISING",
+              "RISING" in g["ns=4;i=23"].get("learned_coherent_phases", []),
               f"(dist={list(g['ns=4;i=23'].get('phase_distribution', {}).keys())})")
 
     # EVALUATE window: rise -> write (COHERENT), then fall -> write (INCOHERENT)
     print("run_evaluate:")
     ev = []
-    e1, lvl, t = ramp_events(0.0, 30, +1, 0.0)         # climb to FILLING
+    e1, lvl, t = ramp_events(0.0, 30, +1, 0.0)         # climb to RISING
     ev += e1
-    ev.append(wr(t, "ns=4;i=23", 80.0)); t += 0.2      # write during FILLING
-    e2, lvl, t = ramp_events(lvl, 45, -1, t)           # descend to DRAINING
+    ev.append(wr(t, "ns=4;i=23", 80.0)); t += 0.2      # write during RISING
+    e2, lvl, t = ramp_events(lvl, 45, -1, t)           # descend to FALLING
     ev += e2
-    ev.append(wr(t, "ns=4;i=23", 80.0))                # write during DRAINING
+    ev.append(wr(t, "ns=4;i=23", 80.0))                # write during FALLING
     verdicts = obs.run_evaluate(ex, ev, obs.PhaseTracker(cfg), g)
     check("two writes judged", len(verdicts) == 2, f"(={len(verdicts)})")
     if len(verdicts) == 2:
-        check("write during FILLING -> COHERENT", verdicts[0].verdict == "COHERENT",
+        check("write during RISING -> COHERENT", verdicts[0].verdict == "COHERENT",
               f"(={verdicts[0].verdict})")
-        check("write during DRAINING -> INCOHERENT", verdicts[1].verdict == "INCOHERENT",
+        check("write during FALLING -> INCOHERENT", verdicts[1].verdict == "INCOHERENT",
               f"(={verdicts[1].verdict})")
 
     print()

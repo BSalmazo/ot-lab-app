@@ -1,2 +1,5 @@
-# The Liscere passive observer runs on the Python standard library only (plus the system
-# `tshark` binary for capture). No third-party Python dependencies are required.
+# The Liscere passive observer (scripts/liscere_observe.py) runs on the Python standard library
+# only (plus the system `tshark` binary for capture). It needs no third-party Python packages.
+#
+# The optional discovery-map TUI (scripts/liscere_ui.py) is the only component with a dependency:
+rich
