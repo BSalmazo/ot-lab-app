@@ -44,5 +44,11 @@ class ProtocolExtractor(ABC):
         """Security posture of this exchange (Modbus: always ``"clear"``)."""
 
     @abstractmethod
-    def extract_state_signal(self, evt: NormalizedEvent) -> Optional[float]:
-        """Reconstruct the process-variable sample this event carries, if any; else ``None``."""
+    def extract_state_samples(self, evt: NormalizedEvent) -> List[float]:
+        """The process-variable sample(s) this event carries, in wire order; else ``[]``.
+
+        This is the interface the observer drives (it feeds every sample, in order, to the
+        PhaseTracker). A single event may carry one sample or several (e.g. a multi-register
+        Modbus read, or a batched OPC UA publish). An extractor may still expose a scalar
+        ``extract_state_signal`` convenience internally, but only this method is required.
+        """
