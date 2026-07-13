@@ -13,7 +13,9 @@ Deterministic; runnable as `python3 tests/test_modbus_flows.py`.
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _REPO)
+sys.path.insert(0, os.path.join(_REPO, "scripts"))   # for the orchestrator's derived-window helper
 
 from otlab_core.config import ModbusConfig
 from otlab_core.engine.discover import classify_flows
@@ -167,6 +169,22 @@ def main():
            fc6_write(exc3, 1.5, reg=0, val=100)]
     out3 = list(exc3.coalesce_writes(iter(gap)))
     check("gap > window breaks into two events", len(out3) == 2, f"(n={len(out3)})")
+
+    # --- calibration-derived coalesce window: clamp(half_cycle_s / 20, 0.5, 5.0) ---
+    import liscere_observe as obs
+    d = obs.derive_coalesce_window_s
+    check("derived window: bench half-cycle 30 s -> 1.5 s",
+          d(period_samples=300, dt=0.1, measurable=True, default=1.0) == 1.5,
+          f"(={d(300, 0.1, True, 1.0)})")
+    check("derived window: fast process clamps to floor 0.5 s",
+          d(period_samples=50, dt=0.1, measurable=True, default=1.0) == 0.5,
+          f"(={d(50, 0.1, True, 1.0)})")
+    check("derived window: slow process clamps to ceiling 5.0 s",
+          d(period_samples=2000, dt=0.1, measurable=True, default=1.0) == 5.0,
+          f"(={d(2000, 0.1, True, 1.0)})")
+    check("derived window: not measurable -> config default",
+          d(period_samples=0, dt=0.0, measurable=False, default=1.0) == 1.0,
+          f"(={d(0, 0.0, False, 1.0)})")
 
     print()
     if _failures:

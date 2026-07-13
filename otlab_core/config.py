@@ -78,15 +78,21 @@ class ModbusConfig:
     state_signal_register: Optional[int] = None
 
     #: Write-coalescing window, in seconds. Consecutive WRITE_REQUEST events with an IDENTICAL
-    #: (target register, value) that arrive within this many seconds of the previous one are
-    #: folded into a single COMMAND event (first timestamp wins; a repeat_count is kept). This
-    #: removes protocol-level repetition: an HMI holding a button re-issues the same write every
-    #: ~230 ms at the wire, which is one operator action, not many.
+    #: (target register, value) are folded into a single COMMAND event (first timestamp wins; a
+    #: repeat_count is kept) while the run stays within this window. This removes protocol-level
+    #: repetition: an HMI holding a button re-issues the same write every ~230 ms at the wire,
+    #: which is one operator action, not many.
     #:
-    #: The default 1.0 s is deliberately well below the observed process phase timescales (tens
-    #: of seconds per half-cycle), so coalescing collapses wire repetition without merging two
-    #: genuinely separate actions across a quiet gap. Deriving this window from calibration
-    #: (sample cadence / phase period) is a noted future refinement, not done here.
+    #: This 1.0 s is the FALLBACK default. When OBSERVE calibration measures the process, the
+    #: orchestrator (scripts/liscere_observe.py) DERIVES the window from the observed half-cycle:
+    #:
+    #:     coalesce_window_s = clamp(observed_half_cycle_seconds / 20, 0.5, 5.0)
+    #:
+    #: where observed_half_cycle_seconds = calibration period_samples * inter-sample dt. Rationale:
+    #: the 0.5 s floor sits above the ~230 ms HMI repetition cadence, so a held button still
+    #: coalesces; the 5.0 s ceiling bounds very slow processes; taking 1/20 of a half-cycle keeps
+    #: the window well below the phase duration, so coalescing never spans a phase reversal. The
+    #: default here is used only when no calibration period is available.
     coalesce_window_s: float = 1.0
 
 
