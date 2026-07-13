@@ -90,6 +90,11 @@ class Emitter:
         if self.enabled:
             emit(event, out=self.out)
 
+    def stage(self, stage):
+        # A pipeline-stage transition ("observe" | "learn" | "evaluate"), emitted once per move so
+        # the UI header can reflect the current stage instead of always reading "LIVE".
+        self._emit({"type": "stage", "stage": stage})
+
     def protocol_seen(self, extractor):
         event = {"type": "protocol_seen", "protocol": extractor.name.split("/")[0].upper()}
         port = getattr(getattr(extractor, "config", None), "port", None)
@@ -328,6 +333,8 @@ def evaluate_continuous(extractor, iface, tracker, grammar, log=None, emitter=No
     final frame. No traceback on SIGINT.
     """
     log = log or (lambda _m: None)
+    if emitter:
+        emitter.stage("evaluate")   # phase 3 begins -> UI header reads "LIVE"
     log("[evaluate] continuous — judging writes against the frozen grammar (Ctrl-C to stop)")
     try:
         run_evaluate(extractor, capture_stream(extractor, iface), tracker, grammar,
@@ -367,6 +374,7 @@ def main(argv=None):
     emitter.protocol_seen(extractor)
 
     # Phase 1 — OBSERVE: discover flows, identify the state signal, auto-calibrate.
+    emitter.stage("observe")
     obs = capture_events(extractor, args.iface, args.observe, log=log)
     calib, _disc, state_flow = discover_and_calibrate(extractor, obs, profile_path=args.profile, log=log, emitter=emitter)
     if calib is None:
@@ -378,6 +386,7 @@ def main(argv=None):
     if args.learn is not None:
         # Phase 2 — LEARN: learn the coherence grammar from this window. Temporal trust: the
         # environment is controlled during learn, so what is seen here is the baseline "normal".
+        emitter.stage("learn")
         ev = capture_events(extractor, args.iface, args.learn, log=log)
         doc = run_learn(extractor, ev, tracker, emitter=emitter, state_key=state_key)
         for k, info in doc.get("grammar", {}).items():
