@@ -1,6 +1,6 @@
 """Operational phase inference (brought in from LTR-2026-03, protocol-neutral).
 
-``PhaseTracker`` infers the operational phase (FILLING / DRAINING / STABLE / unsettled) of a
+``PhaseTracker`` infers the operational phase (RISING / FALLING / STABLE / unsettled) of a
 process from the trajectory of a single scalar state signal, using a least-squares slope over a
 sliding window plus hysteresis ("phase inertia") and a confidence value. It consumes plain floats
 and knows nothing about Modbus, registers, or any protocol.
@@ -58,9 +58,9 @@ class PhaseTracker:
 
     def _movement(self, slope: float) -> Optional[str]:
         if slope >= self.slope_rising:
-            return "FILLING"
+            return "RISING"
         if slope <= self.slope_falling:
-            return "DRAINING"
+            return "FALLING"
         return None
 
     def update(self, level: float) -> Tuple[str, float, bool]:
@@ -72,7 +72,7 @@ class PhaseTracker:
 
         if move is not None:
             self._flat_count = 0
-            if self.phase in ("FILLING", "DRAINING") and move != self.phase:
+            if self.phase in ("RISING", "FALLING") and move != self.phase:
                 self.transitioning = True
                 if self._reversal_dir == move:
                     self._reversal_count += 1
@@ -96,7 +96,7 @@ class PhaseTracker:
             self._reversal_dir = None
             self._reversal_count = 0
             self._flat_count += 1
-            if self.phase in ("FILLING", "DRAINING"):
+            if self.phase in ("RISING", "FALLING"):
                 if self._flat_count < self.stable_n:
                     self.transitioning = False
                     self.confidence = self.conf_hold
