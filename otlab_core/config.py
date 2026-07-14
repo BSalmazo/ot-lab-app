@@ -68,6 +68,36 @@ class OpcUaConfig:
 
 
 @dataclass
+class ModbusConfig:
+    """Modbus/TCP extractor configuration."""
+
+    #: Which holding register carries the process state signal, e.g. 2 for HR[2].
+    #: None => treat every FC3 read-response value as a state sample (valid when a single
+    #: register is polled; see the single-polled-register note in modbus.py). The behavioural
+    #: classifier still keys a separate flow per register regardless of this value.
+    state_signal_register: Optional[int] = None
+
+    #: Write-coalescing window, in seconds. Consecutive WRITE_REQUEST events with an IDENTICAL
+    #: (target register, value) are folded into a single COMMAND event (first timestamp wins; a
+    #: repeat_count is kept) while the run stays within this window. This removes protocol-level
+    #: repetition: an HMI holding a button re-issues the same write every ~230 ms at the wire,
+    #: which is one operator action, not many.
+    #:
+    #: This 1.0 s is the FALLBACK default. When OBSERVE calibration measures the process, the
+    #: orchestrator (scripts/liscere_observe.py) DERIVES the window from the observed half-cycle:
+    #:
+    #:     coalesce_window_s = clamp(observed_half_cycle_seconds / 20, 0.5, 5.0)
+    #:
+    #: where observed_half_cycle_seconds = calibration period_samples * inter-sample dt. Rationale:
+    #: the 0.5 s floor sits above the ~230 ms HMI repetition cadence, so a held button still
+    #: coalesces; the 5.0 s ceiling bounds very slow processes; taking 1/20 of a half-cycle keeps
+    #: the window well below the phase duration, so coalescing never spans a phase reversal. The
+    #: default here is used only when no calibration period is available.
+    coalesce_window_s: float = 1.0
+
+
+@dataclass
 class ObserverConfig:
     phase: PhaseConfig = field(default_factory=PhaseConfig)
     opcua: OpcUaConfig = field(default_factory=OpcUaConfig)
+    modbus: ModbusConfig = field(default_factory=ModbusConfig)

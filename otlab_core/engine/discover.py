@@ -49,6 +49,9 @@ class Flow:
     # protocol carries no type (Modbus) or the variant is unmapped; datatype_certain says which.
     datatype: Optional[str] = None
     datatype_certain: bool = False
+    # Observed server endpoint "ip:port" for this flow, when the extractor supplies it (from
+    # traffic). Protocol-neutral: the discovery layer just carries it through for the UI.
+    server: Optional[str] = None
 
 
 @dataclass

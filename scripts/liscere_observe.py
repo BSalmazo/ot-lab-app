@@ -103,7 +103,11 @@ class Emitter:
         self._emit(event)
 
     def flow_found(self, flow):
-        self._emit({"type": "flow_found", "key": flow.key, "role_hint": flow.role_hint})
+        event = {"type": "flow_found", "key": flow.key, "role_hint": flow.role_hint}
+        server = getattr(flow, "server", None)
+        if server:
+            event["endpoint"] = server   # observed server "ip:port"; UI derives the protocol port
+        self._emit(event)
 
     def variable_found(self, verdict):
         # A discovered variable, first-class. `nature` is literally the behavioural verdict.
@@ -185,19 +189,35 @@ def _kill(proc):
             pass
 
 
+def _postprocess(extractor, events):
+    """Apply any extractor-provided stream stage (e.g. Modbus write coalescing).
+
+    Neutral hook: an extractor may expose ``coalesce_writes(events) -> events`` to fold wire-level
+    repetition. Extractors without it (OPC UA) are passed through unchanged. This keeps all
+    protocol-specific stream logic in the extractor while the observer stays protocol-neutral.
+    """
+    stage = getattr(extractor, "coalesce_writes", None)
+    return stage(events) if callable(stage) else events
+
+
 def capture_events(extractor, iface, seconds, log=print):
     """Capture for `seconds`, returning the parsed NormalizedEvents (bounded)."""
     log(f"[capture] {seconds:.0f}s on {iface} ({extractor.name}, filter='{extractor.capture_filter()}')")
     proc = _spawn(extractor, iface)
-    events = []
     start = time.time()
-    try:
+
+    def _parsed():
         for line in proc.stdout:
             evt = extractor.parse_line(line.rstrip("\n").split("\t"))
             if evt is not None:
-                events.append(evt)
+                yield evt
             if time.time() - start >= seconds:
                 break
+
+    events = []
+    try:
+        for evt in _postprocess(extractor, _parsed()):
+            events.append(evt)
     finally:
         _kill(proc)
     log(f"[capture] {len(events)} events")
@@ -207,16 +227,63 @@ def capture_events(extractor, iface, seconds, log=print):
 def capture_stream(extractor, iface):
     """Yield parsed NormalizedEvents until interrupted (for continuous evaluate)."""
     proc = _spawn(extractor, iface)
-    try:
+
+    def _parsed():
         for line in proc.stdout:
             evt = extractor.parse_line(line.rstrip("\n").split("\t"))
             if evt is not None:
                 yield evt
+
+    try:
+        yield from _postprocess(extractor, _parsed())
     finally:
         _kill(proc)
 
 
 # --------------------------------------------------------------------------- pipeline (pure, testable)
+
+# Coalesce-window derivation bounds (seconds). Floor sits above the ~230 ms HMI repetition cadence
+# so a held button still coalesces; ceiling bounds slow processes; 1/20 of a half-cycle keeps the
+# window well below the phase duration. See ModbusConfig.coalesce_window_s.
+_COALESCE_WINDOW_FLOOR_S = 0.5
+_COALESCE_WINDOW_CEIL_S = 5.0
+_COALESCE_HALF_CYCLE_FRACTION = 1.0 / 20.0
+
+
+def derive_coalesce_window_s(period_samples, dt, measurable, default):
+    """Coalesce window from the OBSERVED half-cycle: clamp(half_cycle_s / 20, 0.5, 5.0).
+
+    half_cycle_s = period_samples * dt (samples times seconds-per-sample), both already measured by
+    autocalibrate during OBSERVE. Returns ``default`` when the period was not measurable, so the
+    ModbusConfig default (1.0 s) remains the fallback. Pure and unit-testable; no engine call.
+    """
+    if not measurable or not period_samples or not dt:
+        return default
+    half_cycle_s = period_samples * dt
+    return max(_COALESCE_WINDOW_FLOOR_S,
+               min(_COALESCE_WINDOW_CEIL_S, half_cycle_s * _COALESCE_HALF_CYCLE_FRACTION))
+
+
+def apply_derived_coalesce_window(extractor, calib, log=print):
+    """Plumb the derived coalesce window onto an extractor that coalesces (Modbus).
+
+    Neutral: extractors without a coalesce_window_s config (OPC UA) are left untouched. Called once,
+    after OBSERVE calibration and before the LEARN/EVALUATE captures, so those captures coalesce
+    with the process-scaled window.
+    """
+    cfg = getattr(extractor, "config", None)
+    if cfg is None or not hasattr(cfg, "coalesce_window_s"):
+        return
+    w = derive_coalesce_window_s(calib.period_samples, calib.dt, calib.measurable,
+                                 cfg.coalesce_window_s)
+    cfg.coalesce_window_s = w
+    if calib.measurable:
+        log(f"[calibrate] coalesce_window_s -> {w:.3f}s "
+            f"(half-cycle {calib.period_samples * calib.dt:.2f}s / 20, clamped "
+            f"{_COALESCE_WINDOW_FLOOR_S}..{_COALESCE_WINDOW_CEIL_S})")
+    else:
+        log(f"[calibrate] coalesce_window_s -> {w:.3f}s (period not measurable; config default)")
+
 
 def discover_and_calibrate(extractor, events, profile_path=None, log=print, emitter=None):
     """First pass: discover the state flow, then auto-calibrate the phase params from it.
@@ -380,6 +447,9 @@ def main(argv=None):
     if calib is None:
         return 2
     state_key = state_flow.key   # the discovered state variable's key (for phase / variable_value)
+    # Scale the write-coalescing window to the observed process (no-op for extractors that do not
+    # coalesce). Set before the LEARN/EVALUATE captures so those windows use the derived value.
+    apply_derived_coalesce_window(extractor, calib, log=log)
     # One tracker carries phase inference continuously through learn and into evaluate.
     tracker = PhaseTracker(calib.config)
 
