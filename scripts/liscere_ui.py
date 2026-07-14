@@ -89,10 +89,18 @@ class DiscoveryModel:
         return self.protocols[self.current_protocol]
 
     def _flow_found(self, ev):
-        self._current_proto()["flows"].setdefault(
+        proto = self._current_proto()
+        proto["flows"].setdefault(
             str(ev.get("key", "?")),
             {"role_hint": ev.get("role_hint"), "verdict": None, "features": None, "state": False},
         )
+        # Protocols that carry no configured port (Modbus) report the observed server "ip:port" on
+        # the flow instead; derive the protocol port from it, if not already set by protocol_seen.
+        if proto.get("port") is None:
+            endpoint = ev.get("endpoint")
+            if endpoint and ":" in str(endpoint):
+                port = str(endpoint).rsplit(":", 1)[-1]
+                proto["port"] = int(port) if port.isdigit() else port
 
     def _find_flow(self, key):
         for p in self.protocols.values():

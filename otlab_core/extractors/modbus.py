@@ -384,15 +384,20 @@ class ModbusExtractor(ProtocolExtractor):
 
         samples: dict = {}    # key -> list[(t, value)]
         roles: dict = {}      # key -> role_hint
+        servers: dict = {}    # key -> observed server endpoint "ip:port" (from the traffic)
         for evt in events:
             if evt.raw.get("exception_code") is not None:
                 roles.setdefault("modbus:metadata", "read")   # no register -> metadata, no sample
+                if evt.server:
+                    servers.setdefault("modbus:metadata", evt.server)
                 continue
             if evt.op == "READ_RESPONSE":
                 for reg, val in evt.raw.get("reg_values") or []:
                     key = f"modbus:hr:{reg}"
                     if roles.setdefault(key, "telemetry") != "telemetry":
                         continue   # already a command register; do not mix read values in
+                    if evt.server:
+                        servers.setdefault(key, evt.server)
                     num = _as_number(val)
                     if num is not None:
                         samples.setdefault(key, []).append((evt.timestamp, num))
@@ -400,6 +405,8 @@ class ModbusExtractor(ProtocolExtractor):
                 key = self.variable_key(evt)   # "modbus:hr:<n>" from the raw int register
                 if roles.setdefault(key, "command") != "command":
                     continue   # already a polled register; do not mix write values in
+                if evt.server:
+                    servers.setdefault(key, evt.server)
                 num = _as_number(evt.value)
                 if num is not None:
                     samples.setdefault(key, []).append((evt.timestamp, num))
@@ -407,6 +414,8 @@ class ModbusExtractor(ProtocolExtractor):
 
         flows: list = []
         for key, role in roles.items():
+            # Attach the observed server endpoint (ip:port) so the UI can show the Modbus port,
+            # exactly like OPC UA -- but sourced from the traffic, not a configured port.
             flows.append(Flow(key=key, samples=samples.get(key, []), role_hint=role,
-                              datatype=None, datatype_certain=False))
+                              datatype=None, datatype_certain=False, server=servers.get(key)))
         return flows

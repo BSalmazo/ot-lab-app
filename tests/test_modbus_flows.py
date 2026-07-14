@@ -122,7 +122,8 @@ def main():
             events.append(fc6_write(ex, t, reg=0, val=100)); t += 0.1
         if i in (200,):
             events.append(fc6_write(ex, t, reg=1, val=200)); t += 0.1
-    result = classify_flows(ex.group_flows(events))
+    flows = ex.group_flows(events)
+    result = classify_flows(flows)
     by_key = {v.key: v for v in result.flows}
     check("HR[2] poll discovered as STATE", result.state_flow_key == "modbus:hr:2",
           f"(={result.state_flow_key})")
@@ -132,6 +133,27 @@ def main():
           by_key.get("modbus:hr:1") is not None and by_key["modbus:hr:1"].verdict == "COMMAND")
     check("Modbus datatype always uncertain",
           all(v.datatype is None and v.datatype_certain is False for v in result.flows))
+    # every flow carries the observed server endpoint (from the traffic, not hardcoded)
+    check("flows carry observed server endpoint ip:port",
+          all(f.server == f"{PLC}:502" for f in flows), f"(={[f.server for f in flows]})")
+
+    # emitter -> event: flow_found must carry the endpoint (the TUI then derives the port from it;
+    # the TUI import needs rich, so the rendering is checked out-of-suite).
+    import liscere_observe as obs
+    captured = []
+
+    class Cap(obs.Emitter):
+        def _emit(self, o):
+            captured.append(o)
+
+    cap = Cap(enabled=True)
+    for f in flows:
+        cap.flow_found(f)
+    ff = [o for o in captured if o["type"] == "flow_found"]
+    check("flow_found event carries endpoint", ff and all("endpoint" in o for o in ff),
+          f"(={[o.get('endpoint') for o in ff]})")
+    check("flow_found endpoint is the observed server ip:port",
+          all(o.get("endpoint") == f"{PLC}:502" for o in ff))
 
     # --- quantised staircase drives the PhaseTracker to RISING (not STABLE) ---
     tracker = PhaseTracker()

@@ -103,7 +103,11 @@ class Emitter:
         self._emit(event)
 
     def flow_found(self, flow):
-        self._emit({"type": "flow_found", "key": flow.key, "role_hint": flow.role_hint})
+        event = {"type": "flow_found", "key": flow.key, "role_hint": flow.role_hint}
+        server = getattr(flow, "server", None)
+        if server:
+            event["endpoint"] = server   # observed server "ip:port"; UI derives the protocol port
+        self._emit(event)
 
     def variable_found(self, verdict):
         # A discovered variable, first-class. `nature` is literally the behavioural verdict.
