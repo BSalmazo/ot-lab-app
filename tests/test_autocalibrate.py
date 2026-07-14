@@ -180,15 +180,15 @@ def test_opcua_regime_equivalence():
 
 
 def test_modbus_staircase():
-    """FIX (a-ii + end-to-end c): the quantised integer staircase must calibrate to an ACTIONABLE
-    threshold and the tracker must report RISING through the ramp and FALLING after the reversal
-    (the exact live failure: old formula gave slope_rising~=0.876 >> windowed slope, dead STABLE).
+    """FIX (a-ii + end-to-end c): the quantised integer staircase must calibrate to a threshold in
+    the actionable band 0.05..0.20 and the tracker must report RISING through the ramp and FALLING
+    after the reversal (the exact live failure: old formula gave slope_rising~=0.876 >> windowed
+    slope, dead STABLE).
 
-    NOTE ON THE BAND: the design estimate was slope_rising in 0.05..0.20. The literal formula yields
-    ~0.22 on the COARSEST (+1 per 3 samples) staircase, because the span-5 smoothing under-cancels
-    the period-3 ripple, leaving ~0.075 residual (x3 = 0.22). It is still ACTIONABLE -- below the
-    ~0.33 windowed slope with ~32% margin -- and the tracker tracks the ramp, which is the binding
-    requirement. We therefore assert actionability (slope_rising < rate) rather than the 0.20 ceiling."""
+    With the noise floor measured at WINDOW scale, the period-3 quantisation ripple cancels (the
+    tracker's window-length regression averages it away), so slope_rising drops from the 0.22 the
+    shorter span-5 smoothing left to ~0.145 -- inside 0.05..0.20, with ~56% margin below the 0.33
+    windowed slope."""
     print("test_modbus_staircase:")
     samples = build_staircase()
     r = calibrate_phase_config(samples)
@@ -198,8 +198,9 @@ def test_modbus_staircase():
     check("staircase discovered as measurable", r.measurable)
     check("conf_full_slope == rate (~0.33)", c.conf_full_slope == r.rate and 0.30 <= r.rate <= 0.36,
           f"(={r.rate:.4f})")
-    check("slope_rising actionable: >= 0.05", c.slope_rising >= 0.05, f"(={c.slope_rising:.4f})")
-    check("slope_rising actionable: below the windowed rate (tracker can act)",
+    check("slope_rising in the actionable band 0.05..0.20", 0.05 <= c.slope_rising <= 0.20,
+          f"(={c.slope_rising:.4f})")
+    check("slope_rising below the windowed rate (tracker can act, with margin)",
           c.slope_rising < r.rate, f"(slope={c.slope_rising:.4f} < rate={r.rate:.4f})")
     check("slope_rising well below the OLD dead value 0.876", c.slope_rising < 0.30,
           f"(={c.slope_rising:.4f})")

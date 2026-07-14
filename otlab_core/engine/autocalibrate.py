@@ -14,14 +14,21 @@ DESIGN PRINCIPLE — scale consistency. Calibration statistics must be measured 
 the DECISION statistic. ``PhaseTracker`` decides direction from the WINDOWED least-squares slope,
 so the slope thresholds and confidence scale derive from the observed RATE (the windowed slope a
 clean ramp actually produces: level range over the half-cycle period) and from a noise floor
-measured on the SMOOTHED series. Deriving thresholds from raw per-sample deltas instead is only
-valid when a sample's step already equals the windowed slope, i.e. a smooth float signal. Under
-integer quantisation that assumption fails: the per-sample step saturates at the quantum and the
-per-sample residual inflates with the quantisation gap, both decoupling from the windowed slope
-(a +1-per-3-samples staircase gave slope_rising ~0.876 against a real windowed slope of ~0.33, so
-the tracker could never leave STABLE). Measuring at the windowed / rate scale removes that failure
-while the noise floor still guards genuinely jittery signals. ``move``/``noise`` (raw per-sample)
-are retained on the result as DIAGNOSTICS only; they no longer drive the config.
+measured AT WINDOW SCALE. Deriving thresholds from raw per-sample deltas instead is only valid when
+a sample's step already equals the windowed slope, i.e. a smooth float signal. Under integer
+quantisation that assumption fails: the per-sample step saturates at the quantum and the per-sample
+residual inflates with the quantisation gap, both decoupling from the windowed slope (a
++1-per-3-samples staircase gave slope_rising ~0.876 against a real windowed slope of ~0.33, so the
+tracker could never leave STABLE).
+
+Taking the principle to completion, the noise floor is the residual of the series smoothed at the
+WINDOW span (a ``_moving_average`` over ``window`` samples), NOT the shorter ``_SMOOTH_SPAN``. The
+tracker's decision is a window-length regression, which averages away any ripple whose period is
+below the window; measuring the floor at that same scale makes the deterministic quantisation
+ripple cancel fully, so it reflects only the jitter the tracker actually sees. The staircase then
+becomes rate-dominated (slope_rising ~0.10, well below its 0.33 windowed slope) while genuinely
+jittery signals still keep a protective floor. ``move``/``noise`` (raw per-sample) are retained on
+the result as DIAGNOSTICS only; they no longer drive the config.
 
 This supersedes manually-authored phase profiles (e.g. ``profiles/opcua_tank_10hz.json``): during
 learn mode a first pass observes the clean process, measures, and derives the ``PhaseConfig`` the
@@ -60,7 +67,7 @@ class CalibrationResult:
     period_samples: float    # median half-cycle length, in samples
     reversals: int
     rate: float = 0.0        # observed windowed slope scale: level range / half-cycle period
-    noise_smooth: float = 0.0  # residual noise on the SMOOTHED series (the scale-consistent floor)
+    noise_smooth: float = 0.0  # residual noise on the WINDOW-smoothed series (scale-consistent floor)
     warning: Optional[str] = None
 
 
@@ -167,20 +174,20 @@ def calibrate_phase_config(samples: Sequence[Tuple[float, float]]) -> Calibratio
             period_samples=(period or 0.0), reversals=n_reversals, warning=_FALLBACK_WARNING,
         )
 
-    # SCALE-CONSISTENT statistics (see the module DESIGN PRINCIPLE). The tracker decides on the
-    # WINDOWED slope, so measure at that scale: the RATE is the windowed slope a clean ramp
-    # produces (level range over the half-cycle period), and the noise floor is the residual of the
-    # SMOOTHED series (the same _moving_average span _half_cycle_period uses), so the deterministic
-    # quantisation ripple cancels while genuine jitter still registers.
-    smoothed = _moving_average(levels, _SMOOTH_SPAN)
-    rate = (max(smoothed) - min(smoothed)) / period
-    noise_smooth = _noise(smoothed)
-
     # DERIVE — window/stable_n/reversal_n are dimensionless ratios of P (unchanged, sound under
-    # quantisation because _half_cycle_period already smooths). Thresholds derive from the RATE.
+    # quantisation because _half_cycle_period already smooths).
     window = max(3, round(period / 30))
     reversal_n = max(2, round(period / 120))
     stable_n = max(3, round(period / 20))
+
+    # SCALE-CONSISTENT statistics (see the module DESIGN PRINCIPLE). The tracker decides on the
+    # WINDOWED slope, so measure at that scale. The RATE is the windowed slope a clean ramp produces
+    # (level range over the half-cycle period). The noise floor is the residual of the series
+    # smoothed AT WINDOW SCALE (a _moving_average span == window, not the shorter _SMOOTH_SPAN): any
+    # ripple with a period below the window -- exactly what the tracker's window-length regression
+    # averages away -- cancels, so the floor reflects only the jitter the tracker actually sees.
+    rate = (max(_moving_average(levels, _SMOOTH_SPAN)) - min(_moving_average(levels, _SMOOTH_SPAN))) / period
+    noise_smooth = _noise(_moving_average(levels, window))
     slope_rising = max(3.0 * noise_smooth, 0.3 * rate)   # jitter floor vs a fraction of the rate
 
     config = PhaseConfig(
