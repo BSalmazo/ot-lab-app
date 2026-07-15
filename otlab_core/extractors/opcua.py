@@ -465,3 +465,11 @@ class OpcUaExtractor(ProtocolExtractor):
         if evt.op == "WRITE_REQUEST" and evt.target is not None:
             return f"opcua:write:{evt.target}"
         return None
+
+    def write_datatype(self, evt):
+        """(datatype_name, datatype_certain) declared by a WRITE_REQUEST, from the event alone.
+
+        OPC UA carries the Variant Type on the event (raw["variant_type"]); the same pure mapping
+        group_flows uses turns it into a name + certainty. Unmapped / absent -> (None, False) -> "?".
+        """
+        return variant_typename(evt.raw.get("variant_type"))
