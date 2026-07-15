@@ -323,6 +323,14 @@ class ModbusExtractor(ProtocolExtractor):
             return f"modbus:hr:{reg}"
         return None
 
+    def write_datatype(self, evt: NormalizedEvent):
+        """(datatype_name, datatype_certain) declared by a WRITE_REQUEST, from the event alone.
+
+        Modbus declares no type on the wire, so this is always uncertain -- (None, False), which
+        renders as "?" and is identical to what a discovered Modbus command shows.
+        """
+        return (None, False)
+
     def coalesce_writes(self, events):
         """Fold protocol-level write repetition, yielding events for the rest of the pipeline.
 

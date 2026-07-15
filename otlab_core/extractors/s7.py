@@ -504,6 +504,18 @@ class S7CommExtractor(ProtocolExtractor):
             return items[0][0]
         return None
 
+    def write_datatype(self, evt: NormalizedEvent):
+        """(datatype_name, datatype_certain) declared by a WRITE_REQUEST, from the event alone.
+
+        Each item's request-side WordLen type sits in raw["items"] as (key, value, datatype,
+        certain). Reports the FIRST item's type, consistent with variable_key (multi-item writes
+        surface only the first item -- the existing limitation, not fixed here). Absent -> "?".
+        """
+        items = evt.raw.get("items") or []
+        if items:
+            return items[0][2], items[0][3]
+        return (None, False)
+
     def group_flows(self, events) -> list:
         """One flow per S7 variable (address). Mirrors the Modbus extractor.
 

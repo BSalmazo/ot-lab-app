@@ -92,7 +92,8 @@ class DiscoveryModel:
         proto = self._current_proto()
         proto["flows"].setdefault(
             str(ev.get("key", "?")),
-            {"role_hint": ev.get("role_hint"), "verdict": None, "features": None, "state": False},
+            {"role_hint": ev.get("role_hint"), "verdict": None, "features": None,
+             "state": False, "late": False},
         )
         # Protocols that carry no configured port (Modbus) report the observed server "ip:port" on
         # the flow instead; derive the protocol port from it, if not already set by protocol_seen.
@@ -111,24 +112,29 @@ class DiscoveryModel:
     def _ensure_var(self, key):
         return self.variables.setdefault(key, {
             "nature": None, "datatype": None, "datatype_certain": False,
-            "features": None, "value": None, "phase": None,
+            "features": None, "value": None, "phase": None, "late": False,
         })
 
     def _variable_found(self, ev):
         key = str(ev.get("key"))
+        # A late command (surfaced after observe) is classified from protocol semantics only, not
+        # behaviourally; the "*" marker in the UI keeps that distinct from a discovered variable.
+        late = bool(ev.get("late"))
         # left map: attach nature + features to the flow node (create if unseen)
         fl = self._find_flow(key)
         if fl is None:
             self._flow_found({"key": key, "role_hint": None})
             fl = self._find_flow(key)
         fl["verdict"] = ev.get("nature")
-        fl["features"] = ev.get("features") or {}
+        fl["features"] = ev.get("features") or {}   # null for late commands -> {} (no feature line)
+        fl["late"] = late
         # VARIABLES table row
         v = self._ensure_var(key)
         v["nature"] = ev.get("nature")
         v["datatype"] = ev.get("datatype")
         v["datatype_certain"] = bool(ev.get("datatype_certain"))
         v["features"] = ev.get("features") or {}
+        v["late"] = late
 
     def _variable_value(self, ev):
         # update the value column (create a minimal row if the variable wasn't announced yet)
@@ -179,8 +185,10 @@ def _flow_label(key, fl):
     t.append(key)
     if fl["verdict"]:
         t.append("  → ")
-        t.append(NATURE_LABEL.get(fl["verdict"], fl["verdict"]),
-                 style=VERDICT_STYLES.get(fl["verdict"], "white"))
+        verdict_label = NATURE_LABEL.get(fl["verdict"], fl["verdict"])
+        if fl.get("late"):
+            verdict_label += "*"   # classified from protocol semantics, not observed behaviour
+        t.append(verdict_label, style=VERDICT_STYLES.get(fl["verdict"], "white"))
         f = fl["features"] or {}
         if f:
             t.append(
@@ -239,6 +247,8 @@ def build_variables(model):
         value = _fmt_value(v["value"])
         phase = _fmt(v["phase"]) if (nature == "STATE" and v["phase"]) else "—"
         label = NATURE_LABEL.get(nature, _fmt(nature))
+        if v.get("late"):
+            label += "*"   # classified from protocol semantics, not observed behaviour
         tbl.add_row(sym, key, Text(label, style=style), dtype, value, phase)
     return Panel(tbl, title="VARIABLES", border_style="magenta")
 

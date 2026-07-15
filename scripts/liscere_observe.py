@@ -85,6 +85,7 @@ class Emitter:
         self.out = out or sys.stdout
         self._last_phase = None
         self._last_values = {}   # key -> last emitted value, to de-dup variable_value events
+        self._announced = set()  # keys already surfaced (by discovery or as a late command)
 
     def _emit(self, event):
         if self.enabled:
@@ -112,6 +113,7 @@ class Emitter:
     def variable_found(self, verdict):
         # A discovered variable, first-class. `nature` is literally the behavioural verdict.
         f = verdict.features
+        self._announced.add(verdict.key)   # a key discovered in observe is not re-announced later
         self._emit({
             "type": "variable_found", "key": verdict.key, "nature": verdict.verdict,
             "datatype": verdict.datatype, "datatype_certain": verdict.datatype_certain,
@@ -121,6 +123,20 @@ class Emitter:
                 "median_step": round(f.median_step, 4),
                 "reversals": f.reversals,
             },
+        })
+
+    def command_found(self, key, datatype, datatype_certain):
+        # A command variable first written AFTER the observe window, so discovery never saw it.
+        # Surfaced as a variable_found (which the UI both renders and adds to the DISCOVERY MAP),
+        # once per key. nature is COMMAND by protocol semantics; features is null because no
+        # behavioural classification was performed; `late` marks that distinction (see the UI).
+        if key is None or key in self._announced:
+            return
+        self._announced.add(key)
+        self._emit({
+            "type": "variable_found", "key": key, "nature": "COMMAND",
+            "datatype": datatype, "datatype_certain": datatype_certain,
+            "features": None, "late": True,
         })
 
     def variable_value(self, key, value):
@@ -345,8 +361,14 @@ def _feed_or_judge(extractor, evt, tracker, grammar, learner=None, log=None, emi
         return None
     if evt.op == "WRITE_REQUEST" and evt.target is not None:
         if emitter:
+            key = _variable_key(extractor, evt)
+            # Surface a command discovery never saw (first written in learn/evaluate) once, with its
+            # real datatype from the extractor. command_found no-ops for keys already announced, so
+            # discovered commands are untouched. The datatype source is per-protocol; the observer
+            # only asks (null-safe), so it stays protocol-agnostic.
+            emitter.command_found(key, *_write_datatype(extractor, evt))
             # last written value of this command variable (key as group_flows produced it)
-            emitter.variable_value(_variable_key(extractor, evt), evt.value)
+            emitter.variable_value(key, evt.value)
         if learner is not None:
             learned = learner.observe(evt.target, tracker.phase, tracker.confidence, tracker.transitioning)
             if emitter and learned:
@@ -366,6 +388,16 @@ def _variable_key(extractor, evt):
     """The variable key for an event, if the extractor exposes the mapping; else None."""
     fn = getattr(extractor, "variable_key", None)
     return fn(evt) if fn else None
+
+
+def _write_datatype(extractor, evt):
+    """(datatype, certain) a write declares, if the extractor answers; else (None, False).
+
+    Duck-typed like _variable_key: an extractor that does not implement write_datatype degrades to
+    "?" and the observer never needs to know it exists. Keeps the observer protocol-agnostic.
+    """
+    fn = getattr(extractor, "write_datatype", None)
+    return fn(evt) if fn else (None, False)
 
 
 def run_learn(extractor, events, tracker, emitter=None, state_key=None):
