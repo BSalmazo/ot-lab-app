@@ -9,7 +9,7 @@ selecting it in the runtime; no runtime or engine change should be needed beyond
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from ..contract import NormalizedEvent
 
@@ -58,3 +58,21 @@ class ProtocolExtractor(ABC):
         Modbus read, or a batched OPC UA publish). An extractor may still expose a scalar
         ``extract_state_signal`` convenience internally, but only this method is required.
         """
+
+    def opaque_endpoint(self, tsv_fields: List[str]) -> Optional[Tuple[str, str]]:
+        """Report a captured-but-unreadable endpoint, or ``None``.
+
+        Called ONLY on a frame that arrived on this extractor's capture filter and that
+        ``parse_line`` declined. Return ``(endpoint, reason)`` when the frame carries this
+        protocol's transport shape but a payload this extractor cannot read (e.g. an encrypted
+        variant on the same service port); ``None`` otherwise.
+
+        ``None`` means ALL of: the frame is transport plumbing (a bare ACK, a handshake, a mirror
+        retransmission); OR it is actually readable and ``parse_line`` declined for another reason;
+        OR the extractor cannot tell. Returning ``None`` when unsure is correct -- a false
+        "unreadable" claim is worse than silence.
+
+        Default is ``None``: an extractor that does not implement this is simply never asked to
+        report opaque traffic, so the observer stays protocol-neutral (it only asks, null-safe).
+        """
+        return None

@@ -97,6 +97,7 @@ class Emitter:
             "announced": {},     # (tag, key) -> the nature it was announced with (so a write can
                                  #              reclassify a non-command key; see command_found)
             "state_keys": set(), # (tag, key) that IS the discovered state signal -> never reclassified
+            "opaque": set(),     # endpoints already reported as opaque -> report once, not per frame
         }
 
     def bind(self, tag):
@@ -125,6 +126,16 @@ class Emitter:
         # but could not be calibrated (too few samples); `reason` states why, so it is reported and
         # never silently dropped.
         self._emit({"type": "silo", "endpoint": endpoint, "evaluable": evaluable, "reason": reason})
+
+    def opaque_endpoint(self, endpoint, reason):
+        # An endpoint whose traffic arrived on the capture filter but which no extractor can read
+        # (e.g. an encrypted variant on the service port). Reported ONCE per endpoint as a silo that
+        # exists but is not evaluable -- so hundreds of opaque frames yield a single event -- and
+        # never routed to a tracker. Dedup lives in the shared bookkeeping, alongside announced keys.
+        if not endpoint or endpoint in self._shared["opaque"]:
+            return
+        self._shared["opaque"].add(endpoint)
+        self.silo(endpoint, evaluable=False, reason=reason)
 
     def protocol_seen(self, extractor):
         event = {"type": "protocol_seen", "protocol": extractor.name.split("/")[0].upper()}
@@ -266,17 +277,37 @@ def _postprocess(extractor, events):
     return stage(events) if callable(stage) else events
 
 
-def capture_events(extractor, iface, seconds, log=print):
-    """Capture for `seconds`, returning the parsed NormalizedEvents (bounded)."""
+def _report_opaque(extractor, cols, emitter):
+    """Ask the extractor (null-safe) whether a DECLINED frame is a captured-but-unreadable endpoint,
+    and if so report it once. Mirrors _variable_key: the observer holds no protocol knowledge -- it
+    only asks; an extractor without opaque_endpoint returns None and is never surfaced.
+    """
+    if emitter is None:
+        return
+    fn = getattr(extractor, "opaque_endpoint", None)
+    opq = fn(cols) if fn else None
+    if opq is not None:
+        emitter.opaque_endpoint(*opq)
+
+
+def capture_events(extractor, iface, seconds, log=print, emitter=None):
+    """Capture for `seconds`, returning the parsed NormalizedEvents (bounded).
+
+    A frame parse_line declines is offered to _report_opaque: if the extractor recognises it as an
+    endpoint carrying traffic it cannot read, that endpoint is reported once (never as an event).
+    """
     log(f"[capture] {seconds:.0f}s on {iface} ({extractor.name}, filter='{extractor.capture_filter()}')")
     proc = _spawn(extractor, iface)
     start = time.time()
 
     def _parsed():
         for line in proc.stdout:
-            evt = extractor.parse_line(line.rstrip("\n").split("\t"))
+            cols = line.rstrip("\n").split("\t")
+            evt = extractor.parse_line(cols)
             if evt is not None:
                 yield evt
+            else:
+                _report_opaque(extractor, cols, emitter)
             if time.time() - start >= seconds:
                 break
 
@@ -290,15 +321,22 @@ def capture_events(extractor, iface, seconds, log=print):
     return events
 
 
-def capture_stream(extractor, iface):
-    """Yield parsed NormalizedEvents until interrupted (for continuous evaluate)."""
+def capture_stream(extractor, iface, emitter=None):
+    """Yield parsed NormalizedEvents until interrupted (for continuous evaluate).
+
+    As in capture_events, a declined frame is offered to _report_opaque so an endpoint that goes
+    encrypted mid-run is reported the first time it is seen.
+    """
     proc = _spawn(extractor, iface)
 
     def _parsed():
         for line in proc.stdout:
-            evt = extractor.parse_line(line.rstrip("\n").split("\t"))
+            cols = line.rstrip("\n").split("\t")
+            evt = extractor.parse_line(cols)
             if evt is not None:
                 yield evt
+            else:
+                _report_opaque(extractor, cols, emitter)
 
     try:
         yield from _postprocess(extractor, _parsed())
@@ -617,7 +655,7 @@ def evaluate_continuous_silos(extractor, iface, emitter, silos_by_ep, reported_l
     log(f"[evaluate] continuous, {n} evaluable silo(s) -- each write judged against its OWN silo's "
         f"grammar (Ctrl-C to stop)")
     try:
-        for evt in capture_stream(extractor, iface):
+        for evt in capture_stream(extractor, iface, emitter=emitter):
             silo = _route_or_report_late(emitter, silos_by_ep, reported_late, getattr(evt, "server", None))
             if silo is None:
                 continue
@@ -660,7 +698,7 @@ def main(argv=None):
     # Phase 1 — OBSERVE: capture, then demux into silos and discover+calibrate each. Every run goes
     # through silos; the normal bench case is simply N=1, which build_silos keeps byte-identical.
     emitter.stage("observe")
-    obs = capture_events(extractor, args.iface, args.observe, log=log)
+    obs = capture_events(extractor, args.iface, args.observe, log=log, emitter=emitter)
     silos = build_silos(extractor, obs, emitter, log, profile_path=args.profile)
     evaluable = [s for s in silos if s.evaluable]
     if not evaluable:
@@ -681,7 +719,7 @@ def main(argv=None):
         # Phase 2 — LEARN: learn each silo's coherence grammar from this window. Temporal trust: the
         # environment is controlled during learn, so what is seen here is the baseline "normal".
         emitter.stage("learn")
-        ev = capture_events(extractor, args.iface, args.learn, log=log)
+        ev = capture_events(extractor, args.iface, args.learn, log=log, emitter=emitter)
         for endpoint, evs in partition_by_server(ev).items():
             silo = _route_or_report_late(emitter, silos_by_ep, reported_late, endpoint)
             if silo is None:

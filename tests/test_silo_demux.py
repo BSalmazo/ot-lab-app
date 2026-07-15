@@ -213,8 +213,8 @@ def main():
 
     real_ce, real_cs = obs.capture_events, obs.capture_stream
     calls = {"n": 0}
-    obs.capture_events = lambda ex, iface, secs, log=None: one_cycle_pubs() if (calls.__setitem__("n", calls["n"] + 1) or calls["n"] == 1) else learn_pubs()
-    obs.capture_stream = lambda ex, iface: iter([pub(0.0, [1.0, 2.0], SRV_A)])   # finite so main() returns
+    obs.capture_events = lambda ex, iface, secs, log=None, emitter=None: one_cycle_pubs() if (calls.__setitem__("n", calls["n"] + 1) or calls["n"] == 1) else learn_pubs()
+    obs.capture_stream = lambda ex, iface, emitter=None: iter([pub(0.0, [1.0, 2.0], SRV_A)])   # finite so main() returns
     mbuf = io.StringIO()
     try:
         with contextlib.redirect_stdout(mbuf):
