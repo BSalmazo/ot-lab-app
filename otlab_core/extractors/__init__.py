@@ -11,8 +11,9 @@ from typing import Optional
 from .base import ProtocolExtractor
 from .modbus import ModbusExtractor
 from .opcua import OpcUaExtractor
+from .s7 import S7CommExtractor
 
-__all__ = ["ProtocolExtractor", "ModbusExtractor", "OpcUaExtractor", "get_extractor"]
+__all__ = ["ProtocolExtractor", "ModbusExtractor", "OpcUaExtractor", "S7CommExtractor", "get_extractor"]
 
 
 def get_extractor(name: str = "modbus", config=None) -> ProtocolExtractor:
@@ -29,4 +30,7 @@ def get_extractor(name: str = "modbus", config=None) -> ProtocolExtractor:
     if key in ("opcua", "opc-ua", "opcua/binary", "opc.tcp"):
         opcua_cfg = getattr(config, "opcua", None) if config is not None else None
         return OpcUaExtractor(config=opcua_cfg)
+    if key in ("s7", "s7comm"):
+        s7_cfg = getattr(config, "s7", None) if config is not None else None
+        return S7CommExtractor(config=s7_cfg)
     raise ValueError(f"unknown protocol extractor: {name!r}")
