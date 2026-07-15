@@ -410,12 +410,15 @@ class OpcUaExtractor(ProtocolExtractor):
         samples: dict = {}    # key -> list[(t, value)]
         roles: dict = {}      # key -> role_hint
         variants: dict = {}   # key -> list[variant_type id]
+        servers: dict = {}    # key -> observed server endpoint "ip:port" (from the traffic)
         for evt in events:
             key = self.variable_key(evt)
             if key is None:
                 continue
             if evt.op == "PUBLISH_RESPONSE":
                 roles.setdefault(key, "telemetry")
+                if evt.server:
+                    servers.setdefault(key, evt.server)
                 for s in self.extract_state_samples(evt):
                     samples.setdefault(key, []).append((evt.timestamp, float(s)))
             elif evt.op == "WRITE_REQUEST":
@@ -424,6 +427,8 @@ class OpcUaExtractor(ProtocolExtractor):
                 # (hence a VARIABLES row), even when its value did not parse to a number (unknown
                 # type / encrypted). A numeric value, when present, is recorded as a sample.
                 roles.setdefault(key, "command")
+                if evt.server:
+                    servers.setdefault(key, evt.server)
                 num = _as_number(evt.value)
                 if num is not None:
                     samples.setdefault(key, []).append((evt.timestamp, num))
@@ -432,6 +437,8 @@ class OpcUaExtractor(ProtocolExtractor):
                 if num is None:
                     continue
                 roles.setdefault(key, "read")
+                if evt.server:
+                    servers.setdefault(key, evt.server)
                 samples.setdefault(key, []).append((evt.timestamp, num))
             else:
                 continue
@@ -444,8 +451,10 @@ class OpcUaExtractor(ProtocolExtractor):
         flows: list = []
         for key, role in roles.items():
             datatype, certain = self._modal_datatype(variants.get(key, []))
+            # Attach the observed server endpoint (ip:port) from the traffic, as Modbus/S7 do, so
+            # flows are endpoint-keyed and the UI shows the observed OPC UA endpoint (not a config port).
             flows.append(Flow(key=key, samples=samples.get(key, []), role_hint=role,
-                              datatype=datatype, datatype_certain=certain))
+                              datatype=datatype, datatype_certain=certain, server=servers.get(key)))
         return flows
 
     @staticmethod
