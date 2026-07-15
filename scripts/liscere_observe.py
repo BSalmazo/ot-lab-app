@@ -94,7 +94,9 @@ class Emitter:
         self._shared = _shared if _shared is not None else {
             "last_phase": {},    # tag -> last emitted phase
             "last_values": {},   # (tag, key) -> last emitted value
-            "announced": set(),  # (tag, key) already surfaced (by discovery or as a late command)
+            "announced": {},     # (tag, key) -> the nature it was announced with (so a write can
+                                 #              reclassify a non-command key; see command_found)
+            "state_keys": set(), # (tag, key) that IS the discovered state signal -> never reclassified
         }
 
     def bind(self, tag):
@@ -141,7 +143,9 @@ class Emitter:
     def variable_found(self, verdict):
         # A discovered variable, first-class. `nature` is literally the behavioural verdict.
         f = verdict.features
-        self._shared["announced"].add((self._tag, verdict.key))   # not re-announced later (per silo)
+        # Remember the nature this key was announced with, so a later WRITE_REQUEST can tell a
+        # non-command classification (which a write outranks) from an already-command one.
+        self._shared["announced"][(self._tag, verdict.key)] = verdict.verdict
         self._emit({
             "type": "variable_found", "key": verdict.key, "nature": verdict.verdict,
             "datatype": verdict.datatype, "datatype_certain": verdict.datatype_certain,
@@ -154,13 +158,28 @@ class Emitter:
         })
 
     def command_found(self, key, datatype, datatype_certain):
-        # A command variable first written AFTER the observe window, so discovery never saw it.
-        # Surfaced as a variable_found (which the UI both renders and adds to the DISCOVERY MAP),
-        # once per key. nature is COMMAND by protocol semantics; features is null because no
-        # behavioural classification was performed; `late` marks that distinction (see the UI).
-        if key is None or (self._tag, key) in self._shared["announced"]:
+        """A WRITE_REQUEST is protocol PROOF the key is a command, so surface it as a late command
+        (COMMAND*, nature=COMMAND, features=null, late=true; datatype from the extractor).
+
+        Announce it when discovery never saw the key (first written in learn/evaluate), AND
+        RE-announce it when discovery announced it as some NON-command nature (e.g. a read-only
+        HR shown as CONSTANT_METADATA): a write outranks a behavioural classification inferred from
+        one window. Guards:
+          - a key already surfaced as COMMAND is not re-announced (a repeat write is suppressed, as
+            before) -- the announced-nature map, not mere membership, is what distinguishes this;
+          - the discovered STATE signal is NEVER reclassified here. It drives calibration and the
+            tracker; a write to the state variable is a distinct, more interesting situation, and
+            silently turning it into a command would be wrong. It is left untouched (see the report).
+        """
+        if key is None:
             return
-        self._shared["announced"].add((self._tag, key))
+        tk = (self._tag, key)
+        if self._shared["announced"].get(tk) == "COMMAND":
+            return   # already a command -> suppress the repeat write, exactly as before
+        if tk in self._shared["state_keys"]:
+            return   # the state signal -> not reclassified by a write (guarded, deliberately)
+        # Unannounced, or announced as a non-command nature -> (re)announce as a late command.
+        self._shared["announced"][tk] = "COMMAND"
         self._emit({
             "type": "variable_found", "key": key, "nature": "COMMAND",
             "datatype": datatype, "datatype_certain": datatype_certain,
@@ -178,6 +197,8 @@ class Emitter:
             self._emit({"type": "variable_value", "key": key, "value": value})
 
     def state_signal_discovered(self, key):
+        # Record the state signal so a later write can never silently reclassify it (command_found).
+        self._shared["state_keys"].add((self._tag, key))
         self._emit({"type": "state_signal_discovered", "key": key})
 
     def phase(self, tracker, state_key=None):
@@ -391,10 +412,11 @@ def _feed_or_judge(extractor, evt, tracker, grammar, learner=None, log=None, emi
     if evt.op == "WRITE_REQUEST" and evt.target is not None:
         if emitter:
             key = _variable_key(extractor, evt)
-            # Surface a command discovery never saw (first written in learn/evaluate) once, with its
-            # real datatype from the extractor. command_found no-ops for keys already announced, so
-            # discovered commands are untouched. The datatype source is per-protocol; the observer
-            # only asks (null-safe), so it stays protocol-agnostic.
+            # A write is protocol proof the key is a command. command_found surfaces it once with its
+            # real datatype from the extractor: it announces a command discovery never saw, and also
+            # RE-announces one discovery mislabelled as a non-command nature (e.g. a read-only
+            # register seen as CONSTANT_METADATA). It suppresses repeats and never reclassifies the
+            # state signal. The datatype source is per-protocol; the observer only asks (null-safe).
             emitter.command_found(key, *_write_datatype(extractor, evt))
             # last written value of this command variable (key as group_flows produced it)
             emitter.variable_value(key, evt.value)
