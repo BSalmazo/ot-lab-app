@@ -43,6 +43,8 @@ import os
 import subprocess
 import sys
 import time
+from collections import OrderedDict
+from dataclasses import dataclass, field
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
@@ -80,21 +82,47 @@ class Emitter:
     de-duplicated: one is emitted only when the inferred phase actually changes.
     """
 
-    def __init__(self, enabled=True, out=None):
+    def __init__(self, enabled=True, out=None, _tag=None, _shared=None):
         self.enabled = enabled
         self.out = out or sys.stdout
-        self._last_phase = None
-        self._last_values = {}   # key -> last emitted value, to de-dup variable_value events
-        self._announced = set()  # keys already surfaced (by discovery or as a late command)
+        # A silo tag scopes this Emitter's events and de-dup to one silo. None = untagged (the whole
+        # stream, or the N=1 case): events carry no silo field, so output is identical to the
+        # pre-silo observer. De-dup state lives in `_shared` and is keyed by tag, so N silos share ONE
+        # Emitter -- one stdout owner, one de-dup owner -- via bind() rather than N unsynchronised
+        # Emitters (the 2b-safe structure: nothing to interleave on a shared stdout without a lock).
+        self._tag = _tag
+        self._shared = _shared if _shared is not None else {
+            "last_phase": {},    # tag -> last emitted phase
+            "last_values": {},   # (tag, key) -> last emitted value
+            "announced": set(),  # (tag, key) already surfaced (by discovery or as a late command)
+        }
+
+    def bind(self, tag):
+        """A view of this Emitter scoped to silo `tag`: same stdout and same (tag-keyed) de-dup state,
+        stamping `tag` on each event. tag=None yields an untagged view whose JSON is byte-identical to
+        the single pre-silo stream. Every silo uses a bound view, so there is no shared-vs-per-silo
+        Emitter branch -- N=1 and N>1 differ only in the tag value.
+        """
+        return Emitter(enabled=self.enabled, out=self.out, _tag=tag, _shared=self._shared)
 
     def _emit(self, event):
         if self.enabled:
+            if self._tag is not None and "silo" not in event:
+                event = {**event, "silo": self._tag}   # attribute the event to its silo (N>1 only)
             emit(event, out=self.out)
 
     def stage(self, stage):
         # A pipeline-stage transition ("observe" | "learn" | "evaluate"), emitted once per move so
         # the UI header can reflect the current stage instead of always reading "LIVE".
         self._emit({"type": "stage", "stage": stage})
+
+    def silo(self, endpoint, evaluable, reason=None):
+        # A discovered silo -- one (protocol, server endpoint) as its own unit of evaluation. An
+        # ADDITIVE event type, emitted ONLY when more than one silo is present, so the single-silo
+        # stream stays byte-identical to prior behaviour. `evaluable` is False for a silo that exists
+        # but could not be calibrated (too few samples); `reason` states why, so it is reported and
+        # never silently dropped.
+        self._emit({"type": "silo", "endpoint": endpoint, "evaluable": evaluable, "reason": reason})
 
     def protocol_seen(self, extractor):
         event = {"type": "protocol_seen", "protocol": extractor.name.split("/")[0].upper()}
@@ -113,7 +141,7 @@ class Emitter:
     def variable_found(self, verdict):
         # A discovered variable, first-class. `nature` is literally the behavioural verdict.
         f = verdict.features
-        self._announced.add(verdict.key)   # a key discovered in observe is not re-announced later
+        self._shared["announced"].add((self._tag, verdict.key))   # not re-announced later (per silo)
         self._emit({
             "type": "variable_found", "key": verdict.key, "nature": verdict.verdict,
             "datatype": verdict.datatype, "datatype_certain": verdict.datatype_certain,
@@ -130,9 +158,9 @@ class Emitter:
         # Surfaced as a variable_found (which the UI both renders and adds to the DISCOVERY MAP),
         # once per key. nature is COMMAND by protocol semantics; features is null because no
         # behavioural classification was performed; `late` marks that distinction (see the UI).
-        if key is None or key in self._announced:
+        if key is None or (self._tag, key) in self._shared["announced"]:
             return
-        self._announced.add(key)
+        self._shared["announced"].add((self._tag, key))
         self._emit({
             "type": "variable_found", "key": key, "nature": "COMMAND",
             "datatype": datatype, "datatype_certain": datatype_certain,
@@ -144,8 +172,9 @@ class Emitter:
         # de-duped so an unchanged value is not re-emitted. Only key + value; no name or meaning.
         if key is None:
             return
-        if self._last_values.get(key) != value:
-            self._last_values[key] = value
+        lv = self._shared["last_values"]
+        if lv.get((self._tag, key)) != value:
+            lv[(self._tag, key)] = value
             self._emit({"type": "variable_value", "key": key, "value": value})
 
     def state_signal_discovered(self, key):
@@ -154,8 +183,8 @@ class Emitter:
     def phase(self, tracker, state_key=None):
         # state_key identifies which state variable this phase refers to (prep for multi-state;
         # today there is one). `level` is that variable's current value, not a domain "level".
-        if tracker.phase != self._last_phase:
-            self._last_phase = tracker.phase
+        if tracker.phase != self._shared["last_phase"].get(self._tag):
+            self._shared["last_phase"][self._tag] = tracker.phase
             level = tracker.last_level
             self._emit({
                 "type": "phase", "state_key": state_key, "phase": tracker.phase,
@@ -418,26 +447,160 @@ def run_evaluate(extractor, events, tracker, grammar, log=None, emitter=None, st
     return out
 
 
-def evaluate_continuous(extractor, iface, tracker, grammar, log=None, emitter=None, state_key=None):
-    """Phase 3: watch continuously and judge every write against the FROZEN grammar until SIGINT.
+# Phase-3 continuous evaluation lives in evaluate_continuous_silos (below), which routes each event
+# to its silo. Its no-re-learning invariant (grammars are read-only; an anomaly seen during evaluate
+# is never absorbed into "normal") is unchanged from the pre-silo single-tracker version.
 
-    DESIGN INVARIANT — no re-learning in phase 3. ``grammar`` is passed READ-ONLY into run_evaluate,
-    which constructs no GrammarLearner and only reads the grammar via ``evaluate()``. The baseline
-    learned in phase 2 is therefore never updated while evaluating: continuous watching, not
-    continuous learning. This is deliberate — it prevents baseline poisoning, i.e. an anomalous
-    action seen during evaluate can never be absorbed into "normal".
 
-    On Ctrl-C the capture stream is torn down (capture_stream's finally kills tshark), stdout is
-    already flushed per line, and we return cleanly so the JSON stream ends and the UI freezes its
-    final frame. No traceback on SIGINT.
+# --------------------------------------------------------------------------- silos (demux by observed endpoint)
+
+@dataclass
+class Silo:
+    """One unit of evaluation: a (protocol, server endpoint) with its OWN calibration, tracker,
+    state signal, grammar and event stream.
+
+    Silo identity is DISCOVERED from traffic -- a silo appears when a previously unseen evt.server is
+    observed -- never configured, the same discipline as the state signal and phase params. The
+    endpoint is the demux key; two conversations to different endpoints are two silos even under one
+    capture filter (e.g. "tcp port 102" legitimately covers several S7 servers).
+
+    EVERY run goes through silos: one silo is simply N=1. Each silo's `emitter` is a bound view of
+    the run's single Emitter (emitter.bind(tag)); de-dup is tag-keyed inside that one Emitter, so
+    phase/value de-duplication never crosses silos even though flow keys are not endpoint-qualified.
+    At N=1 the tag is None and output is byte-identical to the pre-silo observer. See build_silos for
+    the two remaining, deliberate N=1 differences (silo() suppression -- 2b debt -- and --profile).
     """
-    log = log or (lambda _m: None)
+    endpoint: str
+    events: list = field(default_factory=list)
+    calib: object = None
+    state_flow: object = None
+    state_key: object = None
+    tracker: object = None
+    grammar: dict = field(default_factory=dict)
+    doc: object = None          # full learn document (for the single-silo learn-to-file flow)
+    emitter: object = None
+    evaluable: bool = False
+    reason: object = None
+
+
+def partition_by_server(events):
+    """Group events by observed server endpoint (evt.server), preserving first-seen order.
+
+    The demux key IS the silo identity. Every event from all three extractors carries evt.server
+    (set in parse_line for every op), so in practice there is no orphan bucket; defensively, an event
+    without a server lands under a None key for the caller to REPORT rather than silently drop -- an
+    event with no endpoint cannot be assigned to a silo.
+    """
+    buckets: "OrderedDict[object, list]" = OrderedDict()
+    for evt in events:
+        buckets.setdefault(getattr(evt, "server", None), []).append(evt)
+    return buckets
+
+
+def _calibrate_silo(extractor, silo, log, profile_path=None):
+    """Discover + calibrate ONE silo from its own event partition. Sets evaluable/reason.
+
+    A silo is evaluable iff a state signal was DISCOVERED (calib is not None) -- exactly the
+    pre-silo observer's gate (v2-dev: ``if calib is None: return 2``). A discovered-but-UNMEASURABLE
+    period (fewer than ~1.5 cycles in the window) is NOT a reason to decline: v2-dev proceeds on the
+    default phase config with a warning, and continuous evaluation after learn is the default single
+    run, so declining here would exit the run after observe and break that continuity. The warning is
+    still surfaced via ``reason`` -- an honest note on an evaluable silo -- so nothing is hidden.
+
+    Only a silo with NO state signal at all (calib is None) is non-evaluable, and it is reported, not
+    silently dropped.
+    """
+    log(f"[silo] {silo.endpoint}: {len(silo.events)} observe events")
+    calib, _disc, state_flow = discover_and_calibrate(
+        extractor, silo.events, profile_path=profile_path, log=log, emitter=silo.emitter)
+    if calib is None:
+        silo.reason = "no state signal discovered (needs a bounded, cycling signal within --observe)"
+        return
+    if not calib.measurable:
+        # Discovered but the period could not be measured: proceed on default config (as v2-dev does),
+        # recording the warning. Evaluable stays True so the single-silo run reaches learn+evaluate.
+        silo.reason = calib.warning or "phase period not measurable; using default phase config"
+    silo.calib = calib
+    silo.state_flow = state_flow
+    silo.state_key = state_flow.key
+    silo.tracker = PhaseTracker(calib.config)
+    silo.evaluable = True
+
+
+def build_silos(extractor, observe_events, emitter, log, profile_path=None):
+    """Partition the observe window by server and discover+calibrate each silo independently.
+
+    EVERY run comes through here; one silo is N=1. Returns the Silos in first-seen order.
+
+    Every silo uses a bound view of the run's ONE Emitter (emitter.bind(tag)); N=1 binds tag=None,
+    N>1 binds the endpoint. So there is NO shared-vs-per-silo Emitter branch and no unsynchronised
+    second Emitter -- de-dup is tag-keyed inside the single Emitter. Two deliberate N=1 differences
+    remain, both stated, not hidden:
+
+      (2) N=1 emits NO silo() announcement. 2b DEBT, not a principled choice: it exists only to keep
+          this refactor's output byte-identical to the pre-silo observer so the change is validatable.
+          The silo IS the fundamental unit; once the UI is silo-aware, silo() should be emitted
+          ALWAYS, including N=1, and this suppression removed.
+      (3) --profile is honoured for N=1 only. A real limitation (one path cannot hold N profiles),
+          reported rather than hidden -- with N>1 the profile is simply not written.
+    """
+    buckets = partition_by_server(observe_events)
+    multi = len(buckets) > 1
+    silos = []
+    for endpoint, evs in buckets.items():
+        if endpoint is None:
+            log(f"[silo] {len(evs)} event(s) with no server endpoint -> unassignable, reported not evaluated")
+            if multi:
+                emitter.silo(None, evaluable=False, reason="event carried no server endpoint")
+            continue
+        silo = Silo(endpoint=endpoint, events=evs,
+                    emitter=emitter.bind(endpoint if multi else None))
+        _calibrate_silo(extractor, silo, log, profile_path=(None if multi else profile_path))
+        if multi:   # see (2) above: suppressed at N=1 purely to preserve byte-identical validation
+            emitter.silo(silo.endpoint, evaluable=silo.evaluable, reason=silo.reason)
+        silos.append(silo)
+    return silos
+
+
+def _route_or_report_late(emitter, silos_by_ep, reported_late, endpoint):
+    """Return the evaluable Silo for an event's endpoint, or None if it cannot be judged.
+
+    A silo first seen AFTER the observe window (never in silos_by_ep) is REPORTED once as
+    existing-but-not-evaluable -- too late to calibrate -- rather than silently skipped, the same
+    honesty as late-command and UNCLAIMED reporting elsewhere. An observed-but-not-evaluable silo was
+    already reported at build time, so it is skipped here without a duplicate announcement.
+    """
+    silo = silos_by_ep.get(endpoint)
+    if silo is not None:
+        return silo if silo.evaluable else None
+    if endpoint not in reported_late:
+        reported_late.add(endpoint)
+        emitter.silo(endpoint, evaluable=False,
+                     reason="silo first seen after the observe window; too late to calibrate")
+    return None
+
+
+def evaluate_continuous_silos(extractor, iface, emitter, silos_by_ep, reported_late, log):
+    """Phase 3: watch continuously and judge every write against its silo's FROZEN grammar.
+
+    DESIGN INVARIANT — no re-learning in phase 3. Grammars are read-only here (run through
+    _feed_or_judge with no GrammarLearner), so an anomalous action seen during evaluate can never be
+    absorbed into "normal". One stream, one extractor; each event is routed to its silo by server. A
+    silo that cannot be judged (unknown/late/not-evaluable) is reported once and skipped, never
+    misrouted to another silo's tracker. On Ctrl-C the stream is torn down and we return cleanly.
+    """
     if emitter:
-        emitter.stage("evaluate")   # phase 3 begins -> UI header reads "LIVE"
-    log("[evaluate] continuous — judging writes against the frozen grammar (Ctrl-C to stop)")
+        emitter.stage("evaluate")
+    n = sum(1 for s in silos_by_ep.values() if s.evaluable)
+    log(f"[evaluate] continuous, {n} evaluable silo(s) -- each write judged against its OWN silo's "
+        f"grammar (Ctrl-C to stop)")
     try:
-        run_evaluate(extractor, capture_stream(extractor, iface), tracker, grammar,
-                     log=log, emitter=emitter, state_key=state_key)
+        for evt in capture_stream(extractor, iface):
+            silo = _route_or_report_late(emitter, silos_by_ep, reported_late, getattr(evt, "server", None))
+            if silo is None:
+                continue
+            _feed_or_judge(extractor, evt, silo.tracker, silo.grammar,
+                           log=log, emitter=silo.emitter, state_key=silo.state_key)
     except KeyboardInterrupt:
         log("[evaluate] stopped")
     return 0
@@ -472,47 +635,68 @@ def main(argv=None):
         return 2
     emitter.protocol_seen(extractor)
 
-    # Phase 1 — OBSERVE: discover flows, identify the state signal, auto-calibrate.
+    # Phase 1 — OBSERVE: capture, then demux into silos and discover+calibrate each. Every run goes
+    # through silos; the normal bench case is simply N=1, which build_silos keeps byte-identical.
     emitter.stage("observe")
     obs = capture_events(extractor, args.iface, args.observe, log=log)
-    calib, _disc, state_flow = discover_and_calibrate(extractor, obs, profile_path=args.profile, log=log, emitter=emitter)
-    if calib is None:
+    silos = build_silos(extractor, obs, emitter, log, profile_path=args.profile)
+    evaluable = [s for s in silos if s.evaluable]
+    if not evaluable:
+        # No silo could be calibrated. For N=1 this is exactly the old "no state signal -> return 2"
+        # (discovery events were still emitted by build_silos); for N>1 every silo was reported.
+        log("[silo] no evaluable silo; extend --observe to cover >=1.5 process cycles")
         return 2
-    state_key = state_flow.key   # the discovered state variable's key (for phase / variable_value)
+
     # Scale the write-coalescing window to the observed process (no-op for extractors that do not
-    # coalesce). Set before the LEARN/EVALUATE captures so those windows use the derived value.
-    apply_derived_coalesce_window(extractor, calib, log=log)
-    # One tracker carries phase inference continuously through learn and into evaluate.
-    tracker = PhaseTracker(calib.config)
+    # coalesce). One shared extractor.config cannot hold a per-silo window yet, so with N>1 this uses
+    # the first evaluable silo (documented limitation); with N=1 it is exactly the old single call.
+    apply_derived_coalesce_window(extractor, evaluable[0].calib, log=log)
+
+    silos_by_ep = {s.endpoint: s for s in silos}   # includes non-evaluable, so they are not re-reported
+    reported_late = set()
 
     if args.learn is not None:
-        # Phase 2 — LEARN: learn the coherence grammar from this window. Temporal trust: the
+        # Phase 2 — LEARN: learn each silo's coherence grammar from this window. Temporal trust: the
         # environment is controlled during learn, so what is seen here is the baseline "normal".
         emitter.stage("learn")
         ev = capture_events(extractor, args.iface, args.learn, log=log)
-        doc = run_learn(extractor, ev, tracker, emitter=emitter, state_key=state_key)
-        for k, info in doc.get("grammar", {}).items():
-            log(f"[learn] {k}: coherent_phases={info.get('learned_coherent_phases')} "
-                f"from {info.get('total_writes_observed')} writes")
+        for endpoint, evs in partition_by_server(ev).items():
+            silo = _route_or_report_late(emitter, silos_by_ep, reported_late, endpoint)
+            if silo is None:
+                continue
+            silo.doc = run_learn(extractor, evs, silo.tracker, emitter=silo.emitter, state_key=silo.state_key)
+            silo.grammar = silo.doc.get("grammar", {})
+            for k, info in silo.grammar.items():
+                log(f"[learn:{endpoint}] {k}: coherent_phases={info.get('learned_coherent_phases')} "
+                    f"from {info.get('total_writes_observed')} writes")
 
         if args.grammar:
-            # Legacy learn-to-file flow: write the grammar and stop (no evaluate).
+            # Legacy learn-to-file flow: write the grammar and stop (no evaluate). One file holds one
+            # silo's document, so this is single-silo only; with N>1 the silos were reported but the
+            # file is not written (a documented phase 2a-1 limitation, not a silent drop).
+            if len(evaluable) != 1:
+                log(f"[silo] --grammar learn-to-file is single-silo only; {len(evaluable)} evaluable "
+                    f"silos were reported but no grammar file was written")
+                return 1
             with open(args.grammar, "w") as f:
-                json.dump(doc, f, indent=2)
+                json.dump(evaluable[0].doc, f, indent=2)
             log(f"[learn] grammar -> {args.grammar} (stopping; omit --grammar to chain into continuous evaluate)")
             return 0
 
-        # Phase 3 — EVALUATE (continuous), the single-run default: freeze the just-learned grammar
-        # and watch until Ctrl-C. No re-learning (see evaluate_continuous).
-        return evaluate_continuous(extractor, args.iface, tracker, doc.get("grammar", {}),
-                                   log=log, emitter=emitter, state_key=state_key)
+        # Phase 3 — EVALUATE (continuous), the single-run default: freeze the just-learned grammars
+        # and watch until Ctrl-C, routing each write to its silo. No re-learning.
+        return evaluate_continuous_silos(extractor, args.iface, emitter, silos_by_ep, reported_late, log)
 
     if args.grammar:
-        # Evaluate a previously saved grammar (no learn window): watch continuously.
+        # Evaluate a previously saved grammar (no learn window). The grammar file is one silo's, so
+        # this is single-silo only; with N>1 the silos were reported but the file is not loaded.
+        if len(evaluable) != 1:
+            log(f"[silo] --grammar evaluate is single-silo only; {len(evaluable)} evaluable silos "
+                f"were reported but no grammar file was loaded")
+            return 1
         with open(args.grammar) as f:
-            grammar = json.load(f).get("grammar", {})
-        return evaluate_continuous(extractor, args.iface, tracker, grammar,
-                                   log=log, emitter=emitter, state_key=state_key)
+            evaluable[0].grammar = json.load(f).get("grammar", {})
+        return evaluate_continuous_silos(extractor, args.iface, emitter, silos_by_ep, reported_late, log)
 
     print("nothing to do: pass --learn <secs> for a single observe->learn->evaluate run, "
           "or --grammar <path> to evaluate a saved grammar", file=sys.stderr)
