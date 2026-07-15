@@ -13,7 +13,30 @@ from .modbus import ModbusExtractor
 from .opcua import OpcUaExtractor
 from .s7 import S7CommExtractor
 
-__all__ = ["ProtocolExtractor", "ModbusExtractor", "OpcUaExtractor", "S7CommExtractor", "get_extractor"]
+#: Every extractor the runtime knows. The one place to register a protocol: add its class here (and
+#: its module). Both get_extractor (by name) and extractor_for_layer (by wire layer) derive from it,
+#: so a new protocol needs no second lookup table.
+EXTRACTOR_CLASSES = (ModbusExtractor, OpcUaExtractor, S7CommExtractor)
+
+__all__ = [
+    "ProtocolExtractor", "ModbusExtractor", "OpcUaExtractor", "S7CommExtractor",
+    "EXTRACTOR_CLASSES", "get_extractor", "extractor_for_layer",
+]
+
+
+def extractor_for_layer(layer: str) -> Optional[ProtocolExtractor]:
+    """The extractor that consumes a given ``frame.protocols`` dissector substring, or ``None``.
+
+    The inverse of get_extractor's name lookup, derived from each class's declared ``wire_layer``
+    rather than a separate protocol->name table. A new protocol becomes reachable here just by being
+    added to EXTRACTOR_CLASSES with a wire_layer set; nothing else changes.
+    """
+    if not layer:
+        return None
+    for cls in EXTRACTOR_CLASSES:
+        if cls.wire_layer and cls.wire_layer == layer:
+            return cls()
+    return None
 
 
 def get_extractor(name: str = "modbus", config=None) -> ProtocolExtractor:

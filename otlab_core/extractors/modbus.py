@@ -140,6 +140,7 @@ def _build_summary(function_code, src_ip, src_port, dst_ip, dst_port, event_type
 
 class ModbusExtractor(ProtocolExtractor):
     name = "MODBUS/TCP"
+    wire_layer = "modbus"   # frame.protocols dissector substring (single source of truth; see gate)
 
     def __init__(self, config: Optional[ModbusConfig] = None):
         self.config = config or ModbusConfig()
@@ -187,8 +188,9 @@ class ModbusExtractor(ProtocolExtractor):
         data_val = _parse_hex_value(_col(cols, 17))
 
         # Detection is automatic by dissector (no hardcoded port filter): this extractor
-        # only accepts frames the Modbus dissector identified.
-        if "modbus" not in protocols:
+        # only accepts frames the Modbus dissector identified. Gate on the declared wire_layer so
+        # it can never drift from the probe's reverse lookup.
+        if self.wire_layer not in protocols:
             return None
         if not src_ip or not dst_ip or func_code is None:
             return None

@@ -224,6 +224,7 @@ def _decode_value(token, wordlen):
 
 class S7CommExtractor(ProtocolExtractor):
     name = "S7COMM"
+    wire_layer = "s7comm"   # frame.protocols dissector substring (single source of truth; see gate)
 
     def __init__(self, config=None):
         # No dedicated S7 config section exists yet; accept whatever the runtime passes (may be
@@ -291,7 +292,8 @@ class S7CommExtractor(ProtocolExtractor):
             return None
         # Only frames the s7comm dissector identified. Encrypted (S7CommPlus / TLS) frames carry no
         # readable payload and are dropped here; security_mode still classifies them for callers.
-        if "s7comm" not in str(_col(cols, 1)).lower():
+        # Gate on the declared wire_layer so it can never drift from the probe's reverse lookup.
+        if self.wire_layer not in str(_col(cols, 1)).lower():
             return None
 
         rosctr = _first_int(_col(cols, 6))
