@@ -500,19 +500,26 @@ def partition_by_server(events):
 def _calibrate_silo(extractor, silo, log, profile_path=None):
     """Discover + calibrate ONE silo from its own event partition. Sets evaluable/reason.
 
-    A silo is evaluable only if a state signal was discovered AND its phase period was measurable
-    (>=~1.5 process cycles). Otherwise it is reported, not calibrated and not dropped: judging a
-    command against a period that could not be measured is worse than declining to judge it.
+    A silo is evaluable iff a state signal was DISCOVERED (calib is not None) -- exactly the
+    pre-silo observer's gate (v2-dev: ``if calib is None: return 2``). A discovered-but-UNMEASURABLE
+    period (fewer than ~1.5 cycles in the window) is NOT a reason to decline: v2-dev proceeds on the
+    default phase config with a warning, and continuous evaluation after learn is the default single
+    run, so declining here would exit the run after observe and break that continuity. The warning is
+    still surfaced via ``reason`` -- an honest note on an evaluable silo -- so nothing is hidden.
+
+    Only a silo with NO state signal at all (calib is None) is non-evaluable, and it is reported, not
+    silently dropped.
     """
     log(f"[silo] {silo.endpoint}: {len(silo.events)} observe events")
     calib, _disc, state_flow = discover_and_calibrate(
         extractor, silo.events, profile_path=profile_path, log=log, emitter=silo.emitter)
     if calib is None:
-        silo.reason = "no state signal discovered (needs >=1.5 process cycles within --observe)"
+        silo.reason = "no state signal discovered (needs a bounded, cycling signal within --observe)"
         return
     if not calib.measurable:
-        silo.reason = calib.warning or "phase period not measurable (too few cycles to calibrate)"
-        return
+        # Discovered but the period could not be measured: proceed on default config (as v2-dev does),
+        # recording the warning. Evaluable stays True so the single-silo run reaches learn+evaluate.
+        silo.reason = calib.warning or "phase period not measurable; using default phase config"
     silo.calib = calib
     silo.state_flow = state_flow
     silo.state_key = state_flow.key

@@ -10,6 +10,7 @@ the original single-silo path.
 Synthetic OPC UA events (same shape as test_observer_pipeline.py) with evt.server set per silo.
 Deterministic; runnable as `python3 tests/test_silo_demux.py`.
 """
+import contextlib
 import io
 import json
 import os
@@ -184,6 +185,47 @@ def main():
     check("exactly one late-silo report for the new endpoint (deduped, not skipped)",
           [e["endpoint"] for e in late] == ["10.9.9.9:4840"] and late[0]["evaluable"] is False,
           f"(={[e['endpoint'] for e in late]})")
+
+    # --- main() observe->learn->evaluate TRANSITION (the seam the earlier tests missed) ------------
+    # A discovered-but-UNMEASURABLE state signal (one cycle within the window -- the real bench case
+    # for a slow process at --observe 30) must still proceed to learn + continuous evaluate, exactly
+    # as the pre-silo observer did on default config. The prior tests only used a fully-measurable
+    # 2-cycle signal, so they never exercised main()'s decision here. Fully testing the *continuous*
+    # part needs a live capture (an infinite tshark stream); the closest reachable seam is main() with
+    # the capture layer stubbed -- capture_events returns lists, capture_stream is a finite generator
+    # so main() returns instead of blocking -- which is exactly where the transition logic lives.
+    def one_cycle_pubs():          # turns=(0,100,0): STATE is discovered but the period is unmeasurable
+        e, t = [], 0.0
+        for i in range(0, len(triangle(turns=(0, 100, 0))), 2):
+            lv = triangle(turns=(0, 100, 0))
+            e.append(pub(t, lv[i:i + 2], SRV_A)); t += 0.2
+        return e
+    def learn_pubs():
+        e, t, lvl = [], 0.0, 0.0
+        for i in range(30):
+            s1 = lvl + 0.167; s2 = s1 + 0.167; lvl = s2
+            e.append(pub(t, [s1, s2], SRV_A)); t += 0.2
+            if i == 20:
+                e.append(NormalizedEvent(timestamp=t, protocol="OPCUA/binary", op="WRITE_REQUEST",
+                                         direction="request", target="ns=4;i=23", value=80.0, server=SRV_A,
+                                         raw={"variant_type": 0x0A})); t += 0.2
+        return e
+
+    real_ce, real_cs = obs.capture_events, obs.capture_stream
+    calls = {"n": 0}
+    obs.capture_events = lambda ex, iface, secs, log=None: one_cycle_pubs() if (calls.__setitem__("n", calls["n"] + 1) or calls["n"] == 1) else learn_pubs()
+    obs.capture_stream = lambda ex, iface: iter([pub(0.0, [1.0, 2.0], SRV_A)])   # finite so main() returns
+    mbuf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(mbuf):
+            rc = obs.main(["--iface", "x", "--observe", "1", "--learn", "1"])
+    finally:
+        obs.capture_events, obs.capture_stream = real_ce, real_cs
+    mstages = [json.loads(l)["stage"] for l in mbuf.getvalue().splitlines()
+               if json.loads(l).get("type") == "stage"]
+    check("main() reaches continuous evaluate after learn on an unmeasurable signal (was rc=2 exit)",
+          rc == 0 and "learn" in mstages and "evaluate" in mstages,
+          f"(rc={rc}, stages={mstages})")
 
     print()
     if _failures:
