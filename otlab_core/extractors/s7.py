@@ -230,9 +230,13 @@ class S7CommExtractor(ProtocolExtractor):
         # No dedicated S7 config section exists yet; accept whatever the runtime passes (may be
         # None) and read optional knobs defensively via getattr.
         self.config = config
-        # pduref -> (ordered request items, timestamp). Instance state, because S7 read pairing
-        # spans two frames (Job -> Ack_Data). Bounded; see _remember.
-        self._pending: "OrderedDict[int, Tuple[list, float]]" = OrderedDict()
+        # (conversation, pduref) -> (ordered request items, timestamp). Instance state, because S7
+        # read pairing spans two frames (Job -> Ack_Data). pduref is a 16-bit correlator scoped to
+        # ONE TCP connection, not globally unique, so the conversation MUST be part of the key: two
+        # connections sharing a pduref (two clients to one PLC, or one capture over two PLCs) would
+        # otherwise cross-pair -- an Ack_Data popping the other conversation's remembered items and
+        # emitting a correct-looking value against the wrong variable. Bounded; see _remember.
+        self._pending: "OrderedDict[Tuple[frozenset, int], Tuple[list, float]]" = OrderedDict()
 
     def occurrence(self) -> str:
         # Item lists and resp.data are legitimately multi-valued (up to 19 items per request
@@ -266,22 +270,42 @@ class S7CommExtractor(ProtocolExtractor):
 
     # -- pending map (read Job -> Ack_Data pairing) ---------------------------------------------
 
-    def _remember(self, pduref, items, ts):
-        """Store a Read Job's ordered items under its pduref, bounded in age AND size.
+    @staticmethod
+    def _conversation(cols):
+        """Direction-independent key for the TCP conversation a frame belongs to.
 
-        EVICTION POLICY (chosen): an insertion-ordered map keyed by pduref. On each insert we
-        (1) drop any entry older than _PENDING_TTL_S seconds -- a Read whose Ack was lost or never
-        mirrored -- then (2) cap the map at _PENDING_MAX entries, dropping the oldest first. pduref
-        is 16-bit and wraps, but a request/response completes in milliseconds, so the map is
-        normally near-empty and this only bounds the pathological case of unanswered Reads. A
-        repeated pduref refreshes its slot (the newer Job supersedes the stale one).
+        pduref (col 7) is a 16-bit correlator scoped to ONE TCP connection, so its values recur
+        across connections; the pending map is therefore scoped per conversation. A Read Job travels
+        client->server and its Ack_Data server->client, so the key MUST be identical under a src/dst
+        swap -- an UNORDERED pair (frozenset) of the two ip:port endpoints achieves that, from the
+        endpoint fields already in _FIELDS (ip.src/tcp.srcport at 2/3, ip.dst/tcp.dstport at 4/5).
         """
-        if pduref in self._pending:
-            del self._pending[pduref]
+        src = f"{_col(cols, 2)}:{_col(cols, 3)}"
+        dst = f"{_col(cols, 4)}:{_col(cols, 5)}"
+        return frozenset((src, dst))
+
+    def _remember(self, conv, pduref, items, ts):
+        """Store a Read Job's ordered items under (conversation, pduref), bounded in age AND size.
+
+        EVICTION POLICY (chosen): an insertion-ordered map keyed by (conversation, pduref). On each
+        insert we (1) drop any entry older than _PENDING_TTL_S seconds -- a Read whose Ack was lost
+        or never mirrored -- then (2) cap the map at _PENDING_MAX entries, dropping the oldest first.
+        pduref is 16-bit and wraps, but a request/response completes in milliseconds, so the map is
+        normally near-empty and this only bounds the pathological case of unanswered Reads. A
+        repeated (conversation, pduref) refreshes its slot (the newer Job supersedes the stale one).
+
+        The composite key raises the theoretical ceiling from one entry per pduref to one per
+        (conversation, pduref), but the same bound still applies unchanged: _PENDING_MAX = 1024
+        simultaneously-outstanding unanswered Reads across ALL conversations is already far beyond
+        any real concurrent load, and the per-insert TTL sweep is key-agnostic. Left as is.
+        """
+        key = (conv, pduref)
+        if key in self._pending:
+            del self._pending[key]
         cutoff = ts - _PENDING_TTL_S
         for k in [k for k, (_items, t) in self._pending.items() if t < cutoff]:
             del self._pending[k]
-        self._pending[pduref] = (items, ts)
+        self._pending[key] = (items, ts)
         while len(self._pending) > _PENDING_MAX:
             self._pending.popitem(last=False)
 
@@ -305,10 +329,11 @@ class S7CommExtractor(ProtocolExtractor):
 
         ts = float(_col(cols, 0)) if _col(cols, 0) else time.time()
         pduref = _first_int(_col(cols, 7))
+        conv = self._conversation(cols)   # scopes pduref to its TCP connection (direction-independent)
 
         # Read Job: remember the ordered request items; no event yet (values arrive on the Ack).
         if rosctr == ROSCTR_JOB and func == FUNC_READ:
-            self._remember(pduref, self._request_items(cols), ts)
+            self._remember(conv, pduref, self._request_items(cols), ts)
             return None
 
         # Write Job: the items AND their values are both in this frame -> emit a WRITE_REQUEST.
@@ -319,7 +344,7 @@ class S7CommExtractor(ProtocolExtractor):
         # Read Ack_Data: align the remembered request items onto this frame's values by walking the
         # per-item return codes (col 16). A malformed / unalignable response is dropped, not guessed.
         if rosctr == ROSCTR_ACK_DATA and func == FUNC_READ:
-            pending = self._pending.pop(pduref, None)
+            pending = self._pending.pop((conv, pduref), None)
             if pending is None:
                 return None   # no matching Job (lost / evicted): the values cannot be addressed
             req_items, _ts = pending
