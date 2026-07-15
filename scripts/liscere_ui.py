@@ -46,6 +46,7 @@ class DiscoveryModel:
     def __init__(self):
         self.protocols = OrderedDict()   # label -> {"port": ..., "flows": OrderedDict(key -> flow)}  (left map)
         self.current_protocol = None
+        self.opaque = OrderedDict()      # endpoint -> reason: captured traffic no extractor can read
         # key -> {nature, datatype, datatype_certain, features, value, phase}  (VARIABLES table)
         self.variables = OrderedDict()
         self.verdicts = deque(maxlen=10)
@@ -69,6 +70,7 @@ class DiscoveryModel:
             "verdict": self._verdict,
             "grammar_learned": self._grammar,
             "stage": self._stage,
+            "silo": self._silo,
         }.get(t)
         if handler:
             handler(ev)
@@ -159,6 +161,17 @@ class DiscoveryModel:
     def _stage(self, ev):
         self.stage = ev.get("stage")
 
+    def _silo(self, ev):
+        # A silo announcement. evaluable=False with a reason = an endpoint that exists but cannot be
+        # evaluated (captured traffic no extractor can read, or too sparse to calibrate); shown in
+        # the map, distinct from evaluable flows. An evaluable silo is a normal readable endpoint and
+        # is left to the flow/variable events (its per-silo rendering is future UI work).
+        if ev.get("evaluable"):
+            self.others.append(ev)
+            return
+        endpoint = str(ev.get("endpoint"))
+        self.opaque[endpoint] = ev.get("reason")
+
 
 # -- rendering ------------------------------------------------------------
 
@@ -175,6 +188,16 @@ def build_tree(model):
             pnode.add(Text("waiting for flows…", style="dim"))
         for key, fl in proto["flows"].items():
             pnode.add(_flow_label(key, fl))
+    if model.opaque:
+        # Endpoints whose traffic was captured but no extractor can read -- reported, not evaluated.
+        # Distinct from the protocol/flow nodes above, in the map's existing visual language.
+        onode = tree.add(Text("UNREADABLE ENDPOINTS", style="bold red"))
+        for endpoint, reason in model.opaque.items():
+            t = Text("⊘ ", style="bold red")
+            t.append(str(endpoint), style="red")
+            if reason:
+                t.append(f"   {reason}", style="dim red")
+            onode.add(t)
     return tree
 
 

@@ -55,6 +55,10 @@ _FIELDS = [
     "data.data",                        # 20  raw payload; used only by security_mode
 ]
 
+# ISO-on-TCP (RFC 1006) service port -- S7 binds it; the capture filter is "tcp port 102". S7 may
+# name its own port (this is the extractor's protocol knowledge); the observer never sees it.
+ISO_ON_TCP_PORT = 102
+
 # ROSCTR (message role).
 ROSCTR_JOB = 1
 ROSCTR_ACK = 2
@@ -247,7 +251,7 @@ class S7CommExtractor(ProtocolExtractor):
         return list(_FIELDS)
 
     def capture_filter(self) -> str:
-        return "tcp port 102"
+        return f"tcp port {ISO_ON_TCP_PORT}"
 
     def security_mode(self, cols: List[str]) -> str:
         # Frames the s7comm dissector parsed are cleartext by definition.
@@ -267,6 +271,53 @@ class S7CommExtractor(ProtocolExtractor):
         if first in (0x16, 0x17):
             return "encrypted"
         return "clear"
+
+    def opaque_endpoint(self, cols: List[str]) -> Optional[Tuple[str, str]]:
+        """An ISO-on-TCP endpoint carrying a payload S7 cannot read -> (endpoint, reason), else None.
+
+        Called by the observer only on a "tcp port 102" frame that parse_line declined. S7 can tell
+        precisely, from fields already captured:
+          - the frame must show the ISO-on-TCP transport (tpkt/cotp in frame.protocols) with NO
+            s7comm application layer -- a readable s7comm frame is parse_line's job, not this;
+          - the first byte of data.data (col 20) says what the opaque payload is: 0x72 is S7CommPlus
+            (its payload is encrypted by design, no stock dissector reads it), 0x16/0x17 is a TLS
+            record.
+        Anything else -> None: a bare ACK / handshake carries no data.data (transport plumbing);
+        a 0x32 first byte would be readable s7comm; an unrecognised byte is not something S7 can
+        claim is unreadable. Returning None when unsure is deliberate.
+
+        The reason states what was seen (the transport shape and the first byte), not an
+        interpretation beyond it. The endpoint is the ISO-on-TCP server -- the side bound to port
+        102, which S7 knows is its own service port.
+        """
+        protocols = str(_col(cols, 1)).lower()
+        if self.wire_layer in protocols:
+            return None                      # readable s7comm -> not opaque; parse_line handles it
+        if "cotp" not in protocols and "tpkt" not in protocols:
+            return None                      # not the ISO-on-TCP transport shape (bare TCP / other)
+        b = _hex_bytes(_col(cols, 20))       # data.data
+        if not b:
+            return None                      # no payload -> transport plumbing (ACK / handshake)
+        first = b[0]
+        if first == 0x72:
+            reason = "ISO-on-TCP (tpkt/cotp), S7CommPlus payload (data.data first byte 0x72)"
+        elif first in (0x16, 0x17):
+            reason = f"ISO-on-TCP (tpkt/cotp), TLS record (data.data first byte 0x{first:02x})"
+        else:
+            return None                      # 0x32 (readable) or unrecognised -> S7 cannot claim opaque
+        endpoint = self._iso_server_endpoint(cols)
+        return (endpoint, reason) if endpoint else None
+
+    @staticmethod
+    def _iso_server_endpoint(cols) -> Optional[str]:
+        """The ip:port of the ISO-on-TCP server for this frame: the endpoint bound to port 102."""
+        src_ip, src_port = _col(cols, 2), _to_int(_col(cols, 3))
+        dst_ip, dst_port = _col(cols, 4), _to_int(_col(cols, 5))
+        if src_port == ISO_ON_TCP_PORT and src_ip:
+            return f"{src_ip}:{src_port}"
+        if dst_port == ISO_ON_TCP_PORT and dst_ip:
+            return f"{dst_ip}:{dst_port}"
+        return None
 
     # -- pending map (read Job -> Ack_Data pairing) ---------------------------------------------
 
