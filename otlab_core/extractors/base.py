@@ -18,6 +18,12 @@ class ProtocolExtractor(ABC):
     #: Human-readable protocol label; also used as ``NormalizedEvent.protocol``.
     name = "GENERIC"
 
+    #: The ``frame.protocols`` dissector substring this extractor consumes (e.g. "s7comm"). Single
+    #: source of truth for both the ``parse_line`` gate and the protocol probe's reverse lookup, so
+    #: the two can never drift. A subclass that leaves this ``None`` declares no wire layer and is
+    #: simply never claimed by the probe. NOT ``name`` (a display label that matches only by chance).
+    wire_layer = None
+
     def occurrence(self) -> str:
         """tshark ``-E occurrence=`` mode for this protocol.
 

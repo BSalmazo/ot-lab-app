@@ -196,6 +196,7 @@ def _as_number(value):
 
 class OpcUaExtractor(ProtocolExtractor):
     name = "OPCUA/binary"
+    wire_layer = "opcua"   # frame.protocols dissector substring (single source of truth; see gate)
 
     def __init__(self, config: Optional[OpcUaConfig] = None):
         self.config = config or OpcUaConfig()
@@ -225,8 +226,10 @@ class OpcUaExtractor(ProtocolExtractor):
         protocols = _col(cols, 1).lower()
         transport_type = _col(cols, 6).strip()
         # Gate: only OPC UA frames. Encrypted MSG frames still carry the opcua layer and are
-        # kept (emitted blind), so we gate on the layer, not on payload readability.
-        if "opcua" not in protocols and not transport_type:
+        # kept (emitted blind), so we gate on the layer, not on payload readability. The layer
+        # substring is the declared wire_layer (single source of truth); the transport_type
+        # allowance is unchanged.
+        if self.wire_layer not in protocols and not transport_type:
             return None
 
         ts_raw = _col(cols, 0)
