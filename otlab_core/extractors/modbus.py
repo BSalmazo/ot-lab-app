@@ -356,19 +356,26 @@ class ModbusExtractor(ProtocolExtractor):
         repetition only and changes no verdict logic.
         """
         window = self.config.coalesce_window_s
-        run = None   # {"reg", "val", "start_ts", "last_ts", "evt"} of the open run
+        run = None   # {"key", "start_ts", "last_ts", "evt"} of the open run
         for evt in events:
             if evt.op == "WRITE_REQUEST" and evt.target is not None:
-                reg, val, ts = evt.target, evt.value, evt.timestamp
-                if (run is not None and run["reg"] == reg and run["val"] == val
+                # The run's identity includes the SERVER endpoint, not just (register, value). The
+                # flow key evt.target ("modbus:hr:<n>") is silo-relative and carries no endpoint, so
+                # keying on it alone would fold two different Modbus servers written with the same
+                # register and value inside the window into one event -- silent loss of the second.
+                # One extractor sees every Modbus endpoint (its filter is "tcp"), so this is reachable
+                # whenever two servers share a register+value. evt.server ("ip:port") is set on every
+                # event by parse_line.
+                key, ts = (evt.server, evt.target, evt.value), evt.timestamp
+                if (run is not None and run["key"] == key
                         and (ts - run["last_ts"]) <= window
                         and (ts - run["start_ts"]) <= window):
                     kept = run["evt"]
                     kept.raw["repeat_count"] = kept.raw.get("repeat_count", 1) + 1
                     run["last_ts"] = ts        # slide the gap check onto this repeat
-                    continue                   # drop the wire repetition
+                    continue                   # drop the wire repetition (same endpoint, reg, value)
                 evt.raw["repeat_count"] = 1
-                run = {"reg": reg, "val": val, "start_ts": ts, "last_ts": ts, "evt": evt}
+                run = {"key": key, "start_ts": ts, "last_ts": ts, "evt": evt}
             yield evt
 
     def group_flows(self, events) -> list:
