@@ -130,6 +130,8 @@ def main():
     check("the opaque silo is the right endpoint, not evaluable, with a reason",
           len(silos) == 1 and silos[0]["endpoint"] == "192.168.1.12:102"
           and silos[0]["evaluable"] is False and bool(silos[0]["reason"]))
+    check("the opaque silo is kind=unreadable (a vantage boundary, not a calibration gap)",
+          len(silos) == 1 and silos[0].get("kind") == "unreadable", f"(kind={silos[0].get('kind') if silos else None})")
     check("a bare TCP frame produced no silo event", all(s["endpoint"] != "192.168.1.13:54000" for s in silos))
     check("the readable write still produced its event (flow unaffected)",
           len(events) == 1 and events[0].op == "WRITE_REQUEST" and events[0].target == "s7:db1:0",

@@ -54,10 +54,15 @@ class DiscoveryModel:
         # is the legend and the tables can reference a silo by id instead of a long endpoint.
         self.silos = OrderedDict()       # endpoint -> {"id", "peer", "flows": OrderedDict(key->flow)}
         self._next_silo_id = 1
-        self.opaque = OrderedDict()      # key -> (display, reason): endpoints/findings reported, not
-                                         # evaluated. Keyed so an endpoint-less finding (a claimed-but-
-                                         # empty extractor) does not collide with another on one line.
-        self.protocol = None             # protocol label from protocol_seen (one extractor per run today)
+        # Two distinct kinds of "not evaluated", never conflated (each key -> (display, reason)):
+        #   unreadable  -- traffic no extractor can read (a vantage boundary).
+        #   unevaluable -- read perfectly, could not be calibrated (a data problem).
+        # Keyed so an endpoint-less finding (a claimed-but-empty extractor) does not collide with
+        # another on one line. A silo whose flows WERE discovered but has no state signal is NOT here
+        # -- it stays a map root, marked unevaluable in place (see _silo).
+        self.unreadable = OrderedDict()
+        self.unevaluable = OrderedDict()
+        self.protocol = None             # run-wide protocol label (fallback only; each silo carries its own)
         # (silo, key) -> {nature, datatype, datatype_certain, features, value, phase}  (VARIABLES table)
         self.variables = OrderedDict()
         self.verdicts = deque(maxlen=10)
@@ -105,7 +110,8 @@ class DiscoveryModel:
         if not endpoint:
             return None
         if endpoint not in self.silos:
-            self.silos[endpoint] = {"id": self._next_silo_id, "peer": None, "flows": OrderedDict()}
+            self.silos[endpoint] = {"id": self._next_silo_id, "peer": None, "protocol": None,
+                                    "evaluable": True, "reason": None, "flows": OrderedDict()}
             self._next_silo_id += 1
         return self.silos[endpoint]
 
@@ -189,28 +195,52 @@ class DiscoveryModel:
         self.stage_started = time.time() if secs is not None else None
 
     def _silo(self, ev):
-        # A silo announcement. evaluable=True -> a readable silo, a DISCOVERY MAP root (with its peer,
-        # if the observer supplied one). evaluable=False with a reason -> a finding that exists but
-        # cannot be evaluated (captured traffic no extractor can read, too sparse to calibrate, or a
-        # claimed extractor that produced no evaluable silo) -> UNREADABLE ENDPOINTS. flow_found may
-        # have already created the readable silo; this confirms it.
+        # A silo announcement, carrying its OWN protocol label. evaluable=True -> a DISCOVERY MAP root
+        # (with its peer and protocol). evaluable=False -> a finding that exists but cannot be
+        # evaluated; ``kind`` says which section it belongs in and the two are never merged:
+        #   "unreadable"  -> UNREADABLE ENDPOINTS (traffic no extractor can read; a vantage boundary).
+        #   "unevaluable" -> read but not calibratable (a data problem), shown separately.
         endpoint = ev.get("endpoint")
-        if ev.get("evaluable"):
-            silo = self._ensure_silo(str(endpoint) if endpoint else None)
-            if silo is not None and ev.get("peer"):
-                silo["peer"] = ev.get("peer")
-            return
+        protocol = ev.get("protocol")
         reason = ev.get("reason")
-        # A real opaque endpoint dedups by its endpoint (one line for hundreds of frames). An
-        # endpoint-LESS finding (a claimed-but-empty extractor, an orphan event) must key by its
-        # reason instead: keying every such finding by the shared "(no endpoint)" would collapse N of
-        # them -- two claimed-but-empty protocols in one run -- into a single line, hiding all but the
-        # last. That is the "emitted but invisible" failure this whole line of work closes.
+        ep = str(endpoint) if endpoint else None
+
+        if ev.get("evaluable"):
+            silo = self._ensure_silo(ep)
+            if silo is not None:
+                if protocol:
+                    silo["protocol"] = protocol
+                if ev.get("peer"):
+                    silo["peer"] = ev.get("peer")
+            return
+
+        if (ev.get("kind") or "unevaluable") == "unreadable":
+            self._add_finding(self.unreadable, ep, reason)
+            return
+
+        # Unevaluable. If its flows were already discovered (a map root exists), it is a silo that
+        # exists and cannot be evaluated -- mark it IN PLACE, never also list it below. Same endpoint
+        # in two places was the incoherence. Only an unevaluable finding with NO map root (an
+        # endpoint-less "claimed X, no evaluable silo", or an endpoint whose flows were never seen)
+        # goes to the separate UNEVALUABLE section.
+        silo = self.silos.get(ep) if ep else None
+        if silo is not None:
+            silo["evaluable"] = False
+            silo["reason"] = reason
+            if protocol:
+                silo["protocol"] = protocol
+            return
+        self._add_finding(self.unevaluable, ep, reason)
+
+    @staticmethod
+    def _add_finding(bucket, endpoint, reason):
+        # Key by endpoint when present (one line for hundreds of frames); key an endpoint-less finding
+        # by its reason so two of them (e.g. two claimed-but-empty protocols) never collapse onto one.
         if endpoint:
-            key, display = str(endpoint), str(endpoint)
+            key, display = endpoint, endpoint
         else:
             key, display = f"(no endpoint):{reason}", "(no endpoint)"
-        self.opaque[key] = (display, reason)
+        bucket[key] = (display, reason)
 
 
 # -- rendering ------------------------------------------------------------
@@ -223,18 +253,37 @@ def _strip_prefix(key):
     return key.split(":", 1)[1] if ":" in key else key
 
 
+def _finding_section(tree, title, title_style, glyph, glyph_style, text_style, findings, need_gap):
+    """One compact section (UNREADABLE / UNEVALUABLE): a header, then one line per finding
+    "<glyph> <endpoint>   <reason>". Returns True if it rendered (so the next gap is decided)."""
+    if not findings:
+        return False
+    if need_gap:
+        tree.add(Text(""))
+    node = tree.add(Text(title, style=title_style))
+    for _key, (display, reason) in findings.items():
+        t = Text(glyph, style=glyph_style)
+        t.append(str(display), style=text_style)
+        if reason:
+            t.append(f"   {reason}", style=f"dim {text_style}")
+        node.add(t)
+    return True
+
+
 def build_tree(model):
     tree = Tree(Text("DISCOVERY MAP", style="bold"))
-    if not model.silos and not model.opaque:
+    if not model.silos and not model.unreadable and not model.unevaluable:
         tree.add(Text("discovering…", style="dim"))
     silos = list(model.silos.items())
     for i, (endpoint, silo) in enumerate(silos):
         # Silo header "[id] LABEL (port)", then the addresses as bare IPs on their own lines (server
         # first, then peer(s), no label), then the flows -- no blank INSIDE a silo. Silos are
-        # separated by one blank line BETWEEN them.
+        # separated by one blank line BETWEEN them. The LABEL is the silo's OWN protocol (each silo
+        # is labelled by the extractor that parsed it), falling back to the run-wide one only if a
+        # silo was created by flow_found before its announcement arrived.
         server_ip, _, port = str(endpoint).rpartition(":")
         head = Text(f"[{silo['id']}] ", style="bold yellow")
-        head.append(model.protocol or "?", style="bold white")
+        head.append(silo.get("protocol") or model.protocol or "?", style="bold white")
         if port:
             head.append(f" ({port})", style="dim")
         snode = tree.add(head)
@@ -242,21 +291,25 @@ def build_tree(model):
         for p in (silo.get("peer") or "").split(", "):
             if p.strip():
                 snode.add(Text(p.strip(), style="dim"))
+        # A silo whose flows were discovered but which has no state signal exists and cannot be
+        # evaluated: it stays a map root, marked here in place -- never duplicated into a list below.
+        if silo.get("evaluable") is False:
+            note = Text("⚠ unevaluable", style="yellow")
+            if silo.get("reason"):
+                note.append(f"   {silo['reason']}", style="dim yellow")
+            snode.add(note)
         for key, fl in silo["flows"].items():
             snode.add(_flow_label(key, fl, model.verbose))
         if i < len(silos) - 1:
             tree.add(Text(""))                                     # one blank line between silos
-    if model.opaque:
-        if silos:
-            tree.add(Text(""))                                     # and before the unreadable section
-        # Endpoints whose traffic was captured but no extractor can read -- reported, not evaluated.
-        onode = tree.add(Text("UNREADABLE ENDPOINTS", style="bold red"))
-        for _key, (display, reason) in model.opaque.items():
-            t = Text("⊘ ", style="bold red")
-            t.append(str(display), style="red")
-            if reason:
-                t.append(f"   {reason}", style="dim red")
-            onode.add(t)
+    # Two separate sections, kept distinct: unreadable (a vantage boundary) vs unevaluable (a data
+    # problem). Conflating them would erase the distinction the observer rests on.
+    rendered = _finding_section(
+        tree, "UNREADABLE ENDPOINTS  ·  captured but no extractor can read", "bold red",
+        "⊘ ", "bold red", "red", model.unreadable, need_gap=bool(silos))
+    _finding_section(
+        tree, "UNEVALUABLE  ·  read but no state signal to calibrate", "bold yellow",
+        "⚠ ", "bold yellow", "yellow", model.unevaluable, need_gap=bool(silos) or rendered)
     return tree
 
 

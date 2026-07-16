@@ -204,12 +204,23 @@ def main():
     run.observe_end = 0.0                                     # force the observe deadline into the past
     run.tick()
 
-    reports = [(s["endpoint"], s["reason"]) for s in silos(rbuf)
+    all_silos = silos(rbuf)
+    reports = [(s["endpoint"], s["reason"]) for s in all_silos
                if s.get("reason") and "no evaluable silo" in s["reason"]]
     check("the claimed-but-empty Modbus extractor is reported, not silently absent",
           any("MODBUS/TCP" in (r or "") for _ep, r in reports), f"(={reports})")
     check("the evaluable OPC UA silo was built and is evaluable",
           any(s.endpoint == "10.0.0.6:4840" and s.evaluable for s in run.evaluable))
+    # Each silo announcement carries its OWN protocol label, so the UI never stamps one on all of
+    # them (the bench bug: every silo read S7COMM). And the claimed-empty finding is UNEVALUABLE
+    # (read, not calibratable), NOT unreadable -- the two must stay in distinct sections.
+    opc_silo = next((s for s in all_silos if s.get("endpoint") == "10.0.0.6:4840"), None)
+    check("the evaluable silo is labelled by its OWN extractor (OPCUA), not a shared pointer",
+          opc_silo is not None and opc_silo.get("protocol") == "OPCUA", f"(={opc_silo})")
+    empty = next((s for s in all_silos if (s.get("reason") or "").startswith("claimed MODBUS")), None)
+    check("the claimed-empty finding is kind=unevaluable (read, not unreadable) and MODBUS-labelled",
+          empty is not None and empty.get("kind") == "unevaluable" and empty.get("protocol") == "MODBUS",
+          f"(={empty})")
     check("one extractor empty does NOT sink the run: it proceeds to learn (not rc=2 exit)",
           run.phase == "learn" and not run.stop and run.rc == 0,
           f"(phase={run.phase}, stop={run.stop}, rc={run.rc})")

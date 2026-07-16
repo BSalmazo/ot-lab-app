@@ -82,6 +82,13 @@ def emit(event, out=None):
     out.flush()
 
 
+def _protocol_label(extractor):
+    """The short protocol label for a silo/announcement, e.g. "MODBUS", "OPCUA", "S7COMM". Derived
+    from the extractor's own name -- so each silo is labelled by the extractor that parsed it, never
+    by a single run-wide pointer (the multi-protocol bug where the last extractor stamped them all)."""
+    return extractor.name.split("/")[0].upper()
+
+
 class Emitter:
     """Emits structured discovery events as JSON Lines, in the order they are discovered.
 
@@ -132,12 +139,24 @@ class Emitter:
             event["seconds"] = seconds
         self._emit(event)
 
-    def silo(self, endpoint, evaluable, reason=None, peer=None):
-        # A discovered silo -- one (protocol, server endpoint) as its own unit of evaluation.
-        # `evaluable` is False for a silo that exists but could not be calibrated (too few samples,
-        # or unreadable); `reason` states why, so it is reported and never silently dropped. `peer`
-        # is the observed client host(s) talking to this silo, when known (readable silos).
+    def silo(self, endpoint, evaluable, reason=None, peer=None, protocol=None, kind=None):
+        # A discovered silo -- one (protocol, server endpoint) as its own unit of evaluation. Each
+        # silo carries its OWN protocol label (from the extractor that parsed it) so the UI never has
+        # to guess -- the multi-protocol failure was one shared label stamped on every silo.
+        #
+        # `evaluable` False -> the silo exists but cannot be evaluated; `kind` says WHY, a distinction
+        # the UI must not erase:
+        #   "unreadable"  -- traffic no extractor can read (an encrypted variant on the port). A
+        #                    vantage boundary: we cannot see in.
+        #   "unevaluable" -- read perfectly, but no state signal to calibrate against (too sparse, or
+        #                    no cycling variable). A data problem, not a blindness.
+        # `reason` states the specific cause either way, so it is reported and never silently dropped.
+        # `peer` is the observed client host(s) talking to this silo, when known (readable silos).
         event = {"type": "silo", "endpoint": endpoint, "evaluable": evaluable, "reason": reason}
+        if protocol:
+            event["protocol"] = protocol
+        if kind:
+            event["kind"] = kind
         if peer:
             event["peer"] = peer
         self._emit(event)
@@ -145,15 +164,15 @@ class Emitter:
     def opaque_endpoint(self, endpoint, reason):
         # An endpoint whose traffic arrived on the capture filter but which no extractor can read
         # (e.g. an encrypted variant on the service port). Reported ONCE per endpoint as a silo that
-        # exists but is not evaluable -- so hundreds of opaque frames yield a single event -- and
-        # never routed to a tracker. Dedup lives in the shared bookkeeping, alongside announced keys.
+        # exists but is UNREADABLE -- so hundreds of opaque frames yield a single event -- and never
+        # routed to a tracker. Dedup lives in the shared bookkeeping, alongside announced keys.
         if not endpoint or endpoint in self._shared["opaque"]:
             return
         self._shared["opaque"].add(endpoint)
-        self.silo(endpoint, evaluable=False, reason=reason)
+        self.silo(endpoint, evaluable=False, reason=reason, kind="unreadable")
 
     def protocol_seen(self, extractor):
-        event = {"type": "protocol_seen", "protocol": extractor.name.split("/")[0].upper()}
+        event = {"type": "protocol_seen", "protocol": _protocol_label(extractor)}
         port = getattr(getattr(extractor, "config", None), "port", None)
         if port is not None:
             event["port"] = port
@@ -721,20 +740,25 @@ def build_silos(extractor, observe_events, emitter, log, profile_path=None):
     """
     buckets = partition_by_server(observe_events)
     multi = len(buckets) > 1
+    label = _protocol_label(extractor)
     silos = []
     for endpoint, evs in buckets.items():
         if endpoint is None:
             log(f"[silo] {len(evs)} event(s) with no server endpoint -> unassignable, reported not evaluated")
-            emitter.silo(None, evaluable=False, reason="event carried no server endpoint")
+            # Read (the events parsed) but unassignable to a silo -> unevaluable, not unreadable.
+            emitter.silo(None, evaluable=False, reason="event carried no server endpoint",
+                         protocol=label, kind="unevaluable")
             continue
         silo = Silo(endpoint=endpoint, extractor=extractor, events=evs, emitter=emitter.bind(endpoint))
         _calibrate_silo(extractor, silo, log, profile_path=(None if multi else profile_path))
         # The peer(s): the distinct client HOST(s) observed talking to this silo (evt.client is set
         # by every extractor; the ephemeral client port is dropped). Observed, not configured.
         peers = sorted({e.client.rsplit(":", 1)[0] for e in evs if getattr(e, "client", None)})
-        # Every silo is announced (N=1 included): the UI keys everything by silo.
-        emitter.silo(silo.endpoint, evaluable=silo.evaluable, reason=silo.reason,
-                     peer=", ".join(peers) or None)
+        # Every silo is announced (N=1 included): the UI keys everything by silo. A non-evaluable
+        # silo here was READ (its flows were discovered) but has no state signal -> "unevaluable",
+        # distinct from an unreadable endpoint. It carries its own protocol label.
+        emitter.silo(silo.endpoint, evaluable=silo.evaluable, reason=silo.reason, protocol=label,
+                     kind=(None if silo.evaluable else "unevaluable"), peer=", ".join(peers) or None)
         silos.append(silo)
     return silos
 
@@ -752,7 +776,8 @@ def _route_or_report_late(emitter, silos_by_ep, reported_late, endpoint):
         return silo if silo.evaluable else None
     if endpoint not in reported_late:
         reported_late.add(endpoint)
-        emitter.silo(endpoint, evaluable=False,
+        # We read it -- it simply arrived too late to calibrate. Unevaluable, not unreadable.
+        emitter.silo(endpoint, evaluable=False, kind="unevaluable",
                      reason="silo first seen after the observe window; too late to calibrate")
     return None
 
@@ -815,8 +840,10 @@ class _Run:
             self.silos.extend(silos)
             if not any(s.evaluable for s in silos):
                 # A claimed extractor that yields no evaluable silo is a finding, not silently absent.
+                # We ran the reader and read the traffic -> unevaluable, not unreadable.
                 log(f"[silo] claimed {ext.name}, no evaluable silo")
-                emitter.silo(None, evaluable=False, reason=f"claimed {ext.name}, no evaluable silo")
+                emitter.silo(None, evaluable=False, protocol=_protocol_label(ext), kind="unevaluable",
+                             reason=f"claimed {ext.name}, no evaluable silo")
         self.silos_by_ep = {s.endpoint: s for s in self.silos if s.endpoint}
         self.evaluable = [s for s in self.silos if s.evaluable]
         if not self.evaluable:
