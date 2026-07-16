@@ -465,7 +465,9 @@ def _feed_or_judge(extractor, evt, tracker, grammar, learner=None, log=None, emi
             return None
         v = evaluate(grammar, evt.target, tracker.phase, tracker.confidence, tracker.transitioning)
         if log:
-            log(f"[{v.verdict:11s}] write {evt.target} phase={tracker.phase} "
+            # Name the silo (evt.server) so a verdict is attributable to an endpoint: a COHERENT at
+            # one silo and an INCOHERENT at another for the same key are two grammars, not a conflict.
+            log(f"[{v.verdict:11s}] {evt.server} write {evt.target} phase={tracker.phase} "
                 f"conf={tracker.confidence:.2f} | {v.rule} | {v.reason}")
         if emitter:
             emitter.verdict(evt.target, tracker.phase, v)
@@ -592,17 +594,17 @@ def build_silos(extractor, observe_events, emitter, log, profile_path=None):
 
     EVERY run comes through here; one silo is N=1. Returns the Silos in first-seen order.
 
-    Every silo uses a bound view of the run's ONE Emitter (emitter.bind(tag)); N=1 binds tag=None,
-    N>1 binds the endpoint. So there is NO shared-vs-per-silo Emitter branch and no unsynchronised
-    second Emitter -- de-dup is tag-keyed inside the single Emitter. Two deliberate N=1 differences
-    remain, both stated, not hidden:
+    Every silo binds its OWN endpoint as the emitter tag (emitter.bind(endpoint)), N=1 included, so
+    every per-silo event carries its silo tag and the silo() announcement is emitted for every silo.
+    The UI reads the tag rather than inferring the silo. This is deliberate: an "untagged => the sole
+    silo" inference would be correct only as long as a second endpoint that first speaks during learn
+    or evaluate is skipped by _route_or_report_late (it is today), i.e. it would depend on a runtime
+    gate rather than on the data -- exactly the kind of invariant 2b will change. Tagging makes the
+    data self-describing. (Both the tag and the announcement retire former N=1 special-cases that
+    existed only to keep the refactor byte-identical, now met and merged.) One difference remains:
 
-      (2) N=1 emits NO silo() announcement. 2b DEBT, not a principled choice: it exists only to keep
-          this refactor's output byte-identical to the pre-silo observer so the change is validatable.
-          The silo IS the fundamental unit; once the UI is silo-aware, silo() should be emitted
-          ALWAYS, including N=1, and this suppression removed.
-      (3) --profile is honoured for N=1 only. A real limitation (one path cannot hold N profiles),
-          reported rather than hidden -- with N>1 the profile is simply not written.
+      --profile is honoured for N=1 only. A real limitation (one path cannot hold N profiles),
+      reported rather than hidden -- with N>1 the profile is simply not written.
     """
     buckets = partition_by_server(observe_events)
     multi = len(buckets) > 1
@@ -610,14 +612,12 @@ def build_silos(extractor, observe_events, emitter, log, profile_path=None):
     for endpoint, evs in buckets.items():
         if endpoint is None:
             log(f"[silo] {len(evs)} event(s) with no server endpoint -> unassignable, reported not evaluated")
-            if multi:
-                emitter.silo(None, evaluable=False, reason="event carried no server endpoint")
+            emitter.silo(None, evaluable=False, reason="event carried no server endpoint")
             continue
-        silo = Silo(endpoint=endpoint, events=evs,
-                    emitter=emitter.bind(endpoint if multi else None))
+        silo = Silo(endpoint=endpoint, events=evs, emitter=emitter.bind(endpoint))
         _calibrate_silo(extractor, silo, log, profile_path=(None if multi else profile_path))
-        if multi:   # see (2) above: suppressed at N=1 purely to preserve byte-identical validation
-            emitter.silo(silo.endpoint, evaluable=silo.evaluable, reason=silo.reason)
+        # Every silo is announced (N=1 included): the UI keys everything by silo.
+        emitter.silo(silo.endpoint, evaluable=silo.evaluable, reason=silo.reason)
         silos.append(silo)
     return silos
 

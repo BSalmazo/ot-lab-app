@@ -107,13 +107,19 @@ def main():
     buf_silo = io.StringIO()
     em_silo = obs.Emitter(enabled=True, out=buf_silo)
     silos1 = obs.build_silos(ex, a_only, em_silo, log=lambda *a: None)
-    check("N=1 observe stream is byte-identical (content) to pre-silo discover_and_calibrate",
-          events_without_ts(buf_silo) == events_without_ts(buf_ref),
-          "(differs)" if events_without_ts(buf_silo) != events_without_ts(buf_ref) else "")
-    check("N=1 emits NO silo() announcement", '"type": "silo"' not in buf_silo.getvalue())
-    check("N=1 events carry NO silo tag", '"silo"' not in buf_silo.getvalue())
-    check("N=1 silo binds an untagged view of the ONE run Emitter (shared de-dup, tag=None)",
-          silos1[0].emitter._shared is em_silo._shared and silos1[0].emitter._tag is None)
+    ref_events = events_without_ts(buf_ref)
+    silo_stream = events_without_ts(buf_silo)
+    non_silo = [e for e in silo_stream if e.get("type") != "silo"]
+    announcements = [e for e in silo_stream if e.get("type") == "silo"]
+    check("N=1 per-silo events are ALL tagged with the silo endpoint (data, not inference)",
+          bool(non_silo) and all(e.get("silo") == SRV_A for e in non_silo))
+    check("N=1 discovery content (minus the silo tag) matches pre-silo discover_and_calibrate",
+          [{k: v for k, v in e.items() if k != "silo"} for e in non_silo] == ref_events)
+    check("N=1 emits exactly one silo() announcement (readable, its endpoint)",
+          len(announcements) == 1 and announcements[0]["endpoint"] == SRV_A
+          and announcements[0]["evaluable"] is True, f"(={announcements})")
+    check("N=1 silo binds a view of the ONE run Emitter tagged with its endpoint (shared de-dup)",
+          silos1[0].emitter._shared is em_silo._shared and silos1[0].emitter._tag == SRV_A)
     check("N=1 silo is evaluable", len(silos1) == 1 and silos1[0].evaluable)
 
     # --- the tag mechanism itself: one shared Emitter, per-silo tag stamped only when set ----------

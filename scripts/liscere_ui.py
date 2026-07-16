@@ -44,10 +44,13 @@ class DiscoveryModel:
     """Accumulated view state, updated one event at a time. Knows only what the events carry."""
 
     def __init__(self):
-        self.protocols = OrderedDict()   # label -> {"port": ..., "flows": OrderedDict(key -> flow)}  (left map)
-        self.current_protocol = None
+        # The silo (server endpoint) is the unit. Each readable silo owns its own flows; two silos
+        # with the same flow key never merge. Everything routes by the event's "silo" tag (present at
+        # N>1); an untagged per-silo event only occurs at N=1, so it belongs to the sole silo.
+        self.silos = OrderedDict()       # endpoint -> {"flows": OrderedDict(key -> flow)}  (left map)
         self.opaque = OrderedDict()      # endpoint -> reason: captured traffic no extractor can read
-        # key -> {nature, datatype, datatype_certain, features, value, phase}  (VARIABLES table)
+        self.protocol = None             # protocol label from protocol_seen (one extractor per run today)
+        # (silo, key) -> {nature, datatype, datatype_certain, features, value, phase}  (VARIABLES table)
         self.variables = OrderedDict()
         self.verdicts = deque(maxlen=10)
         self.grammar = deque(maxlen=5)
@@ -77,61 +80,60 @@ class DiscoveryModel:
         else:
             self.others.append(ev)   # unknown/unorganised type — shown, never dropped
 
-    def _protocol_seen(self, ev):
-        label = str(ev.get("protocol", "?"))
-        self.protocols.setdefault(label, {"port": ev.get("port"), "flows": OrderedDict()})
-        self.current_protocol = label
+    # -- silo routing -----------------------------------------------------
+    def _silo_of(self, ev, endpoint_hint=None):
+        """The silo (endpoint) an event belongs to, READ from the event -- never inferred. The
+        observer tags every per-silo event with its silo, so the "silo" tag is authoritative; the
+        endpoint hint (which flow_found also carries) is a fallback only."""
+        tag = ev.get("silo")
+        if tag is not None:
+            return str(tag)
+        return str(endpoint_hint) if endpoint_hint else None
 
-    def _current_proto(self):
-        if self.current_protocol in self.protocols:
-            return self.protocols[self.current_protocol]
-        if not self.protocols:                      # a flow before any protocol: be graceful
-            self.protocols["(unknown)"] = {"port": None, "flows": OrderedDict()}
-            self.current_protocol = "(unknown)"
-        return self.protocols[self.current_protocol]
+    def _ensure_silo(self, endpoint):
+        if not endpoint:
+            return None
+        return self.silos.setdefault(endpoint, {"flows": OrderedDict()})
 
-    def _flow_found(self, ev):
-        proto = self._current_proto()
-        proto["flows"].setdefault(
-            str(ev.get("key", "?")),
-            {"role_hint": ev.get("role_hint"), "verdict": None, "features": None,
-             "state": False, "late": False},
-        )
-        # Protocols that carry no configured port (Modbus) report the observed server "ip:port" on
-        # the flow instead; derive the protocol port from it, if not already set by protocol_seen.
-        if proto.get("port") is None:
-            endpoint = ev.get("endpoint")
-            if endpoint and ":" in str(endpoint):
-                port = str(endpoint).rsplit(":", 1)[-1]
-                proto["port"] = int(port) if port.isdigit() else port
-
-    def _find_flow(self, key):
-        for p in self.protocols.values():
-            if key in p["flows"]:
-                return p["flows"][key]
-        return None
-
-    def _ensure_var(self, key):
-        return self.variables.setdefault(key, {
+    def _ensure_var(self, silo, key):
+        return self.variables.setdefault((silo, key), {
             "nature": None, "datatype": None, "datatype_certain": False,
             "features": None, "value": None, "phase": None, "late": False,
         })
 
+    def _protocol_seen(self, ev):
+        # One extractor per run today, so a single label annotates the silos it produced.
+        self.protocol = str(ev.get("protocol", "?"))
+
+    def _flow_found(self, ev):
+        # flow_found carries its silo both as the "silo" tag (N>1) and as "endpoint" (the flow's
+        # server), so it can create/route its silo even at N=1 before the silo() announcement arrives.
+        silo = self._ensure_silo(self._silo_of(ev, endpoint_hint=ev.get("endpoint")))
+        if silo is None:
+            self.others.append(ev)
+            return
+        silo["flows"].setdefault(
+            str(ev.get("key", "?")),
+            {"role_hint": ev.get("role_hint"), "verdict": None, "features": None,
+             "state": False, "late": False},
+        )
+
     def _variable_found(self, ev):
+        endpoint = self._silo_of(ev)
         key = str(ev.get("key"))
         # A late command (surfaced after observe) is classified from protocol semantics only, not
         # behaviourally; the "*" marker in the UI keeps that distinct from a discovered variable.
         late = bool(ev.get("late"))
-        # left map: attach nature + features to the flow node (create if unseen)
-        fl = self._find_flow(key)
-        if fl is None:
-            self._flow_found({"key": key, "role_hint": None})
-            fl = self._find_flow(key)
-        fl["verdict"] = ev.get("nature")
-        fl["features"] = ev.get("features") or {}   # null for late commands -> {} (no feature line)
-        fl["late"] = late
-        # VARIABLES table row
-        v = self._ensure_var(key)
+        # left map: attach nature + features to the flow node in this silo (create if unseen)
+        silo = self.silos.get(endpoint) if endpoint else None
+        if silo is not None:
+            fl = silo["flows"].setdefault(
+                key, {"role_hint": None, "verdict": None, "features": None, "state": False, "late": False})
+            fl["verdict"] = ev.get("nature")
+            fl["features"] = ev.get("features") or {}   # null for late commands -> {} (no feature line)
+            fl["late"] = late
+        # VARIABLES table row, keyed by (silo, key)
+        v = self._ensure_var(endpoint, key)
         v["nature"] = ev.get("nature")
         v["datatype"] = ev.get("datatype")
         v["datatype_certain"] = bool(ev.get("datatype_certain"))
@@ -140,20 +142,21 @@ class DiscoveryModel:
 
     def _variable_value(self, ev):
         # update the value column (create a minimal row if the variable wasn't announced yet)
-        self._ensure_var(str(ev.get("key")))["value"] = ev.get("value")
+        self._ensure_var(self._silo_of(ev), str(ev.get("key")))["value"] = ev.get("value")
 
     def _state_signal(self, ev):
-        fl = self._find_flow(str(ev.get("key")))
-        if fl is not None:
-            fl["state"] = True
+        silo = self.silos.get(self._silo_of(ev))
+        key = str(ev.get("key"))
+        if silo is not None and key in silo["flows"]:
+            silo["flows"][key]["state"] = True
 
     def _phase(self, ev):
         key = ev.get("state_key")
         if key is not None:                          # phase belongs to a specific state variable
-            self._ensure_var(str(key))["phase"] = ev.get("phase")
+            self._ensure_var(self._silo_of(ev), str(key))["phase"] = ev.get("phase")
 
     def _verdict(self, ev):
-        self.verdicts.append(ev)
+        self.verdicts.append({**ev, "silo": self._silo_of(ev)})   # stamp the resolved silo for display
 
     def _grammar(self, ev):
         self.grammar.append(ev)
@@ -162,32 +165,34 @@ class DiscoveryModel:
         self.stage = ev.get("stage")
 
     def _silo(self, ev):
-        # A silo announcement. evaluable=False with a reason = an endpoint that exists but cannot be
-        # evaluated (captured traffic no extractor can read, or too sparse to calibrate); shown in
-        # the map, distinct from evaluable flows. An evaluable silo is a normal readable endpoint and
-        # is left to the flow/variable events (its per-silo rendering is future UI work).
+        # A silo announcement. evaluable=True -> a readable silo, a DISCOVERY MAP root. evaluable=False
+        # with a reason -> an endpoint that exists but cannot be evaluated (captured traffic no
+        # extractor can read, or too sparse to calibrate) -> UNREADABLE ENDPOINTS, distinct from
+        # readable silos. flow_found may have already created the readable silo; this confirms it.
+        endpoint = ev.get("endpoint")
         if ev.get("evaluable"):
-            self.others.append(ev)
+            self._ensure_silo(str(endpoint) if endpoint else None)
             return
-        endpoint = str(ev.get("endpoint"))
-        self.opaque[endpoint] = ev.get("reason")
+        self.opaque[str(endpoint) if endpoint else "(no endpoint)"] = ev.get("reason")
 
 
 # -- rendering ------------------------------------------------------------
 
 def build_tree(model):
     tree = Tree(Text("DISCOVERY MAP", style="bold"))
-    if not model.protocols:
-        tree.add(Text("waiting for protocol…", style="dim"))
-    for label, proto in model.protocols.items():
-        head = Text(label, style="bold white")
-        if proto["port"] is not None:
-            head.append(f"  (port {proto['port']})", style="dim")
-        pnode = tree.add(head)
-        if not proto["flows"]:
-            pnode.add(Text("waiting for flows…", style="dim"))
-        for key, fl in proto["flows"].items():
-            pnode.add(_flow_label(key, fl))
+    if not model.silos and not model.opaque:
+        tree.add(Text("waiting for silos…", style="dim"))
+    for endpoint, silo in model.silos.items():
+        # Root is the silo (its endpoint); the protocol annotates it (derivable, one extractor/run).
+        head = Text()
+        if model.protocol:
+            head.append(f"{model.protocol}  ·  ", style="bold white")
+        head.append(endpoint, style="bold cyan")
+        snode = tree.add(head)
+        if not silo["flows"]:
+            snode.add(Text("waiting for flows…", style="dim"))
+        for key, fl in silo["flows"].items():
+            snode.add(_flow_label(key, fl))
     if model.opaque:
         # Endpoints whose traffic was captured but no extractor can read -- reported, not evaluated.
         # Distinct from the protocol/flow nodes above, in the map's existing visual language.
@@ -254,15 +259,16 @@ def build_variables(model):
     # reflows as values change digits; only the flexible "key" column absorbs the panel width.
     tbl = Table(expand=True, show_edge=False, header_style="bold")
     tbl.add_column("", width=1)                                  # symbol
+    tbl.add_column("silo", width=17, no_wrap=True)               # server endpoint (the unit)
     tbl.add_column("key", overflow="fold")                       # flexible: absorbs remaining width
     tbl.add_column("nature", width=9, no_wrap=True)
     tbl.add_column("datatype", width=8, no_wrap=True)
-    tbl.add_column("value", justify="right", width=11, no_wrap=True)
+    tbl.add_column("value", justify="right", width=9, no_wrap=True)
     tbl.add_column("phase", width=8, no_wrap=True)
-    rows = [(k, v) for k, v in model.variables.items() if v["nature"] != "CONSTANT_METADATA"]
+    rows = [(sk, v) for sk, v in model.variables.items() if v["nature"] != "CONSTANT_METADATA"]
     if not rows:
-        tbl.add_row("", Text("discovering…", style="dim"), "", "", "", "")
-    for key, v in rows:
+        tbl.add_row("", "", Text("discovering…", style="dim"), "", "", "", "")
+    for (silo, key), v in rows:
         nature = v["nature"]
         style = VERDICT_STYLES.get(nature, "white")
         sym = Text(NATURE_SYMBOL.get(nature, "?"), style=style)
@@ -272,7 +278,7 @@ def build_variables(model):
         label = NATURE_LABEL.get(nature, _fmt(nature))
         if v.get("late"):
             label += "*"   # classified from protocol semantics, not observed behaviour
-        tbl.add_row(sym, key, Text(label, style=style), dtype, value, phase)
+        tbl.add_row(sym, Text(_fmt(silo), style="dim"), key, Text(label, style=style), dtype, value, phase)
     return Panel(tbl, title="VARIABLES", border_style="magenta")
 
 
@@ -280,16 +286,17 @@ def build_events(model):
     # Newest-first feed (most recent verdict on top). The 'rule' field still arrives in the event
     # data (kept in model.verdicts); it is simply not shown here — the observer's emission is unchanged.
     tbl = Table(expand=True, show_edge=False, header_style="bold")
+    tbl.add_column("silo", width=17, no_wrap=True)               # which silo the verdict came from
     tbl.add_column("target", overflow="fold")
     tbl.add_column("phase")
     tbl.add_column("result")
     for v in reversed(model.verdicts):
         tbl.add_row(
-            _fmt(v.get("target")), _fmt(v.get("phase")),
+            Text(_fmt(v.get("silo")), style="dim"), _fmt(v.get("target")), _fmt(v.get("phase")),
             Text(_fmt(v.get("result")), style=RESULT_STYLES.get(v.get("result"), "white")),
         )
     if not model.verdicts:
-        tbl.add_row(Text("no events yet", style="dim"), "", "")
+        tbl.add_row(Text("no events yet", style="dim"), "", "", "")
     return Panel(tbl, title="Events", border_style="cyan")
 
 
