@@ -18,6 +18,7 @@ Or against a recorded stream:
 
 import argparse
 import json
+import os
 import select
 import sys
 import time
@@ -201,22 +202,32 @@ class DiscoveryModel:
 
 # -- rendering ------------------------------------------------------------
 
+def _strip_prefix(key):
+    """Drop the leading protocol segment of a flow key ("modbus:hr:2" -> "hr:2"). Generic -- the
+    first colon-delimited segment, whatever it is -- because the silo header already names the
+    protocol, so repeating it on every key is noise. Keys without a ":" are returned unchanged."""
+    key = str(key)
+    return key.split(":", 1)[1] if ":" in key else key
+
+
 def build_tree(model):
     tree = Tree(Text("DISCOVERY MAP", style="bold"))
     if not model.silos and not model.opaque:
-        tree.add(Text("waiting for silos…", style="dim"))
+        tree.add(Text("discovering…", style="dim"))
     for endpoint, silo in model.silos.items():
-        # Root is the silo: "[id] LABEL · endpoint". The global id ([1], [2], ...) is the legend the
-        # tables reference; the protocol annotates it (derivable, one extractor per run today).
+        # Silo header: "[id] LABEL (port)". Then the addresses as bare IPs on their own lines --
+        # server first, then peer(s), no label -- a blank line, then the flows.
+        server_ip, _, port = str(endpoint).rpartition(":")
         head = Text(f"[{silo['id']}] ", style="bold yellow")
-        if model.protocol:
-            head.append(f"{model.protocol}  ·  ", style="bold white")
-        head.append(endpoint, style="bold cyan")
+        head.append(model.protocol or "?", style="bold white")
+        if port:
+            head.append(f" ({port})", style="dim")
         snode = tree.add(head)
-        if silo.get("peer"):
-            snode.add(Text(f"peer {silo['peer']}", style="dim"))   # observed client host(s)
-        if not silo["flows"]:
-            snode.add(Text("waiting for flows…", style="dim"))
+        snode.add(Text(server_ip or str(endpoint), style="cyan"))
+        for p in (silo.get("peer") or "").split(", "):
+            if p.strip():
+                snode.add(Text(p.strip(), style="dim"))
+        snode.add(Text(""))                                        # blank line before the flows
         for key, fl in silo["flows"].items():
             snode.add(_flow_label(key, fl, model.verbose))
     if model.opaque:
@@ -237,7 +248,7 @@ def _flow_label(key, fl, verbose=False):
     if verbose:
         return _flow_label_verbose(key, fl)
     t = Text()
-    t.append(key)
+    t.append(_strip_prefix(key))
     if fl["verdict"]:
         label = NATURE_LABEL.get(fl["verdict"], fl["verdict"])
         if fl.get("late"):
@@ -255,7 +266,7 @@ def _flow_label_verbose(key, fl):
     t = Text()
     if fl["state"]:
         t.append("★ ", style="bold yellow")
-    t.append(key)
+    t.append(_strip_prefix(key))
     if fl["verdict"]:
         t.append("  → ")
         verdict_label = NATURE_LABEL.get(fl["verdict"], fl["verdict"])
@@ -302,17 +313,21 @@ def build_variables(model):
     # reflows as values change digits; only the flexible "key" column absorbs the panel width.
     # `silo` (the id) is the leading column, so the left edge aligns with the Events table and there
     # is one divider after it, not two. The nature is a text column, so the old symbol column is gone.
+    # Every column is left-justified, uniformly across this table and the Events table below -- one
+    # alignment, not text-left-and-numbers-right. (value loses the numeric right-align convention,
+    # but these are small current-value readouts, not columns of magnitudes to compare, so a clean
+    # left edge scans better than a ragged centre or a mixed table.)
     tbl = Table(expand=True, show_edge=False, header_style="bold")
-    tbl.add_column("silo", width=4, no_wrap=True)                # global silo id, e.g. [1]
-    tbl.add_column("key", overflow="fold")                       # flexible: absorbs remaining width
-    tbl.add_column("nature", width=9, no_wrap=True)
-    tbl.add_column("type", width=7, no_wrap=True)                # renamed from "datatype" (was truncating)
-    tbl.add_column("value", justify="right", width=9, no_wrap=True)
-    tbl.add_column("phase", width=8, no_wrap=True)
-    rows = [(sk, v) for sk, v in model.variables.items() if v["nature"] != "CONSTANT_METADATA"]
-    if not rows:
-        tbl.add_row("", Text("discovering…", style="dim"), "", "", "", "")
-    for (silo, key), v in rows:
+    tbl.add_column("silo", width=4, no_wrap=True, justify="left")     # global silo id, e.g. [1]
+    tbl.add_column("key", overflow="fold", justify="left")           # flexible: absorbs remaining width
+    tbl.add_column("nature", width=9, no_wrap=True, justify="left")
+    tbl.add_column("type", width=7, no_wrap=True, justify="left")    # renamed from "datatype" (was truncating)
+    tbl.add_column("value", width=9, no_wrap=True, justify="left")
+    tbl.add_column("phase", width=8, no_wrap=True, justify="left")
+    # No placeholder row: an empty table is self-evident (discovery status lives under the MAP).
+    for (silo, key), v in model.variables.items():
+        if v["nature"] == "CONSTANT_METADATA":
+            continue
         nature = v["nature"]
         style = VERDICT_STYLES.get(nature, "white")
         dtype = v["datatype"] if (v["datatype_certain"] and v["datatype"]) else "?"
@@ -321,7 +336,8 @@ def build_variables(model):
         label = NATURE_LABEL.get(nature, _fmt(nature))
         if v.get("late"):
             label += "*"   # classified from protocol semantics, not observed behaviour
-        tbl.add_row(Text(model.silo_id(silo), style="dim"), key, Text(label, style=style), dtype, value, phase)
+        tbl.add_row(Text(model.silo_id(silo), style="dim"), _strip_prefix(key),
+                    Text(label, style=style), dtype, value, phase)
     return Panel(tbl, title="VARIABLES", border_style="magenta")
 
 
@@ -329,17 +345,17 @@ def build_events(model):
     # Newest-first feed (most recent verdict on top). The 'rule' field still arrives in the event
     # data (kept in model.verdicts); it is simply not shown here — the observer's emission is unchanged.
     tbl = Table(expand=True, show_edge=False, header_style="bold")
-    tbl.add_column("silo", width=4, no_wrap=True)                # global silo id (see the map legend)
-    tbl.add_column("target", overflow="fold")
-    tbl.add_column("phase")
-    tbl.add_column("result")
+    tbl.add_column("silo", width=4, no_wrap=True, justify="left")     # global silo id (see the map legend)
+    tbl.add_column("target", overflow="fold", justify="left")
+    tbl.add_column("phase", justify="left")
+    tbl.add_column("result", justify="left")
+    # No "no events yet" placeholder: an empty table is self-evident.
     for v in reversed(model.verdicts):
         tbl.add_row(
-            Text(model.silo_id(v.get("silo")), style="dim"), _fmt(v.get("target")), _fmt(v.get("phase")),
+            Text(model.silo_id(v.get("silo")), style="dim"), _strip_prefix(v.get("target")),
+            _fmt(v.get("phase")),
             Text(_fmt(v.get("result")), style=RESULT_STYLES.get(v.get("result"), "white")),
         )
-    if not model.verdicts:
-        tbl.add_row(Text("no events yet", style="dim"), "", "", "")
     return Panel(tbl, title="Events", border_style="cyan")
 
 
@@ -399,29 +415,45 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     model = DiscoveryModel(verbose=args.verbose)
+    fd = sys.stdin.fileno()
+    buf = b""
     with Live(render(model), refresh_per_second=8, screen=False) as live:
-        # Poll stdin so the countdown ticks even while the observer is silent (the observe/learn
-        # capture emits nothing for its whole window). On timeout we just re-render (the clock moved).
-        while True:
+        # Read raw from the fd, NOT via sys.stdin.readline(): a buffered readline pulls several
+        # flushed lines into Python's TextIOWrapper, and select() watches the fd (not that buffer),
+        # so trailing lines get stuck until the fd next has data. os.read drains exactly what select
+        # signalled. Polling with a timeout also lets the countdown tick while the observer is silent
+        # (the observe/learn capture emits nothing for its whole window).
+        eof = False
+        while not eof:
             ready, _, _ = select.select([sys.stdin], [], [], 0.25)
             if ready:
-                line = sys.stdin.readline()
-                if line == "":                       # EOF -> stream ended
-                    break
-                line = line.strip()
-                if line:
-                    try:
-                        ev = json.loads(line)
-                        if not isinstance(ev, dict) or "type" not in ev:
-                            raise ValueError("not an event object")
-                    except Exception:
-                        model.others.append({"type": "<malformed line>", "raw": line[:70]})
-                    else:
-                        model.update(ev)
-            live.update(render(model))               # on each event AND each 0.25s tick (countdown)
+                chunk = os.read(fd, 65536)
+                if chunk == b"":                     # EOF -> stream ended
+                    eof = True
+                else:
+                    buf += chunk
+                    while b"\n" in buf:
+                        raw, buf = buf.split(b"\n", 1)
+                        _ingest(model, raw.decode("utf-8", "replace").strip())
+            live.update(render(model))               # on each drained batch AND each 0.25s tick
+        if buf.strip():                              # a final line with no trailing newline
+            _ingest(model, buf.decode("utf-8", "replace").strip())
         model.ended = True
         live.update(render(model))                   # freeze the final frame on stream end
     return 0
+
+
+def _ingest(model, line):
+    if not line:
+        return
+    try:
+        ev = json.loads(line)
+        if not isinstance(ev, dict) or "type" not in ev:
+            raise ValueError("not an event object")
+    except Exception:
+        model.others.append({"type": "<malformed line>", "raw": line[:70]})
+    else:
+        model.update(ev)
 
 
 if __name__ == "__main__":
