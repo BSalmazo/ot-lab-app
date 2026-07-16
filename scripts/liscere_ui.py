@@ -214,9 +214,11 @@ def build_tree(model):
     tree = Tree(Text("DISCOVERY MAP", style="bold"))
     if not model.silos and not model.opaque:
         tree.add(Text("discovering…", style="dim"))
-    for endpoint, silo in model.silos.items():
-        # Silo header: "[id] LABEL (port)". Then the addresses as bare IPs on their own lines --
-        # server first, then peer(s), no label -- a blank line, then the flows.
+    silos = list(model.silos.items())
+    for i, (endpoint, silo) in enumerate(silos):
+        # Silo header "[id] LABEL (port)", then the addresses as bare IPs on their own lines (server
+        # first, then peer(s), no label), then the flows -- no blank INSIDE a silo. Silos are
+        # separated by one blank line BETWEEN them.
         server_ip, _, port = str(endpoint).rpartition(":")
         head = Text(f"[{silo['id']}] ", style="bold yellow")
         head.append(model.protocol or "?", style="bold white")
@@ -227,10 +229,13 @@ def build_tree(model):
         for p in (silo.get("peer") or "").split(", "):
             if p.strip():
                 snode.add(Text(p.strip(), style="dim"))
-        snode.add(Text(""))                                        # blank line before the flows
         for key, fl in silo["flows"].items():
             snode.add(_flow_label(key, fl, model.verbose))
+        if i < len(silos) - 1:
+            tree.add(Text(""))                                     # one blank line between silos
     if model.opaque:
+        if silos:
+            tree.add(Text(""))                                     # and before the unreadable section
         # Endpoints whose traffic was captured but no extractor can read -- reported, not evaluated.
         onode = tree.add(Text("UNREADABLE ENDPOINTS", style="bold red"))
         for endpoint, reason in model.opaque.items():
@@ -305,51 +310,57 @@ def _fmt_value(x):
     return str(x)
 
 
+# The two shared columns render at the SAME fixed widths in both tables, so silo and key line up
+# vertically down the stacked panels. Every other column is fixed too, except one flexible trailing
+# column per table (so expand=True fills the panel without stretching silo/key). All left-justified.
+_SILO_W = 4
+_KEY_W = 18
+
+
 def build_variables(model):
-    # One row per PROCESS variable. Everything is driven by events: variable_found builds rows,
-    # variable_value updates the value, phase updates the phase for the matching state variable.
-    # Metadata (CONSTANT_METADATA) is not part of the process, so it is not shown here — it stays
-    # in the DISCOVERY MAP on the left. All non-key columns have FIXED widths so the table never
-    # reflows as values change digits; only the flexible "key" column absorbs the panel width.
-    # `silo` (the id) is the leading column, so the left edge aligns with the Events table and there
-    # is one divider after it, not two. The nature is a text column, so the old symbol column is gone.
-    # Every column is left-justified, uniformly across this table and the Events table below -- one
-    # alignment, not text-left-and-numbers-right. (value loses the numeric right-align convention,
-    # but these are small current-value readouts, not columns of magnitudes to compare, so a clean
-    # left edge scans better than a ragged centre or a mixed table.)
+    # One row per PROCESS variable; CONSTANT_METADATA is not shown here (it stays in the MAP). No
+    # placeholder row: an empty table is self-evident. Rows are GROUPED by silo, in silo-id order,
+    # with a thin separator between groups (Events stays chronological -- that ordering is right there).
     tbl = Table(expand=True, show_edge=False, header_style="bold")
-    tbl.add_column("silo", width=4, no_wrap=True, justify="left")     # global silo id, e.g. [1]
-    tbl.add_column("key", overflow="fold", justify="left")           # flexible: absorbs remaining width
+    tbl.add_column("silo", width=_SILO_W, no_wrap=True, justify="left")
+    tbl.add_column("key", width=_KEY_W, no_wrap=True, overflow="ellipsis", justify="left")
     tbl.add_column("nature", width=9, no_wrap=True, justify="left")
-    tbl.add_column("type", width=7, no_wrap=True, justify="left")    # renamed from "datatype" (was truncating)
+    tbl.add_column("type", width=7, no_wrap=True, justify="left")     # renamed from "datatype"
     tbl.add_column("value", width=9, no_wrap=True, justify="left")
-    tbl.add_column("phase", width=8, no_wrap=True, justify="left")
-    # No placeholder row: an empty table is self-evident (discovery status lives under the MAP).
+    tbl.add_column("phase", justify="left")                          # flexible: absorbs remaining width
+    by_silo = OrderedDict()
     for (silo, key), v in model.variables.items():
         if v["nature"] == "CONSTANT_METADATA":
             continue
-        nature = v["nature"]
-        style = VERDICT_STYLES.get(nature, "white")
-        dtype = v["datatype"] if (v["datatype_certain"] and v["datatype"]) else "?"
-        value = _fmt_value(v["value"])
-        phase = _fmt(v["phase"]) if (nature == "STATE" and v["phase"]) else "—"
-        label = NATURE_LABEL.get(nature, _fmt(nature))
-        if v.get("late"):
-            label += "*"   # classified from protocol semantics, not observed behaviour
-        tbl.add_row(Text(model.silo_id(silo), style="dim"), _strip_prefix(key),
-                    Text(label, style=style), dtype, value, phase)
+        by_silo.setdefault(silo, []).append((key, v))
+    ordered = sorted(by_silo.items(), key=lambda kv: model.silos.get(kv[0], {}).get("id", float("inf")))
+    for gi, (silo, rows) in enumerate(ordered):
+        for key, v in rows:
+            nature = v["nature"]
+            style = VERDICT_STYLES.get(nature, "white")
+            dtype = v["datatype"] if (v["datatype_certain"] and v["datatype"]) else "?"
+            value = _fmt_value(v["value"])
+            phase = _fmt(v["phase"]) if (nature == "STATE" and v["phase"]) else "—"
+            label = NATURE_LABEL.get(nature, _fmt(nature))
+            if v.get("late"):
+                label += "*"   # classified from protocol semantics, not observed behaviour
+            tbl.add_row(Text(model.silo_id(silo), style="dim"), _strip_prefix(key),
+                        Text(label, style=style), dtype, value, phase)
+        if gi < len(ordered) - 1:
+            tbl.add_section()                                        # thin separator between silos
     return Panel(tbl, title="VARIABLES", border_style="magenta")
 
 
 def build_events(model):
-    # Newest-first feed (most recent verdict on top). The 'rule' field still arrives in the event
-    # data (kept in model.verdicts); it is simply not shown here — the observer's emission is unchanged.
+    # Newest-first feed (most recent verdict on top). CHRONOLOGICAL, not grouped -- ordering matters
+    # here. `silo` and `key` share the VARIABLES widths so the two tables line up. `key` is the same
+    # thing VARIABLES calls key (the write target). No "no events yet" placeholder: an empty table
+    # is self-evident.
     tbl = Table(expand=True, show_edge=False, header_style="bold")
-    tbl.add_column("silo", width=4, no_wrap=True, justify="left")     # global silo id (see the map legend)
-    tbl.add_column("target", overflow="fold", justify="left")
-    tbl.add_column("phase", justify="left")
-    tbl.add_column("result", justify="left")
-    # No "no events yet" placeholder: an empty table is self-evident.
+    tbl.add_column("silo", width=_SILO_W, no_wrap=True, justify="left")
+    tbl.add_column("key", width=_KEY_W, no_wrap=True, overflow="ellipsis", justify="left")
+    tbl.add_column("phase", width=8, no_wrap=True, justify="left")
+    tbl.add_column("result", justify="left")                        # flexible
     for v in reversed(model.verdicts):
         tbl.add_row(
             Text(model.silo_id(v.get("silo")), style="dim"), _strip_prefix(v.get("target")),
