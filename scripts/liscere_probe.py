@@ -32,72 +32,18 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from otlab_core.extractors import EXTRACTOR_CLASSES
+# Wire-layer classification and the server heuristic now live in otlab_core.wire, shared with the
+# observer (which runs the extractors this report claims). Imported under the probe's local names.
+from otlab_core.wire import (
+    app_layer as _app_chain,
+    endpoint as _endpoint,
+    match_layer as _match_layer,
+    server_of as _server_of,
+    wire_layers as _wire_layers,
+)
 
 # tshark -e fields, in the order parse below indexes them. Endpoints + the dissector chain only.
 _FIELDS = ["frame.protocols", "ip.src", "tcp.srcport", "ip.dst", "tcp.dstport"]
-
-# The transport-layer token in a frame.protocols chain, derived from the port field we already query
-# (index 2 -> "tcp.srcport" -> "tcp") rather than hardcoded. Everything the chain lists AFTER this
-# token is the application layer; a chain that stops at it carries no application payload.
-_TRANSPORT = _FIELDS[2].split(".", 1)[0]
-
-
-def _wire_layers():
-    """The frame.protocols substrings the known extractors declare (single source of truth)."""
-    return [c.wire_layer for c in EXTRACTOR_CLASSES if c.wire_layer]
-
-
-def _app_chain(protocols):
-    """The application-layer portion of a frame.protocols chain, or "" if there is none.
-
-    Structural, not name-based: split the colon-separated chain and return everything after the
-    transport token. A frame whose chain ends at the transport layer -- a bare ACK, a handshake
-    segment, or a retransmission tshark did not dissect -- has nothing after it and returns "".
-    That is TCP plumbing, not application traffic. The last transport occurrence is used so a
-    tunnelled transport-over-transport chain still resolves to its innermost application layers.
-    """
-    tokens = protocols.lower().split(":")
-    if _TRANSPORT not in tokens:
-        return ""
-    idx = len(tokens) - 1 - tokens[::-1].index(_TRANSPORT)
-    return ":".join(tokens[idx + 1:])
-
-
-def _match_layer(protocols, layers):
-    """The wire layer an extractor claims in this frame's protocols chain, or None."""
-    p = protocols.lower()
-    return next((layer for layer in layers if layer in p), None)
-
-
-def _endpoint(ip, port):
-    return f"{ip}:{port}" if ip and port else None
-
-
-def _port_of(endpoint):
-    """The port of an "ip:port" endpoint, or +inf so an unparseable one never wins the server rule."""
-    tail = endpoint.rsplit(":", 1)[-1]
-    return int(tail) if tail.isdigit() else float("inf")
-
-
-def _server_of(endpoint_a, endpoint_b):
-    """SERVER-ENDPOINT HEURISTIC (stated so it survives without this docstring): of the two endpoints
-    in a conversation, guess the server is the one with the LOWER TCP port.
-
-    This is a HEURISTIC, not a fact derived from the traffic. It holds when a service binds a fixed,
-    well-known (low) port while the initiating client uses a higher ephemeral port -- true on the
-    bench and for typical OT. It FAILS when a service listens on a port higher than the client's
-    ephemeral port: e.g. this repo's own seed data has a Modbus/TCP device on port 15020
-    (scripts/v2_seed/backups/.../Tank.json); a client ephemeral port below 15020 would invert the
-    guess and label the client as the server. No specific port number is assumed here -- only the two
-    ports present in the conversation are compared -- but the low-port assumption can still be wrong.
-
-    Used ONLY to make the probe's human-readable report legible. It is NOT the authority for silo
-    identity. When the pipeline actually runs an extractor, the server endpoint comes from evt.server,
-    which each extractor derives from protocol request/response semantics (who answers a read), not
-    from port ordering.
-    """
-    return endpoint_a if _port_of(endpoint_a) <= _port_of(endpoint_b) else endpoint_b
 
 
 def capture(iface, duration):

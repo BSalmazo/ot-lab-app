@@ -17,6 +17,7 @@ import io
 import json
 import os
 import sys
+import types
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
@@ -71,11 +72,17 @@ def write_job_frame():
 
 
 class FakeProc:
-    """A stand-in for the tshark subprocess: a finite line iterator, no-op teardown."""
-    def __init__(self, lines):
-        self.stdout = iter(lines)
+    """A stand-in for the tshark subprocess: a real pipe carrying `data` bytes, then EOF. The
+    multiplex reads the raw fd with os.read (bytes mode), so the stand-in must expose a real fd."""
+    def __init__(self, data):
+        self._r, w = os.pipe()
+        os.write(w, data)     # small: fits the pipe buffer; close the write end -> EOF after `data`
+        os.close(w)
+        self.stdout = types.SimpleNamespace(fileno=lambda: self._r)
+    def poll(self):
+        return 0
     def terminate(self):
-        pass
+        os.close(self._r)
     def wait(self, timeout=None):
         pass
     def kill(self):
@@ -104,19 +111,18 @@ def main():
     check("frame carrying the s7comm layer -> None (parse_line's job, not opaque)",
           ex.opaque_endpoint(write_job_frame()) is None)
 
-    # --- 2) the observer capture loop: report once, event flow unaffected -------------------------
+    # --- 2) the observer selector loop: report once, event flow unaffected ------------------------
     # 689-frames-one-event, in miniature: two opaque frames for one endpoint, a bare TCP frame that
-    # yields nothing, and a readable write that must still produce an event.
-    raw_lines = ["\t".join(cols) + "\n" for cols in
-                 (tls_frame(), tls_frame(), bare_tcp_frame(), write_job_frame())]
-    real_spawn = obs._spawn
-    obs._spawn = lambda extractor, iface: FakeProc(raw_lines)
+    # yields nothing, and a readable write that must still produce an event. Driven through the real
+    # multiplex over a pipe-backed fake tshark, so parse_line, _report_opaque, coalesce and the
+    # Emitter dedup all run.
+    data = b"".join(("\t".join(cols) + "\n").encode() for cols in
+                    (tls_frame(), tls_frame(), bare_tcp_frame(), write_job_frame()))
+    src = obs._Source(S7CommExtractor(), FakeProc(data))
     buf = io.StringIO()
     em = obs.Emitter(enabled=True, out=buf)
-    try:
-        events = obs.capture_events(S7CommExtractor(), "eth0", 60, log=lambda *a: None, emitter=em)
-    finally:
-        obs._spawn = real_spawn
+    events = []
+    obs.multiplex([src], on_event=lambda ext, e: events.append(e), emitter=em, log=lambda *a: None)
 
     silos = [json.loads(l) for l in buf.getvalue().splitlines() if json.loads(l).get("type") == "silo"]
     check("exactly ONE silo event across many opaque frames (announced once)", len(silos) == 1,

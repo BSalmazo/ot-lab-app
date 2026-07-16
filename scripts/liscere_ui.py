@@ -54,7 +54,9 @@ class DiscoveryModel:
         # is the legend and the tables can reference a silo by id instead of a long endpoint.
         self.silos = OrderedDict()       # endpoint -> {"id", "peer", "flows": OrderedDict(key->flow)}
         self._next_silo_id = 1
-        self.opaque = OrderedDict()      # endpoint -> reason: captured traffic no extractor can read
+        self.opaque = OrderedDict()      # key -> (display, reason): endpoints/findings reported, not
+                                         # evaluated. Keyed so an endpoint-less finding (a claimed-but-
+                                         # empty extractor) does not collide with another on one line.
         self.protocol = None             # protocol label from protocol_seen (one extractor per run today)
         # (silo, key) -> {nature, datatype, datatype_certain, features, value, phase}  (VARIABLES table)
         self.variables = OrderedDict()
@@ -188,16 +190,27 @@ class DiscoveryModel:
 
     def _silo(self, ev):
         # A silo announcement. evaluable=True -> a readable silo, a DISCOVERY MAP root (with its peer,
-        # if the observer supplied one). evaluable=False with a reason -> an endpoint that exists but
-        # cannot be evaluated (captured traffic no extractor can read, or too sparse to calibrate) ->
-        # UNREADABLE ENDPOINTS. flow_found may have already created the readable silo; this confirms it.
+        # if the observer supplied one). evaluable=False with a reason -> a finding that exists but
+        # cannot be evaluated (captured traffic no extractor can read, too sparse to calibrate, or a
+        # claimed extractor that produced no evaluable silo) -> UNREADABLE ENDPOINTS. flow_found may
+        # have already created the readable silo; this confirms it.
         endpoint = ev.get("endpoint")
         if ev.get("evaluable"):
             silo = self._ensure_silo(str(endpoint) if endpoint else None)
             if silo is not None and ev.get("peer"):
                 silo["peer"] = ev.get("peer")
             return
-        self.opaque[str(endpoint) if endpoint else "(no endpoint)"] = ev.get("reason")
+        reason = ev.get("reason")
+        # A real opaque endpoint dedups by its endpoint (one line for hundreds of frames). An
+        # endpoint-LESS finding (a claimed-but-empty extractor, an orphan event) must key by its
+        # reason instead: keying every such finding by the shared "(no endpoint)" would collapse N of
+        # them -- two claimed-but-empty protocols in one run -- into a single line, hiding all but the
+        # last. That is the "emitted but invisible" failure this whole line of work closes.
+        if endpoint:
+            key, display = str(endpoint), str(endpoint)
+        else:
+            key, display = f"(no endpoint):{reason}", "(no endpoint)"
+        self.opaque[key] = (display, reason)
 
 
 # -- rendering ------------------------------------------------------------
@@ -238,9 +251,9 @@ def build_tree(model):
             tree.add(Text(""))                                     # and before the unreadable section
         # Endpoints whose traffic was captured but no extractor can read -- reported, not evaluated.
         onode = tree.add(Text("UNREADABLE ENDPOINTS", style="bold red"))
-        for endpoint, reason in model.opaque.items():
+        for _key, (display, reason) in model.opaque.items():
             t = Text("⊘ ", style="bold red")
-            t.append(str(endpoint), style="red")
+            t.append(str(display), style="red")
             if reason:
                 t.append(f"   {reason}", style="dim red")
             onode.add(t)
