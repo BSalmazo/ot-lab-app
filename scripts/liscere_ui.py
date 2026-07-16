@@ -16,8 +16,12 @@ Or against a recorded stream:
     cat sample.jsonl | python scripts/liscere_ui.py
 """
 
+import argparse
 import json
+import os
+import select
 import sys
+import time
 from collections import OrderedDict, deque
 
 from rich.console import Group
@@ -43,11 +47,13 @@ def _fmt(x):
 class DiscoveryModel:
     """Accumulated view state, updated one event at a time. Knows only what the events carry."""
 
-    def __init__(self):
+    def __init__(self, verbose=False):
         # The silo (server endpoint) is the unit. Each readable silo owns its own flows; two silos
-        # with the same flow key never merge. Everything routes by the event's "silo" tag (present at
-        # N>1); an untagged per-silo event only occurs at N=1, so it belongs to the sole silo.
-        self.silos = OrderedDict()       # endpoint -> {"flows": OrderedDict(key -> flow)}  (left map)
+        # with the same flow key never merge. Everything routes by the event's "silo" tag, read from
+        # the event. Each silo gets a short GLOBAL id ([1], [2], ...) in discovery order, so the map
+        # is the legend and the tables can reference a silo by id instead of a long endpoint.
+        self.silos = OrderedDict()       # endpoint -> {"id", "peer", "flows": OrderedDict(key->flow)}
+        self._next_silo_id = 1
         self.opaque = OrderedDict()      # endpoint -> reason: captured traffic no extractor can read
         self.protocol = None             # protocol label from protocol_seen (one extractor per run today)
         # (silo, key) -> {nature, datatype, datatype_certain, features, value, phase}  (VARIABLES table)
@@ -57,7 +63,10 @@ class DiscoveryModel:
         self.others = deque(maxlen=8)
         self.event_count = 0
         self.ended = False
+        self.verbose = verbose           # -v: developer view (engine diagnostics on the map)
         self.stage = None                # pipeline stage: "observe" | "learn" | "evaluate" | None
+        self.stage_seconds = None        # window duration for the current stage (observe/learn), else None
+        self.stage_started = None        # UI wall-clock at which the current timed stage began
 
     # -- event intake -----------------------------------------------------
     def update(self, ev):
@@ -93,7 +102,15 @@ class DiscoveryModel:
     def _ensure_silo(self, endpoint):
         if not endpoint:
             return None
-        return self.silos.setdefault(endpoint, {"flows": OrderedDict()})
+        if endpoint not in self.silos:
+            self.silos[endpoint] = {"id": self._next_silo_id, "peer": None, "flows": OrderedDict()}
+            self._next_silo_id += 1
+        return self.silos[endpoint]
+
+    def silo_id(self, endpoint):
+        """The short global id for a silo endpoint, e.g. "[1]" (the map is the legend); "?" if unseen."""
+        s = self.silos.get(endpoint)
+        return f"[{s['id']}]" if s else "?"
 
     def _ensure_var(self, silo, key):
         return self.variables.setdefault((silo, key), {
@@ -163,39 +180,63 @@ class DiscoveryModel:
 
     def _stage(self, ev):
         self.stage = ev.get("stage")
+        secs = ev.get("seconds")
+        self.stage_seconds = secs
+        # Count down from the UI's own receipt of the stage event (robust for live and recorded
+        # playback alike, and free of observer/UI clock-sync). Timed stages only (observe/learn).
+        self.stage_started = time.time() if secs is not None else None
 
     def _silo(self, ev):
-        # A silo announcement. evaluable=True -> a readable silo, a DISCOVERY MAP root. evaluable=False
-        # with a reason -> an endpoint that exists but cannot be evaluated (captured traffic no
-        # extractor can read, or too sparse to calibrate) -> UNREADABLE ENDPOINTS, distinct from
-        # readable silos. flow_found may have already created the readable silo; this confirms it.
+        # A silo announcement. evaluable=True -> a readable silo, a DISCOVERY MAP root (with its peer,
+        # if the observer supplied one). evaluable=False with a reason -> an endpoint that exists but
+        # cannot be evaluated (captured traffic no extractor can read, or too sparse to calibrate) ->
+        # UNREADABLE ENDPOINTS. flow_found may have already created the readable silo; this confirms it.
         endpoint = ev.get("endpoint")
         if ev.get("evaluable"):
-            self._ensure_silo(str(endpoint) if endpoint else None)
+            silo = self._ensure_silo(str(endpoint) if endpoint else None)
+            if silo is not None and ev.get("peer"):
+                silo["peer"] = ev.get("peer")
             return
         self.opaque[str(endpoint) if endpoint else "(no endpoint)"] = ev.get("reason")
 
 
 # -- rendering ------------------------------------------------------------
 
+def _strip_prefix(key):
+    """Drop the leading protocol segment of a flow key ("modbus:hr:2" -> "hr:2"). Generic -- the
+    first colon-delimited segment, whatever it is -- because the silo header already names the
+    protocol, so repeating it on every key is noise. Keys without a ":" are returned unchanged."""
+    key = str(key)
+    return key.split(":", 1)[1] if ":" in key else key
+
+
 def build_tree(model):
     tree = Tree(Text("DISCOVERY MAP", style="bold"))
     if not model.silos and not model.opaque:
-        tree.add(Text("waiting for silos…", style="dim"))
-    for endpoint, silo in model.silos.items():
-        # Root is the silo (its endpoint); the protocol annotates it (derivable, one extractor/run).
-        head = Text()
-        if model.protocol:
-            head.append(f"{model.protocol}  ·  ", style="bold white")
-        head.append(endpoint, style="bold cyan")
+        tree.add(Text("discovering…", style="dim"))
+    silos = list(model.silos.items())
+    for i, (endpoint, silo) in enumerate(silos):
+        # Silo header "[id] LABEL (port)", then the addresses as bare IPs on their own lines (server
+        # first, then peer(s), no label), then the flows -- no blank INSIDE a silo. Silos are
+        # separated by one blank line BETWEEN them.
+        server_ip, _, port = str(endpoint).rpartition(":")
+        head = Text(f"[{silo['id']}] ", style="bold yellow")
+        head.append(model.protocol or "?", style="bold white")
+        if port:
+            head.append(f" ({port})", style="dim")
         snode = tree.add(head)
-        if not silo["flows"]:
-            snode.add(Text("waiting for flows…", style="dim"))
+        snode.add(Text(server_ip or str(endpoint), style="cyan"))
+        for p in (silo.get("peer") or "").split(", "):
+            if p.strip():
+                snode.add(Text(p.strip(), style="dim"))
         for key, fl in silo["flows"].items():
-            snode.add(_flow_label(key, fl))
+            snode.add(_flow_label(key, fl, model.verbose))
+        if i < len(silos) - 1:
+            tree.add(Text(""))                                     # one blank line between silos
     if model.opaque:
+        if silos:
+            tree.add(Text(""))                                     # and before the unreadable section
         # Endpoints whose traffic was captured but no extractor can read -- reported, not evaluated.
-        # Distinct from the protocol/flow nodes above, in the map's existing visual language.
         onode = tree.add(Text("UNREADABLE ENDPOINTS", style="bold red"))
         for endpoint, reason in model.opaque.items():
             t = Text("⊘ ", style="bold red")
@@ -206,11 +247,31 @@ def build_tree(model):
     return tree
 
 
-def _flow_label(key, fl):
+def _flow_label(key, fl, verbose=False):
+    """Product view: `key   NATURE[*] [★]` -- what the variable is, nothing more. Developer view (-v)
+    adds the engine diagnostics (uniq/range/step/rev) and the verbose state-signal styling."""
+    if verbose:
+        return _flow_label_verbose(key, fl)
+    t = Text()
+    t.append(_strip_prefix(key))
+    if fl["verdict"]:
+        label = NATURE_LABEL.get(fl["verdict"], fl["verdict"])
+        if fl.get("late"):
+            label += "*"   # classified from protocol semantics, not observed behaviour
+        t.append("   ")
+        t.append(label, style=VERDICT_STYLES.get(fl["verdict"], "white"))
+    else:
+        t.append(f"   [hint: {_fmt(fl['role_hint'])}]", style="dim")
+    if fl["state"]:
+        t.append(" ★", style="bold yellow")
+    return t
+
+
+def _flow_label_verbose(key, fl):
     t = Text()
     if fl["state"]:
         t.append("★ ", style="bold yellow")
-    t.append(key)
+    t.append(_strip_prefix(key))
     if fl["verdict"]:
         t.append("  → ")
         verdict_label = NATURE_LABEL.get(fl["verdict"], fl["verdict"])
@@ -231,8 +292,6 @@ def _flow_label(key, fl):
     return t
 
 
-# Glyph per nature (cosmetic only). Unknown nature -> "?".
-NATURE_SYMBOL = {"STATE": "●", "COMMAND": "○", "CONSTANT_METADATA": "·", "AMBIGUOUS": "?"}
 # Shorter display label per nature (the underlying nature value is unchanged in the data).
 NATURE_LABEL = {"CONSTANT_METADATA": "METADATA"}
 
@@ -251,52 +310,63 @@ def _fmt_value(x):
     return str(x)
 
 
+# The two shared columns render at the SAME fixed widths in both tables, so silo and key line up
+# vertically down the stacked panels. Every other column is fixed too, except one flexible trailing
+# column per table (so expand=True fills the panel without stretching silo/key). All left-justified.
+_SILO_W = 4
+_KEY_W = 18
+
+
 def build_variables(model):
-    # One row per PROCESS variable. Everything is driven by events: variable_found builds rows,
-    # variable_value updates the value, phase updates the phase for the matching state variable.
-    # Metadata (CONSTANT_METADATA) is not part of the process, so it is not shown here — it stays
-    # in the DISCOVERY MAP on the left. All non-key columns have FIXED widths so the table never
-    # reflows as values change digits; only the flexible "key" column absorbs the panel width.
+    # One row per PROCESS variable; CONSTANT_METADATA is not shown here (it stays in the MAP). No
+    # placeholder row: an empty table is self-evident. Rows are GROUPED by silo, in silo-id order,
+    # with a thin separator between groups (Events stays chronological -- that ordering is right there).
     tbl = Table(expand=True, show_edge=False, header_style="bold")
-    tbl.add_column("", width=1)                                  # symbol
-    tbl.add_column("silo", width=17, no_wrap=True)               # server endpoint (the unit)
-    tbl.add_column("key", overflow="fold")                       # flexible: absorbs remaining width
-    tbl.add_column("nature", width=9, no_wrap=True)
-    tbl.add_column("datatype", width=8, no_wrap=True)
-    tbl.add_column("value", justify="right", width=9, no_wrap=True)
-    tbl.add_column("phase", width=8, no_wrap=True)
-    rows = [(sk, v) for sk, v in model.variables.items() if v["nature"] != "CONSTANT_METADATA"]
-    if not rows:
-        tbl.add_row("", "", Text("discovering…", style="dim"), "", "", "", "")
-    for (silo, key), v in rows:
-        nature = v["nature"]
-        style = VERDICT_STYLES.get(nature, "white")
-        sym = Text(NATURE_SYMBOL.get(nature, "?"), style=style)
-        dtype = v["datatype"] if (v["datatype_certain"] and v["datatype"]) else "?"
-        value = _fmt_value(v["value"])
-        phase = _fmt(v["phase"]) if (nature == "STATE" and v["phase"]) else "—"
-        label = NATURE_LABEL.get(nature, _fmt(nature))
-        if v.get("late"):
-            label += "*"   # classified from protocol semantics, not observed behaviour
-        tbl.add_row(sym, Text(_fmt(silo), style="dim"), key, Text(label, style=style), dtype, value, phase)
+    tbl.add_column("silo", width=_SILO_W, no_wrap=True, justify="left")
+    tbl.add_column("key", width=_KEY_W, no_wrap=True, overflow="ellipsis", justify="left")
+    tbl.add_column("nature", width=9, no_wrap=True, justify="left")
+    tbl.add_column("type", width=7, no_wrap=True, justify="left")     # renamed from "datatype"
+    tbl.add_column("value", width=9, no_wrap=True, justify="left")
+    tbl.add_column("phase", justify="left")                          # flexible: absorbs remaining width
+    by_silo = OrderedDict()
+    for (silo, key), v in model.variables.items():
+        if v["nature"] == "CONSTANT_METADATA":
+            continue
+        by_silo.setdefault(silo, []).append((key, v))
+    ordered = sorted(by_silo.items(), key=lambda kv: model.silos.get(kv[0], {}).get("id", float("inf")))
+    for gi, (silo, rows) in enumerate(ordered):
+        for key, v in rows:
+            nature = v["nature"]
+            style = VERDICT_STYLES.get(nature, "white")
+            dtype = v["datatype"] if (v["datatype_certain"] and v["datatype"]) else "?"
+            value = _fmt_value(v["value"])
+            phase = _fmt(v["phase"]) if (nature == "STATE" and v["phase"]) else "—"
+            label = NATURE_LABEL.get(nature, _fmt(nature))
+            if v.get("late"):
+                label += "*"   # classified from protocol semantics, not observed behaviour
+            tbl.add_row(Text(model.silo_id(silo), style="dim"), _strip_prefix(key),
+                        Text(label, style=style), dtype, value, phase)
+        if gi < len(ordered) - 1:
+            tbl.add_section()                                        # thin separator between silos
     return Panel(tbl, title="VARIABLES", border_style="magenta")
 
 
 def build_events(model):
-    # Newest-first feed (most recent verdict on top). The 'rule' field still arrives in the event
-    # data (kept in model.verdicts); it is simply not shown here — the observer's emission is unchanged.
+    # Newest-first feed (most recent verdict on top). CHRONOLOGICAL, not grouped -- ordering matters
+    # here. `silo` and `key` share the VARIABLES widths so the two tables line up. `key` is the same
+    # thing VARIABLES calls key (the write target). No "no events yet" placeholder: an empty table
+    # is self-evident.
     tbl = Table(expand=True, show_edge=False, header_style="bold")
-    tbl.add_column("silo", width=17, no_wrap=True)               # which silo the verdict came from
-    tbl.add_column("target", overflow="fold")
-    tbl.add_column("phase")
-    tbl.add_column("result")
+    tbl.add_column("silo", width=_SILO_W, no_wrap=True, justify="left")
+    tbl.add_column("key", width=_KEY_W, no_wrap=True, overflow="ellipsis", justify="left")
+    tbl.add_column("phase", width=8, no_wrap=True, justify="left")
+    tbl.add_column("result", justify="left")                        # flexible
     for v in reversed(model.verdicts):
         tbl.add_row(
-            Text(_fmt(v.get("silo")), style="dim"), _fmt(v.get("target")), _fmt(v.get("phase")),
+            Text(model.silo_id(v.get("silo")), style="dim"), _strip_prefix(v.get("target")),
+            _fmt(v.get("phase")),
             Text(_fmt(v.get("result")), style=RESULT_STYLES.get(v.get("result"), "white")),
         )
-    if not model.verdicts:
-        tbl.add_row(Text("no events yet", style="dim"), "", "", "")
     return Panel(tbl, title="Events", border_style="cyan")
 
 
@@ -319,7 +389,13 @@ def _status_label(model):
         return "ENDED"
     # Before the first stage event, the run has just begun -> OBSERVE (the pipeline always
     # starts by observing).
-    return _STAGE_LABEL.get(model.stage, "OBSERVE")
+    stage = model.stage or "observe"
+    label = _STAGE_LABEL.get(stage, stage.upper())
+    # Timed windows (observe/learn) count down; continuous evaluate is LIVE with no timer.
+    if model.stage_seconds is not None and model.stage_started is not None:
+        remaining = max(0, model.stage_seconds - (time.time() - model.stage_started))
+        return f"{label}  ⏱ {remaining:0.0f}s"
+    return label
 
 
 def render(model):
@@ -342,26 +418,53 @@ def render(model):
     return layout
 
 
-def main():
-    model = DiscoveryModel()
+def main(argv=None):
+    ap = argparse.ArgumentParser(
+        description="Liscere discovery-map TUI. Reads the observer's JSON-Lines stream on stdin.")
+    ap.add_argument("-v", "--verbose", action="store_true",
+                    help="developer view: show engine diagnostics (uniq/range/step/rev) on the map")
+    args = ap.parse_args(argv)
+
+    model = DiscoveryModel(verbose=args.verbose)
+    fd = sys.stdin.fileno()
+    buf = b""
     with Live(render(model), refresh_per_second=8, screen=False) as live:
-        for line in sys.stdin:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                ev = json.loads(line)
-                if not isinstance(ev, dict) or "type" not in ev:
-                    raise ValueError("not an event object")
-            except Exception:
-                model.others.append({"type": "<malformed line>", "raw": line[:70]})
-                live.update(render(model))
-                continue
-            model.update(ev)
-            live.update(render(model))
+        # Read raw from the fd, NOT via sys.stdin.readline(): a buffered readline pulls several
+        # flushed lines into Python's TextIOWrapper, and select() watches the fd (not that buffer),
+        # so trailing lines get stuck until the fd next has data. os.read drains exactly what select
+        # signalled. Polling with a timeout also lets the countdown tick while the observer is silent
+        # (the observe/learn capture emits nothing for its whole window).
+        eof = False
+        while not eof:
+            ready, _, _ = select.select([sys.stdin], [], [], 0.25)
+            if ready:
+                chunk = os.read(fd, 65536)
+                if chunk == b"":                     # EOF -> stream ended
+                    eof = True
+                else:
+                    buf += chunk
+                    while b"\n" in buf:
+                        raw, buf = buf.split(b"\n", 1)
+                        _ingest(model, raw.decode("utf-8", "replace").strip())
+            live.update(render(model))               # on each drained batch AND each 0.25s tick
+        if buf.strip():                              # a final line with no trailing newline
+            _ingest(model, buf.decode("utf-8", "replace").strip())
         model.ended = True
-        live.update(render(model))   # freeze the final frame on stream end
+        live.update(render(model))                   # freeze the final frame on stream end
     return 0
+
+
+def _ingest(model, line):
+    if not line:
+        return
+    try:
+        ev = json.loads(line)
+        if not isinstance(ev, dict) or "type" not in ev:
+            raise ValueError("not an event object")
+    except Exception:
+        model.others.append({"type": "<malformed line>", "raw": line[:70]})
+    else:
+        model.update(ev)
 
 
 if __name__ == "__main__":

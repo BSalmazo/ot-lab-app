@@ -114,18 +114,25 @@ class Emitter:
                 event = {**event, "silo": self._tag}   # attribute the event to its silo (N>1 only)
             emit(event, out=self.out)
 
-    def stage(self, stage):
+    def stage(self, stage, seconds=None):
         # A pipeline-stage transition ("observe" | "learn" | "evaluate"), emitted once per move so
-        # the UI header can reflect the current stage instead of always reading "LIVE".
-        self._emit({"type": "stage", "stage": stage})
+        # the UI header can reflect the current stage. `seconds` is the window duration when the
+        # window is time-bounded (observe/learn), so the UI can show a countdown; continuous evaluate
+        # passes none (it runs until Ctrl-C -> the UI shows LIVE with no timer).
+        event = {"type": "stage", "stage": stage}
+        if seconds is not None:
+            event["seconds"] = seconds
+        self._emit(event)
 
-    def silo(self, endpoint, evaluable, reason=None):
-        # A discovered silo -- one (protocol, server endpoint) as its own unit of evaluation. An
-        # ADDITIVE event type, emitted ONLY when more than one silo is present, so the single-silo
-        # stream stays byte-identical to prior behaviour. `evaluable` is False for a silo that exists
-        # but could not be calibrated (too few samples); `reason` states why, so it is reported and
-        # never silently dropped.
-        self._emit({"type": "silo", "endpoint": endpoint, "evaluable": evaluable, "reason": reason})
+    def silo(self, endpoint, evaluable, reason=None, peer=None):
+        # A discovered silo -- one (protocol, server endpoint) as its own unit of evaluation.
+        # `evaluable` is False for a silo that exists but could not be calibrated (too few samples,
+        # or unreadable); `reason` states why, so it is reported and never silently dropped. `peer`
+        # is the observed client host(s) talking to this silo, when known (readable silos).
+        event = {"type": "silo", "endpoint": endpoint, "evaluable": evaluable, "reason": reason}
+        if peer:
+            event["peer"] = peer
+        self._emit(event)
 
     def opaque_endpoint(self, endpoint, reason):
         # An endpoint whose traffic arrived on the capture filter but which no extractor can read
@@ -616,8 +623,12 @@ def build_silos(extractor, observe_events, emitter, log, profile_path=None):
             continue
         silo = Silo(endpoint=endpoint, events=evs, emitter=emitter.bind(endpoint))
         _calibrate_silo(extractor, silo, log, profile_path=(None if multi else profile_path))
+        # The peer(s): the distinct client HOST(s) observed talking to this silo (evt.client is set
+        # by every extractor; the ephemeral client port is dropped). Observed, not configured.
+        peers = sorted({e.client.rsplit(":", 1)[0] for e in evs if getattr(e, "client", None)})
         # Every silo is announced (N=1 included): the UI keys everything by silo.
-        emitter.silo(silo.endpoint, evaluable=silo.evaluable, reason=silo.reason)
+        emitter.silo(silo.endpoint, evaluable=silo.evaluable, reason=silo.reason,
+                     peer=", ".join(peers) or None)
         silos.append(silo)
     return silos
 
@@ -696,8 +707,8 @@ def main(argv=None):
     emitter.protocol_seen(extractor)
 
     # Phase 1 — OBSERVE: capture, then demux into silos and discover+calibrate each. Every run goes
-    # through silos; the normal bench case is simply N=1, which build_silos keeps byte-identical.
-    emitter.stage("observe")
+    # through silos; the normal bench case is simply N=1 (one silo), announced and tagged like any.
+    emitter.stage("observe", seconds=args.observe)
     obs = capture_events(extractor, args.iface, args.observe, log=log, emitter=emitter)
     silos = build_silos(extractor, obs, emitter, log, profile_path=args.profile)
     evaluable = [s for s in silos if s.evaluable]
@@ -718,7 +729,7 @@ def main(argv=None):
     if args.learn is not None:
         # Phase 2 — LEARN: learn each silo's coherence grammar from this window. Temporal trust: the
         # environment is controlled during learn, so what is seen here is the baseline "normal".
-        emitter.stage("learn")
+        emitter.stage("learn", seconds=args.learn)
         ev = capture_events(extractor, args.iface, args.learn, log=log, emitter=emitter)
         for endpoint, evs in partition_by_server(ev).items():
             silo = _route_or_report_late(emitter, silos_by_ep, reported_late, endpoint)
