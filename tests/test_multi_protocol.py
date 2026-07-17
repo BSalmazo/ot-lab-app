@@ -22,7 +22,9 @@ import io
 import json
 import os
 import random
+import selectors
 import sys
+import time
 import types
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -63,6 +65,37 @@ class FakeProc:
         pass
     def kill(self):
         pass
+
+
+class IdleProc:
+    """A tshark stand-in whose pipe stays OPEN with no data -- a live capture that has gone quiet.
+    os.read would block (nothing to read, writer alive), so select must NOT report it readable; the
+    multiplex must block on its 0.25 s timeout rather than spin. The write end is held until close()."""
+    def __init__(self):
+        self._r, self._w = os.pipe()
+        self.stdout = types.SimpleNamespace(fileno=lambda: self._r)
+    def poll(self):
+        return None            # still running
+    def terminate(self):
+        for fd in (self._r, self._w):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+    def wait(self, timeout=None):
+        pass
+    def kill(self):
+        pass
+
+
+class CountingSelector(selectors.DefaultSelector):
+    """DefaultSelector that counts select() calls -- so a test can assert the loop BLOCKS (a handful
+    of calls over a wall-clock window) rather than SPINS (thousands). Correctness-of-routing tests
+    never catch a spin; only an iteration-rate bound does."""
+    count = 0
+    def select(self, timeout=None):
+        CountingSelector.count += 1
+        return super().select(timeout)
 
 
 def tsv(rows):
@@ -239,6 +272,51 @@ def main():
         obs.probe_layers = real_probe
     check("no claimed protocol -> main returns 2 (does not hang, does not raise)", rc == 2, f"(rc={rc})")
     check("no claimed protocol -> a human message explains why", "no known protocol" in ebuf.getvalue())
+
+    # === 5) the loop BLOCKS when the pipes are quiet -- it must not busy-spin =======================
+    # The bench "spin" pegged the Pi in continuous evaluate. A routing test cannot catch a spin; this
+    # bounds the iteration rate. Two live-but-quiet captures (pipes open, no data) and an `until` that
+    # never stops (exactly the unbounded-evaluate condition): over ~0.6 s the loop must select only a
+    # handful of times (0.25 s block), NOT thousands. Guards every phase, evaluate included, since the
+    # select timeout is a constant block, not derived from a phase deadline.
+    idle = [obs._Source(types.SimpleNamespace(name="MODBUS/TCP", parse_line=lambda c: None), IdleProc()),
+            obs._Source(types.SimpleNamespace(name="OPCUA/binary", parse_line=lambda c: None), IdleProc())]
+    real_sel = obs.selectors.DefaultSelector
+    obs.selectors.DefaultSelector = CountingSelector
+    CountingSelector.count = 0
+    t0 = time.time()
+    try:
+        obs.multiplex(idle, on_event=lambda *a: None, emitter=None, log=lambda *a: None,
+                      until=lambda: time.time() - t0 > 0.6)   # unbounded-style: only wall-clock stops it
+    finally:
+        obs.selectors.DefaultSelector = real_sel
+    check("idle continuous loop BLOCKS on select (bounded iterations, not a spin)",
+          CountingSelector.count < 20, f"(selects in ~0.6s = {CountingSelector.count}; a spin would be 1000s)")
+
+    # === 6) capture loss is reported and non-zero, never a silent exit ==============================
+    # multiplex returns False when the selector empties (every tshark exited) vs True for a deliberate
+    # stop. In continuous evaluate that is a capture failure, not a clean end.
+    dead = [obs._Source(types.SimpleNamespace(name="MODBUS/TCP", parse_line=lambda c: None), FakeProc(b"")),
+            obs._Source(types.SimpleNamespace(name="OPCUA/binary", parse_line=lambda c: None), FakeProc(b""))]
+    stopped = obs.multiplex(dead, on_event=lambda *a: None, emitter=None, log=lambda *a: None,
+                            until=lambda: False)   # never a deliberate stop
+    check("all tshark exit -> multiplex reports the selector emptied (returns False, not a stop)",
+          stopped is False, f"(={stopped})")
+
+    # main(): a capture that drops before any stop must exit LOUD and non-zero (rc=3), not silent 0.
+    real_probe2, real_spawn = obs.probe_layers, obs._spawn
+    obs.probe_layers = lambda iface, secs, log=print, emitter=None: ({"modbus"}, {})
+    obs._spawn = lambda extractor, iface: FakeProc(b"")   # tshark dies immediately (EOF)
+    cbuf = io.StringIO()
+    _real_stderr, _real_stdout = sys.stderr, sys.stdout
+    sys.stderr, sys.stdout = cbuf, io.StringIO()   # the observer's JSON stream is noise here
+    try:
+        rc_cap = obs.main(["--iface", "x", "--probe", "1", "--observe", "60", "--learn", "60"])
+    finally:
+        sys.stderr, sys.stdout = _real_stderr, _real_stdout
+        obs.probe_layers, obs._spawn = real_probe2, real_spawn
+    check("capture drops before a stop -> main returns 3 (not silent 0)", rc_cap == 3, f"(rc={rc_cap})")
+    check("capture loss is explained on stderr", "capture lost" in cbuf.getvalue())
 
     print()
     if _failures:

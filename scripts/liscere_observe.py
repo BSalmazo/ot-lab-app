@@ -442,15 +442,26 @@ def multiplex(sources, on_event, emitter=None, log=print, until=None):
     timeout keeps it responsive during silence. A tshark that dies (EOF) is unregistered and reported;
     the loop continues on the survivors. ALL tshark are killed on exit -- normal, exception, or Ctrl-C
     -- so none leaks a promiscuous socket.
+
+    Returns True if ``until()`` asked to stop (a deliberate end), False if the loop fell through because
+    the selector EMPTIED -- every tshark exited. In unbounded continuous evaluate that second case is a
+    capture failure, not a clean end: the caller must not treat it as success (see main). Silently
+    returning there was the bug behind the bench "spin" -- the process exited when the capture dropped,
+    and under restart supervision that re-probes and re-spawns promiscuous captures in a tight churn.
     """
     sel = selectors.DefaultSelector()
     for src in sources:
         os.set_blocking(src.fd, False)
         sel.register(src.fd, selectors.EVENT_READ, src)
+    stopped = False
     try:
         while sel.get_map():
             if until is not None and until():
+                stopped = True
                 break
+            # CONSTANT 0.25 s block -- NOT a deadline-derived timeout. Deriving it from the next phase
+            # deadline would make it 0 in unbounded continuous evaluate (no deadline), and select(0)
+            # spins a hot loop. The phase deadlines live in until(); this timeout only bounds silence.
             for key, _mask in sel.select(0.25):
                 src = key.data
                 chunk = os.read(src.fd, 65536)
@@ -472,6 +483,7 @@ def multiplex(sources, on_event, emitter=None, log=print, until=None):
     finally:
         for src in sources:
             _kill(src.proc)
+    return stopped
 
 
 # --------------------------------------------------------------------------- pipeline (pure, testable)
@@ -960,9 +972,19 @@ def main(argv=None):
     try:
         # ONE selector loop over the N tshark. run.dispatch handles each event; run.tick advances the
         # phase at each window's deadline. multiplex kills every tshark on exit (normal or Ctrl-C).
-        multiplex(sources, on_event=run.dispatch, emitter=emitter, log=log, until=run.tick)
+        stopped = multiplex(sources, on_event=run.dispatch, emitter=emitter, log=log, until=run.tick)
     except KeyboardInterrupt:
         log("[evaluate] stopped")
+        return run.rc
+    if not stopped:
+        # multiplex fell through because the selector emptied: every tshark exited before any phase
+        # asked to stop. For a continuous monitor that is a CAPTURE FAILURE, not a clean end -- make it
+        # loud and non-zero so it is visible and a supervisor backs off, instead of a silent exit that
+        # (under restart supervision) re-probes and re-spawns captures in a churn.
+        log("[capture] every tshark exited; capture lost -- the observer is no longer monitoring")
+        print("capture lost: every tshark exited (interface/mirror down, or a child was killed) "
+              "before a stop was requested. Nothing is being observed.", file=sys.stderr)
+        return 3
     return run.rc
 
 
