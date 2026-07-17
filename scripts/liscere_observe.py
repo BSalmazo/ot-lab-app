@@ -268,10 +268,18 @@ class Emitter:
 
 # --------------------------------------------------------------------------- tshark I/O
 
-def _tshark_cmd(extractor, iface):
+def _tshark_cmd(extractor, iface, reset_after=100000):
     cmd = [
         "tshark", "-l", "-n", "-Q", "-i", iface,
         "-f", extractor.capture_filter(),
+        # -M N: reset tshark's dissector/reassembly state every N packets. DO NOT REMOVE -- it looks
+        # superfluous and is not. tshark accumulates per-conversation reassembly state without bound;
+        # measured on the bench (one tshark, "tcp", 1h, 1.13M packets) it climbs to ~158 MiB and the
+        # Pi thrashes and dies. With -M 100000 it settles (~134 MiB) and survives -- the difference
+        # between a 24/7 run and a host that falls over. This is what makes an unbounded run possible.
+        # Cost: the ONE transaction in flight across each reset boundary is lost -- at bench rates one
+        # sample every ~6 min, invisible at 100 ms sampling. Tune the boundary with --reset-after.
+        "-M", str(reset_after),
         "-T", "fields",
         "-E", "separator=\t",
         "-E", f"occurrence={extractor.occurrence()}",
@@ -282,12 +290,12 @@ def _tshark_cmd(extractor, iface):
     return cmd
 
 
-def _spawn(extractor, iface):
+def _spawn(extractor, iface, reset_after=100000):
     # Bytes mode (no text=, bufsize=0): the multiplex reads the raw fd with os.read and splits
     # newlines itself. NOT a buffered readline -- select() watches the fd while readline reads through
     # Python's TextIOWrapper, so a flushed line can sit unread until the fd next has data.
     return subprocess.Popen(
-        _tshark_cmd(extractor, iface),
+        _tshark_cmd(extractor, iface, reset_after),
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0,
     )
 
@@ -936,6 +944,15 @@ def main(argv=None):
                     help="with --learn: write the learned grammar here and stop (legacy learn-to-file); "
                          "without --learn: load this grammar and evaluate continuously (single silo)")
     ap.add_argument("--profile", default=None, help="optional path to write the auto-calibrated phase profile")
+    ap.add_argument("--only", default=None,
+                    help="comma-separated wire layers to actually RUN, e.g. 'modbus,s7comm'. The probe "
+                         "still runs in full and reports everything it found; this restricts only what "
+                         "is RUN (one tshark costs ~145 MiB of dissector tables, so a small host cannot "
+                         "hold every claimed protocol). A layer claimed but excluded is reported, not run.")
+    ap.add_argument("--reset-after", type=int, default=100000,
+                    help="tshark -M: reset dissector state every N packets so memory stays bounded on an "
+                         "unbounded run (default 100000). Lower trades a lost in-flight transaction per "
+                         "reset for a tighter memory ceiling.")
     ap.add_argument("--emit-json", action=argparse.BooleanOptionalAction, default=True,
                     help="emit structured discovery events as JSON Lines on stdout (human logs go to "
                          "stderr). --no-emit-json restores plain human output on stdout, no JSON.")
@@ -954,15 +971,38 @@ def main(argv=None):
               f"extend --probe for slow-polling devices, or check the mirror port.", file=sys.stderr)
         return 2
 
-    # Spawn one tshark per claimed extractor. extractor_for_layer maps a wire layer to its extractor.
+    # --only restricts which claimed layers RUN, never what the probe REPORTED. The probe already ran
+    # in full and surfaced everything it found (claimed + UNCLAIMED). A claimed layer excluded here is
+    # reported as claimed-but-not-run, not hidden -- a run must say plainly what it saw and chose not
+    # to run.
+    run_layers = set(claimed)
+    if args.only:
+        requested = {s.strip().lower() for s in args.only.split(",") if s.strip()}
+        for layer in sorted(requested - claimed):
+            log(f"[only] {layer!r} was not claimed by the probe; ignoring")
+        run_layers = claimed & requested
+        for layer in sorted(claimed - run_layers):
+            ext = extractor_for_layer(layer)
+            label = _protocol_label(ext) if ext is not None else layer.upper()
+            log(f"[only] claimed {label} ({layer}) but --only excludes it; not running "
+                f"(the probe still reported it)")
+            emitter.silo(None, evaluable=False, protocol=label, kind="not_run",
+                         reason=f"claimed but not run (--only {args.only})")
+        if not run_layers:
+            log("[only] --only excludes every claimed layer -- nothing to run")
+            print(f"--only {args.only!r} excludes every claimed layer (claimed: "
+                  f"{', '.join(sorted(claimed))}); nothing to run.", file=sys.stderr)
+            return 2
+
+    # Spawn one tshark per RUN layer. extractor_for_layer maps a wire layer to its extractor.
     sources = []
-    for layer in sorted(claimed):
+    for layer in sorted(run_layers):
         ext = extractor_for_layer(layer)
         if ext is None or not hasattr(ext, "group_flows"):
             log(f"[probe] claimed layer {layer!r} has no runnable extractor; skipped")
             continue
         emitter.protocol_seen(ext)
-        sources.append(_Source(ext, _spawn(ext, args.iface)))
+        sources.append(_Source(ext, _spawn(ext, args.iface, args.reset_after)))
     if not sources:
         print("claimed layers have no runnable extractor", file=sys.stderr)
         return 2

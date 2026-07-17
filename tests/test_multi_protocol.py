@@ -306,7 +306,7 @@ def main():
     # main(): a capture that drops before any stop must exit LOUD and non-zero (rc=3), not silent 0.
     real_probe2, real_spawn = obs.probe_layers, obs._spawn
     obs.probe_layers = lambda iface, secs, log=print, emitter=None: ({"modbus"}, {})
-    obs._spawn = lambda extractor, iface: FakeProc(b"")   # tshark dies immediately (EOF)
+    obs._spawn = lambda extractor, iface, reset_after=None: FakeProc(b"")   # tshark dies immediately (EOF)
     cbuf = io.StringIO()
     _real_stderr, _real_stdout = sys.stderr, sys.stdout
     sys.stderr, sys.stdout = cbuf, io.StringIO()   # the observer's JSON stream is noise here
@@ -317,6 +317,56 @@ def main():
         obs.probe_layers, obs._spawn = real_probe2, real_spawn
     check("capture drops before a stop -> main returns 3 (not silent 0)", rc_cap == 3, f"(rc={rc_cap})")
     check("capture loss is explained on stderr", "capture lost" in cbuf.getvalue())
+
+    # === 7) -M / --reset-after: the memory-bounding reset is IN the tshark command =================
+    # Without -M, tshark's reassembly state grows without bound until the host dies (measured on the
+    # bench). It looks superfluous; it is what makes a 24/7 run possible. Pin it so it is not removed.
+    cmd = obs._tshark_cmd(ModbusExtractor(), "en0")
+    check("-M is present in the tshark command (bounds memory on an unbounded run)", "-M" in cmd)
+    check("-M default count is 100000", "-M" in cmd and cmd[cmd.index("-M") + 1] == "100000",
+          f"(={cmd[cmd.index('-M') + 1] if '-M' in cmd else None})")
+    tuned = obs._tshark_cmd(ModbusExtractor(), "en0", 5000)
+    check("--reset-after threads through to -M", tuned[tuned.index("-M") + 1] == "5000")
+
+    # === 8) --only restricts what RUNS, never what the probe REPORTED =============================
+    real_probe3, real_spawn3, _es3, _eo3 = obs.probe_layers, obs._spawn, sys.stderr, sys.stdout
+    try:
+        # 8a: run exactly the named claimed layers; the excluded claimed layer is REPORTED, not hidden.
+        obs.probe_layers = lambda iface, secs, log=print, emitter=None: ({"modbus", "opcua", "s7comm"}, {})
+        spawned = []
+        obs._spawn = lambda ext, iface, reset_after=None: (spawned.append(ext.name), FakeProc(b""))[1]
+        obuf = io.StringIO(); sys.stderr, sys.stdout = io.StringIO(), obuf
+        obs.main(["--iface", "x", "--probe", "1", "--observe", "60", "--learn", "60", "--only", "modbus,s7comm"])
+        sys.stderr, sys.stdout = _es3, _eo3
+        run_silos = [json.loads(l) for l in obuf.getvalue().splitlines() if json.loads(l).get("type") == "silo"]
+        not_run = [s for s in run_silos if s.get("kind") == "not_run"]
+        check("--only runs exactly the named claimed layers (modbus + s7comm, not opcua)",
+              set(spawned) == {"MODBUS/TCP", "S7COMM"}, f"(spawned={spawned})")
+        check("the claimed-but-excluded layer is REPORTED as not_run, labelled (opcua), not hidden",
+              len(not_run) == 1 and (not_run[0].get("protocol") == "OPCUA")
+              and "--only" in (not_run[0].get("reason") or ""), f"(={not_run})")
+
+        # 8b: --only naming a layer the probe did NOT claim -> say so, carry on with the rest.
+        obs.probe_layers = lambda iface, secs, log=print, emitter=None: ({"modbus"}, {})
+        spawned2 = []
+        obs._spawn = lambda ext, iface, reset_after=None: (spawned2.append(ext.name), FakeProc(b""))[1]
+        lbuf = io.StringIO(); sys.stderr, sys.stdout = lbuf, io.StringIO()
+        obs.main(["--iface", "x", "--probe", "1", "--observe", "60", "--learn", "60", "--only", "modbus,profinet"])
+        sys.stderr, sys.stdout = _es3, _eo3
+        check("--only naming an unclaimed layer is noted, and the rest still runs",
+              set(spawned2) == {"MODBUS/TCP"} and "not claimed by the probe" in lbuf.getvalue(),
+              f"(spawned={spawned2})")
+
+        # 8c: --only excluding EVERY claimed layer -> clear message + non-zero rc, no hang.
+        obs.probe_layers = lambda iface, secs, log=print, emitter=None: ({"modbus"}, {})
+        obs._spawn = lambda ext, iface, reset_after=None: FakeProc(b"")
+        xbuf = io.StringIO(); sys.stderr, sys.stdout = xbuf, io.StringIO()
+        rc_only = obs.main(["--iface", "x", "--probe", "1", "--only", "opcua"])
+        sys.stderr, sys.stdout = _es3, _eo3
+        check("--only excluding every claimed layer -> rc 2 with a clear message (no hang)",
+              rc_only == 2 and "excludes every claimed layer" in xbuf.getvalue(), f"(rc={rc_only})")
+    finally:
+        obs.probe_layers, obs._spawn, sys.stderr, sys.stdout = real_probe3, real_spawn3, _es3, _eo3
 
     print()
     if _failures:

@@ -54,14 +54,18 @@ class DiscoveryModel:
         # is the legend and the tables can reference a silo by id instead of a long endpoint.
         self.silos = OrderedDict()       # endpoint -> {"id", "peer", "flows": OrderedDict(key->flow)}
         self._next_silo_id = 1
-        # Two distinct kinds of "not evaluated", never conflated (each key -> (display, reason)):
+        # Three distinct kinds of "not evaluated", never conflated (each key -> (display, reason)):
         #   unreadable  -- traffic no extractor can read (a vantage boundary).
         #   unevaluable -- read perfectly, could not be calibrated (a data problem).
+        #   not_run     -- claimed by the probe but the operator chose not to run it (--only): a scope
+        #                  decision, neither a blindness nor a data problem. Shown so the run says
+        #                  plainly what it saw and did not run.
         # Keyed so an endpoint-less finding (a claimed-but-empty extractor) does not collide with
         # another on one line. A silo whose flows WERE discovered but has no state signal is NOT here
         # -- it stays a map root, marked unevaluable in place (see _silo).
         self.unreadable = OrderedDict()
         self.unevaluable = OrderedDict()
+        self.not_run = OrderedDict()
         self.protocol = None             # run-wide protocol label (fallback only; each silo carries its own)
         # (silo, key) -> {nature, datatype, datatype_certain, features, value, phase}  (VARIABLES table)
         self.variables = OrderedDict()
@@ -200,9 +204,11 @@ class DiscoveryModel:
         # evaluated; ``kind`` says which section it belongs in and the two are never merged:
         #   "unreadable"  -> UNREADABLE ENDPOINTS (traffic no extractor can read; a vantage boundary).
         #   "unevaluable" -> read but not calibratable (a data problem), shown separately.
+        #   "not_run"     -> claimed but excluded by --only (a scope decision), shown separately again.
         endpoint = ev.get("endpoint")
         protocol = ev.get("protocol")
         reason = ev.get("reason")
+        kind = ev.get("kind") or "unevaluable"
         ep = str(endpoint) if endpoint else None
 
         if ev.get("evaluable"):
@@ -214,8 +220,13 @@ class DiscoveryModel:
                     silo["peer"] = ev.get("peer")
             return
 
-        if (ev.get("kind") or "unevaluable") == "unreadable":
+        if kind == "unreadable":
             self._add_finding(self.unreadable, ep, reason)
+            return
+        if kind == "not_run":
+            # A whole claimed layer the operator chose not to run: no endpoint. Show its protocol label
+            # so it reads as "MODBUS -- claimed but not run", key by label so two never collapse.
+            self.not_run[protocol or reason] = (protocol or "(layer)", reason)
             return
 
         # Unevaluable. If its flows were already discovered (a map root exists), it is a silo that
@@ -272,7 +283,7 @@ def _finding_section(tree, title, title_style, glyph, glyph_style, text_style, f
 
 def build_tree(model):
     tree = Tree(Text("DISCOVERY MAP", style="bold"))
-    if not model.silos and not model.unreadable and not model.unevaluable:
+    if not model.silos and not model.unreadable and not model.unevaluable and not model.not_run:
         tree.add(Text("discovering…", style="dim"))
     silos = list(model.silos.items())
     for i, (endpoint, silo) in enumerate(silos):
@@ -302,14 +313,18 @@ def build_tree(model):
             snode.add(_flow_label(key, fl, model.verbose))
         if i < len(silos) - 1:
             tree.add(Text(""))                                     # one blank line between silos
-    # Two separate sections, kept distinct: unreadable (a vantage boundary) vs unevaluable (a data
-    # problem). Conflating them would erase the distinction the observer rests on.
-    rendered = _finding_section(
+    # Three separate sections, kept distinct: unreadable (a vantage boundary), unevaluable (a data
+    # problem), and not-run (a scope decision). Conflating any of them would erase a distinction the
+    # observer rests on -- each is a different reason a protocol on the wire is not being evaluated.
+    r1 = _finding_section(
         tree, "UNREADABLE ENDPOINTS  ·  captured but no extractor can read", "bold red",
         "⊘ ", "bold red", "red", model.unreadable, need_gap=bool(silos))
-    _finding_section(
+    r2 = _finding_section(
         tree, "UNEVALUABLE  ·  read but no state signal to calibrate", "bold yellow",
-        "⚠ ", "bold yellow", "yellow", model.unevaluable, need_gap=bool(silos) or rendered)
+        "⚠ ", "bold yellow", "yellow", model.unevaluable, need_gap=bool(silos) or r1)
+    _finding_section(
+        tree, "NOT RUN  ·  claimed by the probe, excluded by --only", "bold blue",
+        "⊙ ", "bold blue", "blue", model.not_run, need_gap=bool(silos) or r1 or r2)
     return tree
 
 
