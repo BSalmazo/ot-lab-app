@@ -66,6 +66,10 @@ class DiscoveryModel:
         self.unreadable = OrderedDict()
         self.unevaluable = OrderedDict()
         self.not_run = OrderedDict()
+        # Capture AVAILABILITY per protocol -- protocol -> (state, detail). A tshark can die and be
+        # respawned mid-run; this surfaces the blip so the map never pretends a protocol is being
+        # watched when its capture is down. "resumed"/None clears back to steady-state.
+        self.capture_status = OrderedDict()
         self.protocol = None             # run-wide protocol label (fallback only; each silo carries its own)
         # (silo, key) -> {nature, datatype, datatype_certain, features, value, phase}  (VARIABLES table)
         self.variables = OrderedDict()
@@ -94,6 +98,7 @@ class DiscoveryModel:
             "grammar_learned": self._grammar,
             "stage": self._stage,
             "silo": self._silo,
+            "capture": self._capture,
         }.get(t)
         if handler:
             handler(ev)
@@ -253,6 +258,18 @@ class DiscoveryModel:
             key, display = f"(no endpoint):{reason}", "(no endpoint)"
         bucket[key] = (display, reason)
 
+    def _capture(self, ev):
+        # Availability of one protocol's capture. "lost"/"permanently_lost" flag a degraded/dead
+        # capture; "resumed" clears back to steady-state (keeping a brief note of the downtime).
+        proto, state = ev.get("protocol", "?"), ev.get("state")
+        if state == "resumed":
+            self.capture_status[proto] = ("resumed", f"resumed after {ev.get('down_s', '?')}s")
+        elif state == "permanently_lost":
+            self.capture_status[proto] = ("permanently_lost",
+                                          f"permanently lost after {ev.get('tries', '?')} respawns")
+        else:  # "lost"
+            self.capture_status[proto] = ("lost", "capture lost -- respawning")
+
 
 # -- rendering ------------------------------------------------------------
 
@@ -281,8 +298,21 @@ def _finding_section(tree, title, title_style, glyph, glyph_style, text_style, f
     return True
 
 
+_CAPTURE_STYLE = {"lost": "bold yellow", "permanently_lost": "bold red", "resumed": "green"}
+_CAPTURE_GLYPH = {"lost": "◐ ", "permanently_lost": "✖ ", "resumed": "● "}
+
+
 def build_tree(model):
     tree = Tree(Text("DISCOVERY MAP", style="bold"))
+    # Capture-availability banner FIRST: a degraded/dead capture is the most urgent thing to see, and
+    # the monitor must never look healthy while a protocol is dark. Steady-state protocols show nothing.
+    for proto, (state, detail) in model.capture_status.items():
+        style = _CAPTURE_STYLE.get(state, "yellow")
+        line = Text(_CAPTURE_GLYPH.get(state, "◐ "), style=style)
+        line.append(f"{proto}: {detail}", style=style)
+        tree.add(line)
+    if model.capture_status:
+        tree.add(Text(""))
     if not model.silos and not model.unreadable and not model.unevaluable and not model.not_run:
         tree.add(Text("discovering…", style="dim"))
     silos = list(model.silos.items())

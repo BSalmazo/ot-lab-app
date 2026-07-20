@@ -139,6 +139,21 @@ class Emitter:
             event["seconds"] = seconds
         self._emit(event)
 
+    def capture(self, protocol, state, down_s=None, attempt=None, tries=None):
+        # A capture AVAILABILITY event for one protocol -- "lost" | "resumed" | "permanently_lost".
+        # Distinct from silo(): silo() is about WHAT is on the wire (readable / unevaluable / not-run);
+        # this is about whether we are currently SEEING it. A tshark can die and be respawned mid-run;
+        # this surfaces the blip honestly instead of pretending nothing happened, and it names exactly
+        # which protocol went dark -- the monitor is never fully blind, only partially, and it says so.
+        event = {"type": "capture", "protocol": protocol, "state": state}
+        if down_s is not None:
+            event["down_s"] = round(down_s, 3)
+        if attempt is not None:
+            event["attempt"] = attempt
+        if tries is not None:
+            event["tries"] = tries
+        self._emit(event)
+
     def silo(self, endpoint, evaluable, reason=None, peer=None, protocol=None, kind=None):
         # A discovered silo -- one (protocol, server endpoint) as its own unit of evaluation. Each
         # silo carries its OWN protocol label (from the extractor that parsed it) so the UI never has
@@ -441,43 +456,170 @@ class _Source:
         self.buf = b""
         self.coalescer = _Coalescer(extractor)
 
+    def respawn(self, proc):
+        """Point this source at a FRESH tshark after a death, keeping the SAME extractor object.
+        The critical state -- the extractor's S7 _pending / Modbus derived window, and (elsewhere) the
+        silo's tracker, grammar and calibration -- lives in Python and is untouched; only tshark's
+        dissector state was lost, and the new process rebuilds it. The byte buffer is dropped (a
+        partial line straddling the death is gone with it) and a fresh coalesce run starts -- the
+        outage gap already exceeds any coalesce window, so no open run could have survived it anyway.
+        """
+        self.proc = proc
+        self.fd = proc.stdout.fileno()
+        self.buf = b""
+        self.coalescer = _Coalescer(self.extractor)
 
-def multiplex(sources, on_event, emitter=None, log=print, until=None):
+
+class _Supervisor:
+    """Respawn policy for dead tshark, kept OUTSIDE the select loop: multiplex reports a death and asks
+    which sources are due to respawn; this decides how many times and how fast, and when to give up.
+
+    Bounded exponential backoff (1, 2, 4 ... capped) so a genuinely-down interface can never fork-loop
+    -- the first retry WAITS; a respawn is never immediate. A source that dies again within a short
+    grace of respawning counts against its retry budget (interface hard-down); one that stays up
+    resets it (a transient blip), so a flap over days does not slowly exhaust the budget. After
+    ``retries`` failed attempts the layer is PERMANENTLY lost and reported; the run exits loudly (rc=3)
+    only when no runnable source remains (see main) -- a survivor keeps being judged throughout.
+    """
+
+    def __init__(self, spawn, log, emitter=None, on_resume=None, retries=36, backoff_cap=30.0,
+                 base=1.0, grace=2.0):
+        self.spawn = spawn                 # (extractor) -> a fresh Popen
+        self.log = log
+        self.emitter = emitter
+        self.on_resume = on_resume         # called with (down_seconds) when a source resumes
+        self.retries, self.cap, self.base, self.grace = retries, backoff_cap, base, grace
+        self._down = {}    # src -> {"lost_at", "tries", "retry_at", "attempting", "alive_at"}
+
+    def _label(self, src):
+        return _protocol_label(src.extractor)
+
+    def _backoff(self, tries):
+        return min(self.cap, self.base * (2 ** (tries - 1)))
+
+    def note_death(self, src, now):
+        """A source's tshark hit EOF. Start or continue its outage; schedule a respawn, or give up."""
+        rec = self._down.get(src)
+        if rec is None:                                        # first death of a new outage
+            rec = {"lost_at": now, "tries": 0, "retry_at": None, "attempting": False, "alive_at": None}
+            self._down[src] = rec
+            self.log(f"[capture] {src.extractor.name} tshark ended (rc={src.proc.poll()}); respawning "
+                     f"-- tracker/grammar/calibration are preserved (Python state, not tshark's)")
+            if self.emitter is not None:
+                self.emitter.capture(self._label(src), "lost")
+        rec["tries"] += 1
+        rec["attempting"] = False
+        if rec["tries"] > self.retries:                        # give up -> permanently lost
+            del self._down[src]
+            self.log(f"[capture] {src.extractor.name} PERMANENTLY lost after {rec['tries'] - 1} respawn "
+                     f"attempts over {now - rec['lost_at']:.0f}s")
+            if self.emitter is not None:
+                self.emitter.capture(self._label(src), "permanently_lost", tries=rec["tries"] - 1)
+            return
+        rec["retry_at"] = now + self._backoff(rec["tries"])
+        self.log(f"[capture] {src.extractor.name} respawn #{rec['tries']} in "
+                 f"{rec['retry_at'] - now:.0f}s")
+
+    def service(self, now):
+        """Per-iteration, non-blocking: respawn sources whose backoff elapsed, and promote a respawned
+        source to 'resumed' once it has survived the grace still running. Returns freshly-respawned
+        sources for the caller to register in its selector."""
+        fresh = []
+        for src, rec in list(self._down.items()):
+            if not rec["attempting"]:
+                if rec["retry_at"] is not None and now >= rec["retry_at"]:
+                    try:
+                        src.respawn(self.spawn(src.extractor))
+                    except Exception as exc:                   # launch failed -> treat as a failed try
+                        self.log(f"[capture] {src.extractor.name} respawn failed to launch: {exc}")
+                        self.note_death(src, now)
+                        continue
+                    rec["attempting"], rec["alive_at"] = True, now + self.grace
+                    fresh.append(src)
+            elif now >= rec["alive_at"] and src.proc.poll() is None:
+                self._resume(src, rec, now)                    # survived the grace, still running
+        return fresh
+
+    def mark_alive(self, src, now):
+        """First bytes from a respawned source -> it is capturing again; resume without waiting out the
+        grace. A no-op for a source that never died (the common path)."""
+        rec = self._down.get(src)
+        if rec is not None and rec["attempting"]:
+            self._resume(src, rec, now)
+
+    def _resume(self, src, rec, now):
+        down_s = now - rec["lost_at"]
+        del self._down[src]
+        self.log(f"[capture] {src.extractor.name} resumed after {down_s:.1f}s (respawn #{rec['tries']})")
+        if self.emitter is not None:
+            self.emitter.capture(self._label(src), "resumed", down_s=down_s, attempt=rec["tries"])
+        if self.on_resume is not None:
+            self.on_resume(down_s)
+
+    def pending(self):
+        return bool(self._down)
+
+    def is_degraded(self):
+        # True while any source is down or mid-respawn (not yet proven alive). A permanently-lost
+        # source is removed, so this returns False once give-up has been reached.
+        return bool(self._down)
+
+
+def multiplex(sources, on_event, emitter=None, log=print, until=None, supervisor=None):
     """ONE selector loop over N tshark stdout fds -- single-threaded, no locks. Each line is routed to
     the extractor that owns its fd, parsed, coalesced, and handed to ``on_event(extractor, event)``.
     A declined frame goes to _report_opaque. ``until()`` is polled between selects (return True to
     stop) so observe/learn/evaluate windows are just deadlines in this one loop; a 0.25 s select
-    timeout keeps it responsive during silence. A tshark that dies (EOF) is unregistered and reported;
-    the loop continues on the survivors. ALL tshark are killed on exit -- normal, exception, or Ctrl-C
-    -- so none leaks a promiscuous socket.
+    timeout keeps it responsive during silence. ALL tshark are killed on exit -- normal, exception, or
+    Ctrl-C -- so none leaks a promiscuous socket.
+
+    With a ``supervisor``, a tshark that dies (EOF) is handed to it: the source is respawned under a
+    bounded backoff and its fd re-registered here when ready, so the observer resumes capturing rather
+    than giving up. The loop keeps running while any source is live OR down-and-retrying, and the OTHER
+    sources are serviced without pause the whole time -- one protocol's outage never touches another
+    silo's tracker, grammar or verdict flow. Without a supervisor, a dead source is simply dropped
+    (the pre-respawn behaviour, still used by the finite-window unit tests).
 
     Returns True if ``until()`` asked to stop (a deliberate end), False if the loop fell through because
-    the selector EMPTIED -- every tshark exited. In unbounded continuous evaluate that second case is a
-    capture failure, not a clean end: the caller must not treat it as success (see main). Silently
-    returning there was the bug behind the bench "spin" -- the process exited when the capture dropped,
-    and under restart supervision that re-probes and re-spawns promiscuous captures in a tight churn.
+    nothing runnable remains -- every source has died (no supervisor) or been PERMANENTLY lost (all
+    retries exhausted). In continuous evaluate that second case is a capture failure, not a clean end:
+    the caller must not treat it as success (see main).
     """
     sel = selectors.DefaultSelector()
-    for src in sources:
+
+    def _register(src):
         os.set_blocking(src.fd, False)
         sel.register(src.fd, selectors.EVENT_READ, src)
+
+    for src in sources:
+        _register(src)
+    pending = (supervisor.pending if supervisor is not None else (lambda: False))
     stopped = False
     try:
-        while sel.get_map():
+        while sel.get_map() or pending():
             if until is not None and until():
                 stopped = True
                 break
+            if supervisor is not None:
+                for src in supervisor.service(time.time()):    # respawn due sources; register the new fd
+                    _register(src)
             # CONSTANT 0.25 s block -- NOT a deadline-derived timeout. Deriving it from the next phase
             # deadline would make it 0 in unbounded continuous evaluate (no deadline), and select(0)
-            # spins a hot loop. The phase deadlines live in until(); this timeout only bounds silence.
+            # spins a hot loop. On an EMPTY selector (single source down, backing off) select still
+            # blocks the full 0.25 s, so a respawn wait never busy-loops. Deadlines live in until().
             for key, _mask in sel.select(0.25):
                 src = key.data
                 chunk = os.read(src.fd, 65536)
                 if chunk == b"":                          # EOF -> this tshark exited
                     sel.unregister(src.fd)
-                    log(f"[capture] {src.extractor.name} tshark ended (rc={src.proc.poll()}); "
-                        f"continuing on the {len(sel.get_map())} still live")
+                    if supervisor is not None:
+                        supervisor.note_death(src, time.time())
+                    else:
+                        log(f"[capture] {src.extractor.name} tshark ended (rc={src.proc.poll()}); "
+                            f"continuing on the {len(sel.get_map())} still live")
                     continue
+                if supervisor is not None:
+                    supervisor.mark_alive(src, time.time())   # first bytes after a respawn -> resumed
                 src.buf += chunk
                 while b"\n" in src.buf:
                     raw, src.buf = src.buf.split(b"\n", 1)
@@ -823,6 +965,10 @@ class _Run:
         self.silos, self.silos_by_ep, self.evaluable = [], {}, []
         self.reported_late = set()
         self.stop, self.rc = False, 0
+        # True while any source's capture is down/respawning. A timed window (observe/learn) does not
+        # advance while degraded, and is extended by the downtime on resume, so calibration/learning
+        # is never silently short. Set by main to the supervisor's is_degraded; default: never degraded.
+        self.degraded = lambda: False
         emitter.stage("observe", seconds=args.observe)
         log(f"[observe] {args.observe:.0f}s -- discover + calibrate each silo")
 
@@ -845,11 +991,32 @@ class _Run:
     # -- between-select deadline check (advances the phase) ---------------
     def tick(self):
         now = time.time()
+        # Hold a timed window open while capture is degraded: firing the boundary now would calibrate
+        # on a window silently shortened by the outage. When the source resumes, extend_window() gives
+        # the lost seconds back and the boundary fires then; if it is permanently lost, degraded()
+        # clears and the boundary fires on what was captured (under-sampled -> existing handling).
         if self.phase == "observe" and now >= self.observe_end:
-            self._end_observe()
+            if not self.degraded():
+                self._end_observe()
         elif self.phase == "learn" and self.learn_end is not None and now >= self.learn_end:
-            self._end_learn()
+            if not self.degraded():
+                self._end_learn()
         return self.stop
+
+    def extend_window(self, seconds):
+        """A capture outage of `seconds` just ended; give the current timed window that live-capture
+        time back so the window measures actual observation, not wall-clock. No-op in unbounded
+        evaluate (no deadline) and for a non-positive span."""
+        if seconds <= 0:
+            return
+        if self.phase == "observe":
+            self.observe_end += seconds
+            if self.learn_end is not None:
+                self.learn_end += seconds
+            self.log(f"[observe] window +{seconds:.1f}s to cover a {seconds:.1f}s capture outage")
+        elif self.phase == "learn" and self.learn_end is not None:
+            self.learn_end += seconds
+            self.log(f"[learn] window +{seconds:.1f}s to cover a {seconds:.1f}s capture outage")
 
     def _end_observe(self):
         args, emitter, log = self.args, self.emitter, self.log
@@ -953,6 +1120,13 @@ def main(argv=None):
                     help="tshark -M: reset dissector state every N packets so memory stays bounded on an "
                          "unbounded run (default 100000). Lower trades a lost in-flight transaction per "
                          "reset for a tighter memory ceiling.")
+    ap.add_argument("--respawn-retries", type=int, default=36,
+                    help="how many times to respawn a tshark that dies before declaring its capture "
+                         "permanently lost (default 36; with the backoff cap that is ~15-20 min of "
+                         "resilience before giving up). A 24/7 monitor should persist, not give up early.")
+    ap.add_argument("--respawn-backoff-cap", type=float, default=30.0,
+                    help="cap (seconds) on the exponential respawn backoff 1,2,4,8...  (default 30). The "
+                         "first retry always waits, so a genuinely-down interface cannot fork-loop.")
     ap.add_argument("--emit-json", action=argparse.BooleanOptionalAction, default=True,
                     help="emit structured discovery events as JSON Lines on stdout (human logs go to "
                          "stderr). --no-emit-json restores plain human output on stdout, no JSON.")
@@ -1009,21 +1183,31 @@ def main(argv=None):
     log(f"[run] {len(sources)} extractor(s): {', '.join(s.extractor.name for s in sources)}")
 
     run = _Run(sources, args, emitter, log)
+    # The supervisor respawns a dead tshark under a bounded backoff so a child death (the weekend soak
+    # saw one rc=1 exit hours in) is survived, not fatal. The critical state -- tracker, grammar,
+    # calibration, silos -- lives in Python and is untouched by a respawn; only tshark's dissector
+    # state is lost and rebuilds itself. While one source is down the others keep being judged.
+    supervisor = _Supervisor(
+        spawn=lambda ext: _spawn(ext, args.iface, args.reset_after),
+        log=log, emitter=emitter, on_resume=run.extend_window,
+        retries=args.respawn_retries, backoff_cap=args.respawn_backoff_cap)
+    run.degraded = supervisor.is_degraded    # hold timed windows open while capture is degraded
     try:
         # ONE selector loop over the N tshark. run.dispatch handles each event; run.tick advances the
         # phase at each window's deadline. multiplex kills every tshark on exit (normal or Ctrl-C).
-        stopped = multiplex(sources, on_event=run.dispatch, emitter=emitter, log=log, until=run.tick)
+        stopped = multiplex(sources, on_event=run.dispatch, emitter=emitter, log=log, until=run.tick,
+                            supervisor=supervisor)
     except KeyboardInterrupt:
         log("[evaluate] stopped")
         return run.rc
     if not stopped:
-        # multiplex fell through because the selector emptied: every tshark exited before any phase
-        # asked to stop. For a continuous monitor that is a CAPTURE FAILURE, not a clean end -- make it
-        # loud and non-zero so it is visible and a supervisor backs off, instead of a silent exit that
+        # multiplex fell through because nothing runnable remains: every source has been PERMANENTLY
+        # lost (all respawn retries exhausted). For a continuous monitor that is a CAPTURE FAILURE, not
+        # a clean end -- make it loud and non-zero so it is visible, instead of a silent exit that
         # (under restart supervision) re-probes and re-spawns captures in a churn.
-        log("[capture] every tshark exited; capture lost -- the observer is no longer monitoring")
-        print("capture lost: every tshark exited (interface/mirror down, or a child was killed) "
-              "before a stop was requested. Nothing is being observed.", file=sys.stderr)
+        log("[capture] every capture permanently lost -- the observer is no longer monitoring")
+        print("capture lost: every tshark died and exhausted its respawn retries "
+              f"(--respawn-retries {args.respawn_retries}). Nothing is being observed.", file=sys.stderr)
         return 3
     return run.rc
 
