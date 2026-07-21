@@ -50,6 +50,14 @@ def pub(**kw):
     return line(**base)
 
 
+def wreq(**kw):
+    base = {"frame.time_epoch": "1.0", "frame.protocols": "eth:ethertype:ip:tcp:opcua",
+            "ip.src": "10.0.0.9", "ip.dst": "10.0.0.5", "tcp.srcport": "48000", "tcp.dstport": "4840",
+            "transport.type": "MSG", "servicenodeid.numeric": "673"}    # 673 = WriteRequest
+    base.update(kw)
+    return line(**base)
+
+
 def flows_by_key(ex, events):
     return {f.key: f for f in ex.group_flows(events)}
 
@@ -169,6 +177,50 @@ def main():
           and ex.write_datatype(wr) == ("Int32", True)
           and flows_by_key(ex, [wr]).get("opcua:write:ns=4;i=23").role_hint == "command",
           f"(op={wr.op}, target={wr.target}, value={wr.value})")
+
+    # === 6) WriteRequest (673) COMMAND path: per-node, envelope not a target, generic value ========
+    # Bench structure: opcua.nodeid.numeric = <AuthToken>,<TypeId 0>,<target> ; AttributeId (13=Value)
+    # marks each WriteValue, so N = count(AttributeId) and the targets are the LAST N nodeid.numeric
+    # entries -- the envelope tokens are NOT targets. Value dispatches on the same variant table.
+    # Bench-confirmed on this PLC: an Int tag writes as Int16 (0x04). (Value 93 is synthetic.)
+    w1 = ex.parse_line(wreq(**{"nodeid.numeric": "1875154555,0,45", "AttributeId": "13",
+                             "variant.has_value": "0x04", "Int16": "93"}))
+    check("a WriteRequest is split into per-target write items (envelope tokens excluded)",
+          w1.raw["write_items"] == [{"target": "ns=0;i=45", "variant_type": 0x04, "value": 93, "unhandled": False}],
+          f"(={w1.raw['write_items']})")
+    flw = flows_by_key(ex, [w1])
+    check("one COMMAND flow keyed by the target node, with the Int16 value typed correctly",
+          set(flw) == {"opcua:write:ns=0;i=45"} and flw["opcua:write:ns=0;i=45"].role_hint == "command"
+          and flw["opcua:write:ns=0;i=45"].samples == [(1.0, 93.0)]
+          and flw["opcua:write:ns=0;i=45"].datatype == "Int16", f"(={sorted(flw)})")
+    check("the envelope AuthenticationToken (1875154555) is NOT mistaken for a write target",
+          "opcua:write:ns=0;i=1875154555" not in flw and "opcua:write:ns=0;i=0" not in flw)
+
+    # multi-node write: 2 targets (45 Int16=93, 46 Float=1.5) after the 2 envelope tokens
+    w2 = ex.parse_line(wreq(**{"nodeid.numeric": "1875154555,0,45,46", "AttributeId": "13,13",
+                             "variant.has_value": "0x04,0x0a", "Int16": "93", "Float": "1.5"}))
+    fl2 = flows_by_key(ex, [w2])
+    check("a multi-node WriteRequest yields N command flows, correctly paired by position",
+          set(fl2) == {"opcua:write:ns=0;i=45", "opcua:write:ns=0;i=46"}
+          and fl2["opcua:write:ns=0;i=45"].samples == [(1.0, 93.0)] and fl2["opcua:write:ns=0;i=45"].datatype == "Int16"
+          and fl2["opcua:write:ns=0;i=46"].samples == [(1.0, 1.5)] and fl2["opcua:write:ns=0;i=46"].datatype == "Float",
+          f"(={ {k: v.samples for k, v in fl2.items()} })")
+
+    # a write target in a non-zero namespace keeps its ns (tail-aligned nsindex, same rule as reads)
+    w3 = ex.parse_line(wreq(**{"nodeid.numeric": "1875154555,0,23", "nodeid.nsindex": "0,4",
+                             "AttributeId": "13", "variant.has_value": "0x06", "Int32": "80"}))
+    check("a write target with a non-zero namespace is keyed ns=4 (not forced to ns=0)",
+          w3.raw["write_items"][0]["target"] == "ns=4;i=23"
+          and "opcua:write:ns=4;i=23" in flows_by_key(ex, [w3]), f"(={w3.raw['write_items']})")
+
+    # an unreadable write value (unmapped variant) still surfaces the command node, reported
+    w4 = ex.parse_line(wreq(**{"nodeid.numeric": "1875154555,0,99", "AttributeId": "13",
+                             "variant.has_value": "0x0e"}))   # 0x0e Guid: no numeric field read
+    fl4 = flows_by_key(ex, [w4])
+    check("an unreadable write value still surfaces its command node, labelled with the variant id",
+          "opcua:write:ns=0;i=99" in fl4 and fl4["opcua:write:ns=0;i=99"].role_hint == "command"
+          and fl4["opcua:write:ns=0;i=99"].datatype == "variant:0x0e"
+          and w4.raw["unhandled_variants"] == [0x0e], f"(={fl4.get('opcua:write:ns=0;i=99') and fl4['opcua:write:ns=0;i=99'].datatype})")
 
     # a legacy / no-ClientHandle publish still falls back to the single fused flow (unchanged)
     e7 = ex.parse_line(pub(Float="47.1,47.2", **{"variant.has_value": "0x0a"}))   # no ClientHandle

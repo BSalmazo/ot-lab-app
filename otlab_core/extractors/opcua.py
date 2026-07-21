@@ -124,9 +124,11 @@ _FIELDS = [
     "opcua.Double",            # 24
     "opcua.String",            # 25
     "opcua.ClientHandle",      # 26  per-MonitoredItemNotification handle (subscription publishes)
+    "opcua.AttributeId",       # 27  per-WriteValue attribute (13=Value); its count = N write targets
 ]
 
 _CLIENTHANDLE_COL = 26     # opcua.ClientHandle: the per-item handle list in a PublishResponse
+_ATTRIBUTEID_COL = 27      # opcua.AttributeId: one per WriteValue -> count = number of write targets
 _VARIANT_TYPE_COL = 13     # opcua.variant.has_value: the per-item Variant Type byte (aligned with above)
 _VARIANT_ARRAY_BIT = 0x80  # Variant encoding byte: bit 7 = IsArray; low 6 bits = BuiltInType id
 _VARIANT_BUILTIN_MASK = 0x3F
@@ -311,6 +313,19 @@ class OpcUaExtractor(ProtocolExtractor):
         sub_items, unhandled_variants = ([], [])
         if op == "PUBLISH_RESPONSE":
             sub_items, unhandled_variants = self._parse_sub_items(cols)
+        # A WriteRequest carries N (target NodeId, Variant value) write items -- the command path. Split
+        # them out (see _parse_write_items) so each written node is its own command flow, and use the
+        # first item to fill the event's single target/value/variant (backward-compatible with the
+        # earlier single-target parse and with directly-built write events that have no AttributeId).
+        write_items = []
+        if op == "WRITE_REQUEST":
+            write_items, wu = self._parse_write_items(cols)
+            if write_items:
+                unhandled_variants = unhandled_variants + wu
+                target = write_items[0]["target"]
+                value = write_items[0]["value"]
+                value_is_float = isinstance(value, float)
+                variant = write_items[0]["variant_type"] if write_items[0]["variant_type"] is not None else variant
 
         is_req = op.endswith("REQUEST")
         is_resp = op.endswith("RESPONSE")
@@ -354,6 +369,7 @@ class OpcUaExtractor(ProtocolExtractor):
                 "value_is_float": value_is_float,
                 "float_samples": float_samples,   # ALL Float samples in this message, wire order
                 "sub_items": sub_items,           # per-handle [(handle, variant_type, value)] (publishes)
+                "write_items": write_items,       # per-target [(target, variant_type, value)] (writes)
                 "unhandled_variants": unhandled_variants,  # variant type ids seen but not yet readable
                 "transport_type": transport_type,
             },
@@ -424,21 +440,37 @@ class OpcUaExtractor(ProtocolExtractor):
         at setup, which may predate the capture; we never invent a name.
         """
         handles = _int_list(_col(cols, _CLIENTHANDLE_COL))
-        type_bytes = _int_list(_col(cols, _VARIANT_TYPE_COL))
-        items: list = []
-        unhandled: list = []
         if not handles:
-            return items, unhandled
+            return [], []
+        values, unhandled = self._zip_values(cols, _int_list(_col(cols, _VARIANT_TYPE_COL)))
+        items = []
+        for i, handle in enumerate(handles):
+            vt, value, unh = values[i] if i < len(values) else (None, None, True)
+            items.append({"handle": handle, "variant_type": vt, "value": value, "unhandled": unh})
+        return items, unhandled
+
+    @staticmethod
+    def _zip_values(cols: List[str], type_bytes: list):
+        """Reconstruct each item's value from the per-Variant-Type byte list, in wire order.
+
+        Shared by the subscription (per ClientHandle) and write (per NodeId) paths: given the parallel
+        ``opcua.variant.has_value`` list (one Variant Type byte per item), read each item's value from
+        that type's OWN field via a per-column cursor (opcua.Float holds only the Float items, etc.).
+        Returns [(variant_type, value, unhandled)] in order. An array variant (encoding bit 7) or a
+        BuiltInType with no mapped field is REPORTED (value=None, unhandled=True, id collected), never
+        silently dropped -- the same honesty as UNCLAIMED. Generic across variant types, no hardcode.
+        """
+        out: list = []
+        unhandled: list = []
         col_lists: dict = {}   # column index -> parsed value list (parsed once)
         cursors: dict = {}     # column index -> next position within that type's list
-        for i, handle in enumerate(handles):
-            raw_vt = type_bytes[i] if i < len(type_bytes) else None
-            builtin = None if raw_vt is None else (raw_vt & _VARIANT_BUILTIN_MASK)
+        for raw_vt in type_bytes:
+            builtin = raw_vt & _VARIANT_BUILTIN_MASK if raw_vt is not None else None
             is_array = raw_vt is not None and bool(raw_vt & _VARIANT_ARRAY_BIT)
             mapping = None if (builtin is None or is_array) else _VARIANT_COL.get(builtin)
             if mapping is None:                          # array, unknown type, or missing type byte
                 unhandled.append(raw_vt)
-                items.append({"handle": handle, "variant_type": raw_vt, "value": None, "unhandled": True})
+                out.append((raw_vt, None, True))
                 continue
             col, kind = mapping
             if col not in col_lists:
@@ -446,9 +478,55 @@ class OpcUaExtractor(ProtocolExtractor):
                 cursors[col] = 0
             idx = cursors[col]
             cursors[col] += 1
-            values = col_lists[col]
-            value = values[idx] if idx < len(values) else None
-            items.append({"handle": handle, "variant_type": builtin, "value": value, "unhandled": False})
+            vals = col_lists[col]
+            out.append((builtin, vals[idx] if idx < len(vals) else None, False))
+        return out, unhandled
+
+    @staticmethod
+    def _ns_align(numerics: list, nsindexes: list) -> list:
+        """A namespace index per opcua.nodeid.numeric position (default ns=0).
+
+        The two lists differ in length: a NodeId in ns=0 (or a TwoByte encoding) carries no explicit
+        namespace and emits no nsindex, so the nsindexes tail-align onto the numerics -- the SAME
+        rule _select_target already uses (numeric "847832407,0,23", nsindex "0,4" -> the 23 is ns=4).
+        A position with no aligned nsindex is ns=0 (a plain-integer NodeId, e.g. the write target 45).
+        """
+        ns_by_pos = [0] * len(numerics)
+        if nsindexes:
+            offset = len(numerics) - len(nsindexes)
+            for j, ns in enumerate(nsindexes):
+                pos = offset + j
+                if 0 <= pos < len(numerics):
+                    ns_by_pos[pos] = ns
+        return ns_by_pos
+
+    def _parse_write_items(self, cols: List[str]):
+        """Split a WriteRequest into per-target (node, value) write items.
+
+        There is NO write-target-specific NodeId field in the dissector (verified with tshark -G
+        fields); the WriteValue NodeIds share the generic opcua.nodeid.numeric list with the request
+        envelope (AuthenticationToken, a TypeId). But every WriteValue emits an ``opcua.AttributeId``
+        (13 = Value), so N = count(AttributeId) is the authoritative number of write targets, and the
+        targets are the LAST N of nodeid.numeric -- the leading entries are the envelope. That is far
+        safer than a hardcoded "skip the first two": the count comes from the structure, not a guess.
+        Values dispatch through the shared variant table and pair to targets by position (value None
+        for a value-less write -- the command still surfaces). Returns (items, unhandled), each item
+        {target, variant_type, value, unhandled}; empty when no AttributeId (caller falls back to the
+        single-target _select_target path for directly-built events).
+        """
+        n = len(_int_list(_col(cols, _ATTRIBUTEID_COL)))
+        if n == 0:
+            return [], []
+        numerics = _int_list(_col(cols, 8))
+        targets = numerics[-n:] if len(numerics) >= n else numerics
+        base = len(numerics) - len(targets)
+        ns_by_pos = self._ns_align(numerics, _int_list(_col(cols, 9)))
+        values, unhandled = self._zip_values(cols, _int_list(_col(cols, _VARIANT_TYPE_COL)))
+        items = []
+        for i, num in enumerate(targets):
+            ns = ns_by_pos[base + i] if (base + i) < len(ns_by_pos) else 0
+            vt, value, unh = values[i] if i < len(values) else (None, None, True)
+            items.append({"target": f"ns={ns};i={num}", "variant_type": vt, "value": value, "unhandled": unh})
         return items, unhandled
 
     def extract_state_samples(self, evt: NormalizedEvent) -> List[float]:
@@ -511,8 +589,11 @@ class OpcUaExtractor(ProtocolExtractor):
           A handle whose variant type this extractor cannot read yet still yields its flow (reported,
           not dropped), with its unknown type id shown. A publish with no per-item breakdown (no
           ClientHandle, or a synthetic event) falls back to the single fused "opcua:publish:telemetry".
-        - WriteRequest (673) -> flows keyed by target NodeId (the ns!=0 element, from the existing
-          tail-aligned target parse), role_hint="command".
+        - WriteRequest (673) -> ONE command flow PER written NodeId, key "opcua:write:ns=<n>;i=<id>",
+          role_hint="command", value dispatched through the variant table. N targets = the last N of
+          opcua.nodeid.numeric (N = count of AttributeId), so the request envelope is not mistaken for
+          a target; multi-node writes yield N flows. A directly-built event (no AttributeId) falls back
+          to the single target on evt.target.
         - ReadResponse (634) -> a "read" flow, role_hint="read" (metadata).
         """
         from ..engine.discover import Flow  # local import: keep extractor import lightweight
@@ -552,21 +633,43 @@ class OpcUaExtractor(ProtocolExtractor):
                     if vt is not None:
                         variants.setdefault(key, []).append(vt)
                 continue
-            key = self.variable_key(evt)
-            if key is None:
-                continue
             if evt.op == "WRITE_REQUEST":
-                # FIX #1: the command flow exists as soon as its target NodeId is seen — the same
-                # target-based gate the evaluator uses — so a command ALWAYS yields a variable_found
-                # (hence a VARIABLES row), even when its value did not parse to a number (unknown
-                # type / encrypted). A numeric value, when present, is recorded as a sample.
+                # One COMMAND flow per written NodeId. The command flow exists as soon as its target
+                # is seen (the same target-based gate the evaluator uses), so it ALWAYS yields a
+                # VARIABLES row even when the value did not parse (unknown type / encrypted); a numeric
+                # value, when present, is a sample. write_items is the split WriteRequest; a directly-
+                # built event (no AttributeId) falls back to the single target on evt.target.
+                witems = evt.raw.get("write_items")
+                if witems:
+                    for item in witems:
+                        wkey = f"opcua:write:{item['target']}"
+                        roles.setdefault(wkey, "command")
+                        if evt.server:
+                            servers.setdefault(wkey, evt.server)
+                        vt = item.get("variant_type")
+                        if vt is not None:
+                            variants.setdefault(wkey, []).append(vt)
+                        num = _as_number(item.get("value"))
+                        if num is not None:
+                            samples.setdefault(wkey, []).append((evt.timestamp, num))
+                    continue
+                key = self.variable_key(evt)
+                if key is None:
+                    continue
                 roles.setdefault(key, "command")
                 if evt.server:
                     servers.setdefault(key, evt.server)
                 num = _as_number(evt.value)
                 if num is not None:
                     samples.setdefault(key, []).append((evt.timestamp, num))
-            elif evt.op == "READ_RESPONSE":
+                vt = evt.raw.get("variant_type")
+                if vt is not None:
+                    variants.setdefault(key, []).append(vt)
+                continue
+            key = self.variable_key(evt)
+            if key is None:
+                continue
+            if evt.op == "READ_RESPONSE":
                 num = _as_number(evt.value)
                 if num is None:
                     continue
