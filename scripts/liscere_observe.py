@@ -729,7 +729,62 @@ def discover_and_calibrate(extractor, events, profile_path=None, log=print, emit
     return calib, disc, state_flow
 
 
-def _feed_or_judge(extractor, evt, tracker, grammar, learner=None, log=None, emitter=None, state_key=None):
+class HoldResampler:
+    """Reconstruct a report-by-exception state signal during silence, in the observer layer.
+
+    A datachange subscription emits nothing while the value is unchanged, so during a hold the state
+    signal goes silent and the pure ``PhaseTracker`` never accumulates the flat samples it needs to
+    settle to STABLE. This resampler repeats the LAST REAL value at the calibrated cadence when the
+    wire is silent, and stops the instant a real sample resumes. It is a faithful reconstruction of
+    the datachange signal, not synthetic noise: only flat repeats of the last real value, never
+    fabricated movement. ``PhaseTracker`` stays pure and transport-neutral -- all the transport
+    awareness lives here, in the observer/adapter layer.
+
+    Silence margin. The first flat is injected only after silence of ``margin`` x the cadence (default
+    1.75x, within the 1.5-2x band the review set), so ordinary inter-sample jitter during movement
+    never trips a false hold; subsequent flats then follow at the natural cadence.
+
+    Catch-up ceiling. A long pause or a stopped process must not flood the tracker with thousands of
+    synthetic flats. At most ``window + 2 * stable_n`` flats are injected per silence -- enough to
+    flush the tracker's window to flat and accumulate ``stable_n`` so STABLE closes and holds, then it
+    stops until a real sample resumes. Bounded, and derived from the same calibrated numbers the
+    tracker uses so it scales with the process, not a wall-clock constant.
+
+    Dormant on polled transports: a poll re-sends the value every cycle, so a real sample keeps
+    arriving within the margin and resets the resampler; ``catch_up`` never yields. Dormant too when
+    the cadence was not measurable (``cadence <= 0``).
+    """
+
+    def __init__(self, cadence, window, stable_n, margin=1.75):
+        self.cadence = float(cadence)
+        self.margin = float(margin)
+        self.ceiling = max(1, int(window) + 2 * int(stable_n))
+        self.last_value = None
+        self.active = False
+        self._next_due = None
+        self._emitted = 0
+
+    def real(self, value, t):
+        """Record a real sample: the wire is alive, so reset the silence clock and catch-up count."""
+        self.last_value = value
+        self.active = True
+        self._emitted = 0
+        self._next_due = float(t) + self.margin * self.cadence
+
+    def catch_up(self, now):
+        """The flat repeats of the last real value that are due by ``now`` (empty when not silent)."""
+        out = []
+        if not self.active or self.cadence <= 0:
+            return out
+        while now >= self._next_due and self._emitted < self.ceiling:
+            out.append(self.last_value)
+            self._emitted += 1
+            self._next_due += self.cadence
+        return out
+
+
+def _feed_or_judge(extractor, evt, tracker, grammar, learner=None, log=None, emitter=None,
+                   state_key=None, resampler=None, now=None):
     """Advance the tracker with any state samples, or learn/judge a write. Returns a Verdict or None."""
     # Feed the tracker ONLY the discovered state signal's samples: state_key is the flow key found in
     # discovery, so on a transport that batches several variables in one message (an OPC UA
@@ -739,6 +794,10 @@ def _feed_or_judge(extractor, evt, tracker, grammar, learner=None, log=None, emi
     if samples:
         for s in samples:
             tracker.update(s)
+            # A real sample means the wire is alive: reset the hold-resampler's silence clock so it
+            # only reconstructs the signal once the state variable actually goes quiet (a hold).
+            if resampler is not None and now is not None:
+                resampler.real(s, now)
             if emitter:
                 emitter.phase(tracker, state_key)     # de-duped: emits only on phase change
                 emitter.variable_value(state_key, s)  # live current value of the state variable
@@ -835,6 +894,7 @@ class Silo:
     state_flow: object = None
     state_key: object = None
     tracker: object = None
+    resampler: object = None    # HoldResampler: reconstructs the state signal during report-by-exception holds
     learner: object = None      # GrammarLearner during the learn window (streamed, per silo)
     grammar: dict = field(default_factory=dict)
     doc: object = None          # full learn document (for the single-silo learn-to-file flow)
@@ -884,6 +944,13 @@ def _calibrate_silo(extractor, silo, log, profile_path=None):
     silo.state_flow = state_flow
     silo.state_key = state_flow.key
     silo.tracker = PhaseTracker(calib.config)
+    # A hold-resampler reconstructs the state signal during report-by-exception silence, so the
+    # tracker can settle to STABLE while the value holds. Cadence is the calibrated inter-sample dt;
+    # window/stable_n come from the same config the tracker uses, so the catch-up ceiling scales with
+    # the process. An unmeasurable cadence (dt <= 0) leaves it dormant (no reconstruction). Polled
+    # transports keep it dormant on their own (a real sample every poll resets it within the margin).
+    silo.resampler = (HoldResampler(calib.dt, calib.config.window, calib.config.stable_n)
+                      if getattr(calib, "dt", 0) and calib.dt > 0 else None)
     silo.evaluable = True
 
     # Resolve the discovered state key to the concrete attribution target the live feed will filter on,
@@ -996,16 +1063,42 @@ class _Run:
                                      getattr(evt, "server", None))
         if silo is None:
             return
+        now = time.time()
         if self.phase == "learn":
             _feed_or_judge(silo.extractor, evt, silo.tracker, None, learner=silo.learner,
-                           emitter=silo.emitter, state_key=silo.state_key)
+                           emitter=silo.emitter, state_key=silo.state_key,
+                           resampler=silo.resampler, now=now)
         elif self.phase == "evaluate":
             _feed_or_judge(silo.extractor, evt, silo.tracker, silo.grammar, log=self.log,
-                           emitter=silo.emitter, state_key=silo.state_key)
+                           emitter=silo.emitter, state_key=silo.state_key,
+                           resampler=silo.resampler, now=now)
+
+    def _resample_holds(self, now):
+        """Drive each silo's hold-resampler between events: on a report-by-exception transport the
+        state signal stops publishing while it holds, so feed the tracker flat repeats of the last
+        real value at the calibrated cadence until a real sample resumes. This is what lets STABLE
+        close during a hold; the tracker itself stays transport-neutral. Called every tick (<=0.25 s,
+        driven by the capture selector loop, so it runs headless), and dormant on polled transports.
+        """
+        for silo in self.evaluable:
+            r = silo.resampler
+            if r is None:
+                continue
+            for v in r.catch_up(now):
+                silo.tracker.update(v)
+                if silo.emitter:
+                    silo.emitter.phase(silo.tracker, silo.state_key)
+                    silo.emitter.variable_value(silo.state_key, v)
 
     # -- between-select deadline check (advances the phase) ---------------
     def tick(self):
         now = time.time()
+        # Reconstruct any silent state signal (a hold) BEFORE the boundary checks, so STABLE closes
+        # during holds in learn and evaluate. tick() is driven by the capture selector loop's 0.25 s
+        # select timeout (main: multiplex(until=run.tick)), independent of any UI, so a headless
+        # observe -> learn run still gets its flat samples.
+        if self.phase in ("learn", "evaluate"):
+            self._resample_holds(now)
         # Hold a timed window open while capture is degraded: firing the boundary now would calibrate
         # on a window silently shortened by the outage. When the source resumes, extend_window() gives
         # the lost seconds back and the boundary fires then; if it is permanently lost, degraded()
