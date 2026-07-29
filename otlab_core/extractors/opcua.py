@@ -529,27 +529,59 @@ class OpcUaExtractor(ProtocolExtractor):
             items.append({"target": f"ns={ns};i={num}", "variant_type": vt, "value": value, "unhandled": unh})
         return items, unhandled
 
-    def extract_state_samples(self, evt: NormalizedEvent) -> List[float]:
+    @staticmethod
+    def resolve_state_key(state_key) -> Optional[int]:
+        """Resolve a discovered state flow key to its concrete ClientHandle (int), or None.
+
+        The live phase feed attributes to ONE variable. The discovered key is the flow key
+        ``group_flows`` produces ("opcua:sub:<handle>") or a bare handle; both resolve to the integer
+        handle. Anything else returns None so the observer can FAIL LOUD rather than silently starve
+        the tracker (return nothing) or leak every handle (the D1 misattribution). Resolution is
+        exact and format-checked, so a drift between the flow-key format and this filter cannot
+        degrade quietly.
+        """
+        if state_key is None:
+            return None
+        s = str(state_key).strip()
+        prefix = "opcua:sub:"
+        if s.startswith(prefix):
+            s = s[len(prefix):]
+        try:
+            return int(s)
+        except (TypeError, ValueError):
+            return None
+
+    def extract_state_samples(self, evt: NormalizedEvent, state_key: Optional[str] = None) -> List[float]:
         """The process-variable sample(s) this event carries, in wire order (oldest -> newest).
 
         A subscription PublishResponse batches per-item (ClientHandle, value): each handle is its OWN
-        signal. With ``config.state_signal_node`` set to a handle key ("opcua:sub:<handle>", or the
-        bare handle), ONLY that handle's values are returned -- correct attribution across a
-        multi-item subscription. Unset (the single-item default), every readable item's value is a
-        sample, in order. A ReadResponse carries one value (or a Float batch) the same way.
+        signal. The live observer passes the discovered state flow key as ``state_key`` so ONLY that
+        ClientHandle's notifications become samples -- correct attribution across a multi-item
+        subscription, even while the state signal HOLDS and other handles keep publishing (the D1
+        misattribution otherwise collapses the held value to another variable's 0/1). ``state_key``
+        takes precedence over the configured ``state_signal_node``; when neither is set every readable
+        item is a sample (the single-item default / discovery pass). A key that is SET but does not
+        resolve to a handle yields NO samples (never every handle): the observer resolves and logs
+        that loudly at silo setup, so it is never a silent leak.
 
-        A publish with no per-item breakdown (no ClientHandle on the wire, or a synthetic event)
-        falls back to the flat ``opcua.Float`` list as a single fused signal, unchanged. Numeric
-        types become floats; a String / unreadable variant contributes no sample. Keep-alive -> [].
+        A ReadResponse carries one value (or a Float batch) the same way. A publish with no per-item
+        breakdown (no ClientHandle on the wire, or a synthetic event) falls back to the flat
+        ``opcua.Float`` list as a single fused signal, unchanged. Numeric types become floats; a
+        String / unreadable variant contributes no sample. Keep-alive -> [].
         """
         if evt.op == "PUBLISH_RESPONSE":
             items = evt.raw.get("sub_items")
             if items:
-                want = self.config.state_signal_node
+                want = state_key if state_key is not None else self.config.state_signal_node
+                if want is None:
+                    handle = None                        # no attribution requested: every item (discovery / default)
+                else:
+                    handle = self.resolve_state_key(want)
+                    if handle is None:
+                        return []                        # requested but unresolvable: nothing, never leak all
                 out: List[float] = []
                 for item in items:
-                    key = f"opcua:sub:{item['handle']}"
-                    if want is not None and str(want) not in (key, str(item["handle"])):
+                    if handle is not None and item["handle"] != handle:
                         continue
                     num = _as_number(item.get("value"))
                     if num is not None:

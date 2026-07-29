@@ -731,7 +731,11 @@ def discover_and_calibrate(extractor, events, profile_path=None, log=print, emit
 
 def _feed_or_judge(extractor, evt, tracker, grammar, learner=None, log=None, emitter=None, state_key=None):
     """Advance the tracker with any state samples, or learn/judge a write. Returns a Verdict or None."""
-    samples = extractor.extract_state_samples(evt)
+    # Feed the tracker ONLY the discovered state signal's samples: state_key is the flow key found in
+    # discovery, so on a transport that batches several variables in one message (an OPC UA
+    # subscription) each value is attributed to its own variable and a non-state value never bleeds
+    # into the held signal. On a polled transport the extractor ignores state_key (see its docstring).
+    samples = extractor.extract_state_samples(evt, state_key=state_key)
     if samples:
         for s in samples:
             tracker.update(s)
@@ -881,6 +885,17 @@ def _calibrate_silo(extractor, silo, log, profile_path=None):
     silo.state_key = state_flow.key
     silo.tracker = PhaseTracker(calib.config)
     silo.evaluable = True
+
+    # Resolve the discovered state key to the concrete attribution target the live feed will filter on,
+    # and FAIL LOUD if it does not resolve. A key the extractor cannot map would make the live feed
+    # either starve the tracker or leak every variable (the D1 misattribution) -- silently. Extractors
+    # that route per item expose resolve_state_key; a polled extractor does not, and needs no check.
+    resolver = getattr(extractor, "resolve_state_key", None)
+    if resolver is not None and resolver(silo.state_key) is None:
+        note = (f"state signal {silo.state_key} does not resolve to a known attribution handle; "
+                "live per-variable routing cannot be trusted for this silo")
+        log(f"[silo] {silo.endpoint}: WARNING -- {note}")
+        silo.reason = note
 
 
 def build_silos(extractor, observe_events, emitter, log, profile_path=None):

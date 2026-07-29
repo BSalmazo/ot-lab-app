@@ -50,13 +50,20 @@ class ProtocolExtractor(ABC):
         """Security posture of this exchange (Modbus: always ``"clear"``)."""
 
     @abstractmethod
-    def extract_state_samples(self, evt: NormalizedEvent) -> List[float]:
+    def extract_state_samples(self, evt: NormalizedEvent, state_key: Optional[str] = None) -> List[float]:
         """The process-variable sample(s) this event carries, in wire order; else ``[]``.
 
         This is the interface the observer drives (it feeds every sample, in order, to the
         PhaseTracker). A single event may carry one sample or several (e.g. a multi-register
         Modbus read, or a batched OPC UA publish). An extractor may still expose a scalar
         ``extract_state_signal`` convenience internally, but only this method is required.
+
+        ``state_key`` is the discovered state flow key (as ``group_flows`` produces it), passed by
+        the live observer so an extractor whose transport batches several variables in one message
+        can attribute values to the DISCOVERED signal and feed the tracker ONLY that signal's
+        samples. It is an optional hint: an extractor whose transport carries one variable per
+        message (a polled read) needs no per-item routing and MAY ignore it, with identical
+        behaviour. ``None`` means no routing hint (the discovery pass, or a single-variable feed).
         """
 
     def opaque_endpoint(self, tsv_fields: List[str]) -> Optional[Tuple[str, str]]:
