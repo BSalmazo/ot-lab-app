@@ -24,7 +24,7 @@ import sys
 import time
 from collections import OrderedDict, deque
 
-from rich.console import Group
+from rich.console import Console, Group
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
@@ -539,15 +539,24 @@ def main(argv=None):
     model = DiscoveryModel(verbose=args.verbose)
     fd = sys.stdin.fileno()
     buf = b""
-    with Live(render(model), refresh_per_second=8, screen=False) as live:
+    # Fixed redraw cadence, decoupled from event arrival: incoming events only mutate the in-memory
+    # model; the screen is redrawn on this timer, so a burst of events cannot cause a burst of
+    # repaints. 6 fps sits in the 4-8 target band and is well below any terminal's own draw rate.
+    redraw_period = 1.0 / 6.0
+    # screen=True draws to the terminal's alternate screen buffer and presents each frame atomically,
+    # so the panel borders and rule lines never tear (the old inline screen=False redraw overwrote the
+    # region in place and flashed them, worse during event bursts). auto_refresh=False means the ONLY
+    # redraws are the timer-driven ones in the loop below: single-threaded, no render thread, no lock.
+    with Live(render(model), refresh_per_second=6, screen=True, auto_refresh=False) as live:
         # Read raw from the fd, NOT via sys.stdin.readline(): a buffered readline pulls several
         # flushed lines into Python's TextIOWrapper, and select() watches the fd (not that buffer),
         # so trailing lines get stuck until the fd next has data. os.read drains exactly what select
-        # signalled. Polling with a timeout also lets the countdown tick while the observer is silent
-        # (the observe/learn capture emits nothing for its whole window).
+        # signalled. The select timeout is the redraw period, so the timer still fires (and the
+        # countdown still ticks) while the observer is silent.
+        last_draw = time.monotonic()
         eof = False
         while not eof:
-            ready, _, _ = select.select([sys.stdin], [], [], 0.25)
+            ready, _, _ = select.select([sys.stdin], [], [], redraw_period)
             if ready:
                 chunk = os.read(fd, 65536)
                 if chunk == b"":                     # EOF -> stream ended
@@ -557,11 +566,20 @@ def main(argv=None):
                     while b"\n" in buf:
                         raw, buf = buf.split(b"\n", 1)
                         _ingest(model, raw.decode("utf-8", "replace").strip())
-            live.update(render(model))               # on each drained batch AND each 0.25s tick
+            # Redraw on the fixed timer only: a burst drains into the model above without repainting;
+            # the screen coalesces to the latest state here, at most once per period. select blocks up
+            # to redraw_period between events, so a slow stream never busy-spins.
+            now = time.monotonic()
+            if now - last_draw >= redraw_period:
+                live.update(render(model), refresh=True)
+                last_draw = now
         if buf.strip():                              # a final line with no trailing newline
             _ingest(model, buf.decode("utf-8", "replace").strip())
         model.ended = True
-        live.update(render(model))                   # freeze the final frame on stream end
+        live.update(render(model), refresh=True)     # last frame inside the alternate screen
+    # Live has exited and torn down the alternate screen, so reprint the final frame to the normal
+    # screen: the run ends on a verdict, and stopping the capture must not wipe it from the terminal.
+    Console().print(render(model))
     return 0
 
 
