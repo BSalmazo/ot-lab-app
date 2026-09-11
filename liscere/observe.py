@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import select
 import selectors
@@ -54,8 +55,10 @@ import types
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Optional
 
 from liscere import __version__
+from liscere.clock import FrameClock, LiveClock
 from otlab_core import wire
 from otlab_core.engine.autocalibrate import calibrate_phase_config, write_profile
 from otlab_core.engine.discover import classify_flows
@@ -169,9 +172,10 @@ class Emitter:
     de-duplicated: one is emitted only when the inferred phase actually changes.
     """
 
-    def __init__(self, enabled=True, out=None, _tag=None, _shared=None, sink=None):
+    def __init__(self, enabled=True, out=None, _tag=None, _shared=None, sink=None, clock=None):
         self.enabled = enabled
         self.out = out or sys.stdout
+        # ``clock`` stamps ``ts``: wall time live, frame time in replay (deterministic output).
         # ``sink`` (a RunRecord.sink, or any callable) receives every event that would be emitted,
         # whether or not stdout emission is enabled: the on-disk record does not depend on the UI.
         # A silo tag scopes this Emitter's events and de-dup to one silo. None = untagged (the whole
@@ -188,6 +192,7 @@ class Emitter:
             "state_keys": set(), # (tag, key) that IS the discovered state signal -> never reclassified
             "opaque": set(),     # endpoints already reported as opaque -> report once, not per frame
             "sink": sink,        # optional callable receiving every emitted event (the run record)
+            "clock": clock or LiveClock(),
         }
 
     def bind(self, tag):
@@ -205,7 +210,8 @@ class Emitter:
         if self._tag is not None and "silo" not in event:
             event = {**event, "silo": self._tag}   # attribute the event to its silo (N>1 only)
         if "ts" not in event:
-            event = {**event, "ts": round(time.time(), 3)}
+            now = self._shared["clock"].now()
+            event = {**event, "ts": round(now if now is not None else 0.0, 3)}
         if self.enabled:
             emit(event, out=self.out)
         if sink is not None:
@@ -387,11 +393,93 @@ class Emitter:
         self._emit(event)
 
 
+# --------------------------------------------------------------------------- input (live, pcap, replay)
+
+@dataclass
+class Input:
+    """Where frames come from.
+
+    - ``live``:   a capture interface (the mirror port); tshark ``-i``; wall clock.
+    - ``pcap``:   a capture file; tshark ``-r`` with the extractor's filter as a display filter; frame clock.
+    - ``replay``: a recorded run directory (its ``capture/`` holds the raw tshark field lines each
+                  extractor saw, plus the probe lines and the claimed layers); no tshark; frame clock.
+
+    ``recorder`` (a CaptureRecorder) is attached when the run keeps its raw input, so a live or pcap
+    run can later be replayed exactly.
+    """
+    kind: str
+    iface: Optional[str] = None
+    path: Optional[str] = None
+    recorder: object = None
+
+    @property
+    def label(self):
+        return self.iface if self.kind == "live" else self.path
+
+    @property
+    def clock(self):
+        return LiveClock() if self.kind == "live" else FrameClock()
+
+
+def _display_filter(capture_filter):
+    """The display-filter (``-Y``) equivalent of an extractor's BPF capture filter, for ``tshark -r``
+    (capture filters do not apply to files). Only the forms the extractors use: ``tcp`` and
+    ``tcp port N``; anything else passes through unchanged and tshark reports it if invalid."""
+    m = re.fullmatch(r"tcp port (\d+)", capture_filter.strip())
+    if m:
+        return f"tcp.port == {m.group(1)}"
+    return capture_filter.strip()
+
+
+class CaptureRecorder:
+    """Keeps the raw tshark field lines a run consumed, under ``<run>/capture/``:
+
+    - ``probe.tsv``      the no-filter probe lines;
+    - ``claimed.json``   the wire layers the probe claimed (what was run);
+    - ``<layer>.tsv``    every line the extractor for that layer received, in arrival order.
+
+    That is exactly the observer's input, so ``--replay <run dir>`` reproduces the run without
+    tshark and without the bench. Lines are written unbuffered so a crash loses at most one line.
+    """
+
+    def __init__(self, run_path):
+        self.path = os.path.join(run_path, "capture")
+        os.makedirs(self.path, exist_ok=True)
+        self._files = {}
+
+    def file(self, name):
+        if name not in self._files:
+            self._files[name] = open(os.path.join(self.path, f"{name}.tsv"), "ab", buffering=0)
+        return self._files[name]
+
+    def claimed(self, layers):
+        with open(os.path.join(self.path, "claimed.json"), "w") as f:
+            json.dump(sorted(layers), f)
+
+    def close(self):
+        for f in self._files.values():
+            f.close()
+        self._files = {}
+
+
 # --------------------------------------------------------------------------- tshark I/O
 
-def _tshark_cmd(extractor, iface, reset_after=100000):
+def _as_input(inp):
+    """A bare interface name is a live Input (the pre-replay calling convention, kept for callers)."""
+    return Input("live", iface=inp) if isinstance(inp, str) else inp
+
+
+def _tshark_cmd(extractor, inp, reset_after=100000):
+    inp = _as_input(inp)
+    if inp.kind == "pcap":
+        cmd = ["tshark", "-l", "-n", "-Q", "-r", inp.path, "-Y", _display_filter(extractor.capture_filter()),
+               "-T", "fields", "-E", "separator=\t", "-E", f"occurrence={extractor.occurrence()}",
+               "-E", "quote=n"]
+        for f in extractor.tshark_fields():
+            cmd.extend(["-e", f])
+        return cmd
     cmd = [
-        "tshark", "-l", "-n", "-Q", "-i", iface,
+        "tshark", "-l", "-n", "-Q", "-i", inp.iface,
         "-f", extractor.capture_filter(),
         # -M N: reset tshark's dissector/reassembly state every N packets. DO NOT REMOVE -- it looks
         # superfluous and is not. tshark accumulates per-conversation reassembly state without bound;
@@ -411,12 +499,12 @@ def _tshark_cmd(extractor, iface, reset_after=100000):
     return cmd
 
 
-def _spawn(extractor, iface, reset_after=100000):
+def _spawn(extractor, inp, reset_after=100000):
     # Bytes mode (no text=, bufsize=0): the multiplex reads the raw fd with os.read and splits
     # newlines itself. NOT a buffered readline -- select() watches the fd while readline reads through
     # Python's TextIOWrapper, so a flushed line can sit unread until the fd next has data.
     return subprocess.Popen(
-        _tshark_cmd(extractor, iface, reset_after),
+        _tshark_cmd(extractor, inp, reset_after),
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0,
     )
 
@@ -452,15 +540,50 @@ def _report_opaque(extractor, cols, emitter):
 _PROBE_FIELDS = ["frame.protocols", "ip.src", "tcp.srcport", "ip.dst", "tcp.dstport"]
 
 
-def _probe_cmd(iface, seconds):
-    cmd = ["tshark", "-l", "-n", "-Q", "-i", iface, "-a", f"duration:{int(seconds)}",
-           "-T", "fields", "-E", "separator=\t", "-E", "quote=n"]
+def _probe_cmd(inp, seconds):
+    inp = _as_input(inp)
+    if inp.kind == "pcap":
+        cmd = ["tshark", "-l", "-n", "-Q", "-r", inp.path, "-T", "fields", "-E", "separator=\t", "-E", "quote=n"]
+    else:
+        cmd = ["tshark", "-l", "-n", "-Q", "-i", inp.iface, "-a", f"duration:{int(seconds)}",
+               "-T", "fields", "-E", "separator=\t", "-E", "quote=n"]
     for f in _PROBE_FIELDS:
         cmd += ["-e", f]
     return cmd
 
 
-def probe_layers(iface, seconds, log=print, emitter=None):
+def _probe_lines(inp, seconds):
+    """The raw probe lines for an input: a live capture bounded by ``seconds`` (tshark's own
+    ``-a duration``, with a wall-clock backstop), a whole pcap, or the recorded ``probe.tsv``."""
+    if inp.kind == "replay":
+        with open(os.path.join(inp.path, "probe.tsv"), "rb") as f:
+            for raw in f:
+                yield raw.rstrip(b"\n")
+        return
+    proc = subprocess.Popen(_probe_cmd(inp, seconds), stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, bufsize=0)
+    fd = proc.stdout.fileno()
+    os.set_blocking(fd, False)
+    buf = b""
+    deadline = time.time() + seconds + 3.0 if inp.kind == "live" else None   # live backstop only
+    try:
+        while deadline is None or time.time() < deadline:
+            if not select.select([fd], [], [], 0.25)[0]:
+                if proc.poll() is not None:
+                    break
+                continue
+            chunk = os.read(fd, 65536)
+            if chunk == b"":
+                break
+            buf += chunk
+            while b"\n" in buf:
+                raw, buf = buf.split(b"\n", 1)
+                yield raw
+    finally:
+        _kill(proc)
+
+
+def probe_layers(inp, seconds, log=print, emitter=None):
     """Short, NO-filter capture -> (claimed_layers, unclaimed).
 
     ``claimed_layers`` is the set of wire-layer substrings seen on application traffic -- the
@@ -472,42 +595,32 @@ def probe_layers(iface, seconds, log=print, emitter=None):
     Uses tshark's own ``-a duration:N`` (self-stops and flushes; a SIGTERM'd tshark loses its buffer),
     with a wall-clock backstop so a misbehaving tshark can never hang the run.
     """
+    inp = _as_input(inp)
     layers = wire.wire_layers()
     claimed, unclaimed = set(), {}
-    log(f"[probe] {seconds:.0f}s on {iface} (no filter) -- discovering protocols on the wire")
-    proc = subprocess.Popen(_probe_cmd(iface, seconds), stdout=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL, bufsize=0)
-    fd = proc.stdout.fileno()
-    os.set_blocking(fd, False)
-    buf = b""
-    deadline = time.time() + seconds + 3.0     # backstop only; -a duration is the real stop
-    try:
-        while time.time() < deadline:
-            if not select.select([fd], [], [], 0.25)[0]:
-                if proc.poll() is not None:
-                    break
-                continue
-            chunk = os.read(fd, 65536)
-            if chunk == b"":
-                break
-            buf += chunk
-            while b"\n" in buf:
-                raw, buf = buf.split(b"\n", 1)
-                cols = raw.decode("utf-8", "replace").split("\t")
-                protocols = cols[0] if cols else ""
-                app = wire.app_layer(protocols)
-                if not app:
-                    continue                    # transport plumbing, not application traffic
-                layer = wire.match_layer(protocols, layers)
-                if layer:
-                    claimed.add(layer)
-                else:
-                    src = wire.endpoint(cols[1] if len(cols) > 1 else "", cols[2] if len(cols) > 2 else "")
-                    dst = wire.endpoint(cols[3] if len(cols) > 3 else "", cols[4] if len(cols) > 4 else "")
-                    if src and dst:
-                        unclaimed.setdefault(wire.server_of(src, dst), set()).add(app)
-    finally:
-        _kill(proc)
+    if inp.kind == "live":
+        log(f"[probe] {seconds:.0f}s on {inp.iface} (no filter) -- discovering protocols on the wire")
+    else:
+        log(f"[probe] {inp.kind} {inp.path} (no filter) -- discovering protocols in the input")
+    rec = inp.recorder.file("probe") if inp.recorder is not None else None
+    for raw in _probe_lines(inp, seconds):
+        if rec is not None:
+            rec.write(raw + b"\n")
+        cols = raw.decode("utf-8", "replace").split("\t")
+        protocols = cols[0] if cols else ""
+        app = wire.app_layer(protocols)
+        if not app:
+            continue                    # transport plumbing, not application traffic
+        layer = wire.match_layer(protocols, layers)
+        if layer:
+            claimed.add(layer)
+        else:
+            src = wire.endpoint(cols[1] if len(cols) > 1 else "", cols[2] if len(cols) > 2 else "")
+            dst = wire.endpoint(cols[3] if len(cols) > 3 else "", cols[4] if len(cols) > 4 else "")
+            if src and dst:
+                unclaimed.setdefault(wire.server_of(src, dst), set()).add(app)
+    if inp.recorder is not None:
+        inp.recorder.claimed(claimed)
     log(f"[probe] claimed layers: {', '.join(sorted(claimed)) or '(none)'}")
     for ep, chains in sorted(unclaimed.items()):
         log(f"[probe] UNCLAIMED {ep}: {', '.join(sorted(chains))}")
@@ -555,12 +668,13 @@ class _Coalescer:
 
 class _Source:
     """One extractor's live tshark: the process, its non-blocking fd, a byte buffer, its coalescer."""
-    def __init__(self, extractor, proc):
+    def __init__(self, extractor, proc, record=None):
         self.extractor = extractor
         self.proc = proc
         self.fd = proc.stdout.fileno()
         self.buf = b""
         self.coalescer = _Coalescer(extractor)
+        self.record = record          # open binary file receiving every raw line (CaptureRecorder), or None
 
     def respawn(self, proc):
         """Point this source at a FRESH tshark after a death, keeping the SAME extractor object.
@@ -729,6 +843,8 @@ def multiplex(sources, on_event, emitter=None, log=print, until=None, supervisor
                 src.buf += chunk
                 while b"\n" in src.buf:
                     raw, src.buf = src.buf.split(b"\n", 1)
+                    if src.record is not None:
+                        src.record.write(raw + b"\n")
                     cols = raw.decode("utf-8", "replace").split("\t")
                     evt = src.extractor.parse_line(cols)
                     if evt is not None:
@@ -740,6 +856,123 @@ def multiplex(sources, on_event, emitter=None, log=print, until=None, supervisor
         for src in sources:
             _kill(src.proc)
     return stopped
+
+
+# --------------------------------------------------------------------------- replay (deterministic)
+
+class _ReplaySource:
+    """One extractor's recorded or file-derived input: an iterator of raw tshark field lines.
+
+    ``lines`` yields bytes (without the newline) in arrival order: a ``capture/<layer>.tsv`` from a
+    recorded run, or the stdout of a ``tshark -r`` process. ``proc`` is that process when there is
+    one, so it can be reaped. ``record`` mirrors the lines into a new CaptureRecorder (a pcap run
+    records itself, so it can be replayed later without tshark).
+    """
+    def __init__(self, extractor, lines, proc=None, record=None):
+        self.extractor = extractor
+        self.lines = iter(lines)
+        self.proc = proc
+        self.record = record
+        self.coalescer = _Coalescer(extractor)
+        self.pending = None          # (frame_ts, raw) of the next line not yet dispatched
+
+    def fill(self, last_ts):
+        """Fetch the next line into ``pending``; returns False at end of input. A line whose first
+        column is not a timestamp inherits the previous one (it cannot reorder the merge)."""
+        if self.pending is not None:
+            return True
+        for raw in self.lines:
+            first = raw.split(b"\t", 1)[0]
+            try:
+                ts = float(first)
+            except ValueError:
+                ts = last_ts
+            self.pending = (ts, raw)
+            return True
+        return False
+
+
+def replay_multiplex(sources, on_event, clock, emitter=None, log=print, until=None):
+    """Drive N replay sources through the pipeline in FRAME-TIME order, deterministically.
+
+    A k-way merge on each line's ``frame.time_epoch`` (column 0 of every extractor's field list)
+    picks the earliest frame across protocols, advances the frame clock to it, polls ``until()`` (the
+    run's tick: window boundaries and the hold-resampler, both reading that clock), then parses and
+    dispatches the frame. Same input, same order, same decisions, same output, whatever the machine
+    speed. There is no supervisor and no wall clock here.
+
+    One consequence worth knowing: the live loop ticks every 0.25 s even when the wire is silent, so
+    a hold's reconstructed flats arrive spread over the silence; here time only advances with frames,
+    so if nothing at all is captured during a silence, the flats due by the next frame are injected
+    together just before it. The tracker sees the same samples in the same order either way.
+
+    Returns "stopped" if ``until()`` asked to stop, else "eof" when every source is exhausted.
+    """
+    last_ts = None
+    try:
+        while True:
+            live = [s for s in sources if s.fill(last_ts)]
+            if not live:
+                return "eof"
+            src = min(live, key=lambda s: (s.pending[0] if s.pending[0] is not None else float("inf")))
+            ts, raw = src.pending
+            src.pending = None
+            if src.record is not None:
+                src.record.write(raw + b"\n")      # before the tick: a line that ends the run is still input
+            if ts is not None:
+                clock.advance(ts)
+                last_ts = ts
+            if until is not None and until():
+                _drain_to_record(sources)
+                return "stopped"
+            cols = raw.decode("utf-8", "replace").split("\t")
+            evt = src.extractor.parse_line(cols)
+            if evt is not None:
+                for e in src.coalescer.feed(evt):
+                    on_event(src.extractor, e)
+            else:
+                _report_opaque(src.extractor, cols, emitter)
+    finally:
+        for src in sources:
+            if src.proc is not None:
+                _kill(src.proc)
+
+
+def _drain_to_record(sources):
+    """A run that stops before its input ends (no evaluable silo, --grammar written) must still leave
+    the WHOLE input in its record, or a later replay of that record runs out of frames where this run
+    stopped. Copy the unread remainder of every recorded source to its record file."""
+    for src in sources:
+        if src.record is None:
+            continue
+        if src.pending is not None:
+            src.record.write(src.pending[1] + b"\n")
+            src.pending = None
+        for raw in src.lines:
+            src.record.write(raw + b"\n")
+
+
+def _replay_sources(run_layers, inp, log):
+    """Build the replay sources for the layers to run, from a recorded run or a pcap."""
+    sources = []
+    for layer in sorted(run_layers):
+        ext = extractor_for_layer(layer)
+        if ext is None or not hasattr(ext, "group_flows"):
+            log(f"[probe] claimed layer {layer!r} has no runnable extractor; skipped")
+            continue
+        record = inp.recorder.file(layer) if inp.recorder is not None else None
+        if inp.kind == "replay":
+            path = os.path.join(inp.path, f"{layer}.tsv")
+            if not os.path.exists(path):
+                log(f"[replay] no recorded lines for {layer} ({path}); skipped")
+                continue
+            lines = (raw.rstrip(b"\n") for raw in open(path, "rb"))
+            sources.append(_ReplaySource(ext, lines, record=record))
+        else:
+            proc = subprocess.Popen(_tshark_cmd(ext, inp), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            lines = (raw.rstrip(b"\n") for raw in proc.stdout)
+            sources.append(_ReplaySource(ext, lines, proc=proc, record=record))
+    return sources
 
 
 # --------------------------------------------------------------------------- pipeline (pure, testable)
@@ -1161,14 +1394,16 @@ class _Run:
     evaluating can never be absorbed into "normal".
     """
 
-    def __init__(self, sources, args, emitter, log, record=None):
+    def __init__(self, sources, args, emitter, log, record=None, clock=None):
         self.args, self.emitter, self.log = args, emitter, log
         self.record = record              # RunRecord, or None with --no-run-dir
+        self.clock = clock or LiveClock() # wall time live; frame time in replay
         self.extractors = [s.extractor for s in sources]
         self.phase = "observe"
-        now = time.time()
-        self.observe_end = now + args.observe
-        self.learn_end = (self.observe_end + args.learn) if args.learn is not None else None
+        # Window deadlines are set from the clock's first reading: immediately on a live clock, and
+        # at the first frame on a frame clock (so replay windows count from the capture's own start).
+        self.observe_end = self.learn_end = None
+        self._set_deadlines(self.clock.now())
         self.obs_by_ext = {}              # extractor -> [observe-window events]
         self.silos, self.silos_by_ep, self.evaluable = [], {}, []
         self.reported_late = set()
@@ -1180,8 +1415,15 @@ class _Run:
         emitter.stage("observe", seconds=args.observe)
         log(f"[observe] {args.observe:.0f}s -- discover + calibrate each silo")
 
+    def _set_deadlines(self, now):
+        if now is None or self.observe_end is not None:
+            return
+        self.observe_end = now + self.args.observe
+        self.learn_end = (self.observe_end + self.args.learn) if self.args.learn is not None else None
+
     # -- per-event dispatch (by phase) ------------------------------------
     def dispatch(self, extractor, evt):
+        self._set_deadlines(self.clock.now())
         if self.phase == "observe":
             self.obs_by_ext.setdefault(extractor, []).append(evt)
             return
@@ -1189,7 +1431,7 @@ class _Run:
                                      getattr(evt, "server", None))
         if silo is None:
             return
-        now = time.time()
+        now = self.clock.now()
         if self.phase == "learn":
             _feed_or_judge(silo.extractor, evt, silo.tracker, None, learner=silo.learner,
                            emitter=silo.emitter, state_key=silo.state_key,
@@ -1218,7 +1460,10 @@ class _Run:
 
     # -- between-select deadline check (advances the phase) ---------------
     def tick(self):
-        now = time.time()
+        now = self.clock.now()
+        if now is None:                   # frame clock before the first frame: nothing to decide yet
+            return self.stop
+        self._set_deadlines(now)
         # Reconstruct any silent state signal (a hold) BEFORE the boundary checks, so STABLE closes
         # during holds in learn and evaluate. tick() is driven by the capture selector loop's 0.25 s
         # select timeout (main: multiplex(until=run.tick)), independent of any UI, so a headless
@@ -1236,6 +1481,20 @@ class _Run:
             if not self.degraded():
                 self._end_learn()
         return self.stop
+
+    def end_of_input(self):
+        """Replay reached the end of its input. The observe window needs a full window to calibrate,
+        so ending inside it is reported as exit 2; ending inside the learn window closes learning on
+        what was seen; ending in evaluate is the normal end of a replay."""
+        if self.phase == "observe":
+            self.log("[replay] input ended during the observe window; nothing was calibrated "
+                     "(shorten --observe to fit the recording, or record longer)")
+            self.rc = 2
+        elif self.phase == "learn":
+            self.log("[replay] input ended during the learn window; the grammar is taken from what was seen")
+            self._end_learn()
+        else:
+            self.log("[replay] input ended; evaluation complete")
 
     def extend_window(self, seconds):
         """A capture outage of `seconds` just ended; give the current timed window that live-capture
@@ -1343,7 +1602,12 @@ def main(argv=None):
         description="Liscere passive observer — probe the wire, run every protocol found, "
                     "observe -> learn -> continuous evaluate (Ctrl-C to stop)")
     ap.add_argument("--version", action="version", version=f"liscere {__version__}")
-    ap.add_argument("--iface", required=True, help="capture interface (mirror port)")
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--iface", help="capture live on this interface (the mirror port)")
+    src.add_argument("--pcap", help="read frames from this capture file instead of an interface (tshark -r); "
+                                    "windows and the hold-resampler run on frame time")
+    src.add_argument("--replay", help="replay a recorded run: a run directory (or its capture/ subdirectory) "
+                                      "written by an earlier run; needs no tshark; deterministic")
     ap.add_argument("--probe", type=float, default=15.0,
                     help="probe-window seconds: discover which protocols are on the wire before running "
                          "their extractors (a protocol silent during the probe is never claimed)")
@@ -1376,6 +1640,10 @@ def main(argv=None):
                          "(one record per verdict with run_id and sequence number). Default ./runs.")
     ap.add_argument("--no-run-dir", action="store_true",
                     help="do not write a run record (stdout stream only)")
+    ap.add_argument("--record", action=argparse.BooleanOptionalAction, default=None,
+                    help="keep the raw tshark lines under <run>/capture/ so the run can be replayed exactly "
+                         "with --replay. Default: on for --iface and --pcap runs (whenever a run record is "
+                         "written), off for --replay runs (the input is already a record); --no-record to skip")
     ap.add_argument("--emit-json", action=argparse.BooleanOptionalAction, default=True,
                     help="emit structured discovery events as JSON Lines on stdout (human logs go to "
                          "stderr). --no-emit-json restores plain human output on stdout, no JSON.")
@@ -1384,25 +1652,54 @@ def main(argv=None):
     # With JSON emission on, stdout is a pure JSON stream and human logs go to stderr, so
     # `liscere_observe.py 2>/dev/null | ui` yields clean JSON. With --no-emit-json, behave as before.
     log = (lambda m: print(m, file=sys.stderr)) if args.emit_json else print
+    inp = _input_from_args(args)
+    if inp is None:
+        return 2
     record = None if args.no_run_dir else RunRecord(args.runs_dir)
+    record_input = args.record if args.record is not None else (inp.kind != "replay")
+    if record is not None and record_input:
+        inp.recorder = CaptureRecorder(record.path)
+    clock = inp.clock
     if record is not None:
-        record.update(args=vars(args), source={"kind": "live", "iface": args.iface}, clock="wall",
-                      python=sys.version.split()[0], tshark=tshark_version())
+        source = {"kind": inp.kind, "iface": inp.iface} if inp.kind == "live" else {"kind": inp.kind, "path": inp.path}
+        record.update(args=vars(args), source=source, clock=clock.kind,
+                      recorded=(inp.recorder.path if inp.recorder is not None else None),
+                      python=sys.version.split()[0], tshark=(tshark_version() if inp.kind != "replay" else None))
         log(f"[run] {record.run_id} -> {record.path}")
-    emitter = Emitter(enabled=args.emit_json, sink=(record.sink if record is not None else None))
+    emitter = Emitter(enabled=args.emit_json, sink=(record.sink if record is not None else None), clock=clock)
     rc = None                                  # None in the manifest means the run did not end normally
     try:
-        rc = _main_run(args, emitter, log, record)
+        rc = _main_run(args, emitter, log, record, inp, clock)
     finally:
+        if inp.recorder is not None:
+            inp.recorder.close()
         if record is not None:
             record.close(rc)
     return rc
 
 
-def _main_run(args, emitter, log, record):
+def _input_from_args(args):
+    """Resolve --iface / --pcap / --replay to an Input, checking the paths exist."""
+    if args.iface:
+        return Input("live", iface=args.iface)
+    if args.pcap:
+        if not os.path.isfile(args.pcap):
+            print(f"--pcap: no such file: {args.pcap}", file=sys.stderr)
+            return None
+        return Input("pcap", path=args.pcap)
+    path = args.replay
+    if os.path.isdir(os.path.join(path, "capture")):
+        path = os.path.join(path, "capture")
+    if not os.path.isfile(os.path.join(path, "probe.tsv")):
+        print(f"--replay: {args.replay} holds no recorded capture (no capture/probe.tsv)", file=sys.stderr)
+        return None
+    return Input("replay", path=path)
+
+
+def _main_run(args, emitter, log, record, inp, clock):
 
     # PROBE: discover which protocols are on the wire; surface traffic no extractor can read.
-    claimed, _unclaimed = probe_layers(args.iface, args.probe, log=log, emitter=emitter)
+    claimed, _unclaimed = probe_layers(inp, args.probe, log=log, emitter=emitter)
     if not claimed:
         log(f"[probe] no known protocol claimed in {args.probe:.0f}s -- nothing to run")
         print(f"no known protocol on the wire during the {args.probe:.0f}s probe window; "
@@ -1432,6 +1729,9 @@ def _main_run(args, emitter, log, record):
                   f"{', '.join(sorted(claimed))}); nothing to run.", file=sys.stderr)
             return 2
 
+    if inp.kind != "live":
+        return _replay_run(args, emitter, log, record, inp, clock, run_layers)
+
     # Spawn one tshark per RUN layer. extractor_for_layer maps a wire layer to its extractor.
     sources = []
     for layer in sorted(run_layers):
@@ -1440,19 +1740,20 @@ def _main_run(args, emitter, log, record):
             log(f"[probe] claimed layer {layer!r} has no runnable extractor; skipped")
             continue
         emitter.protocol_seen(ext)
-        sources.append(_Source(ext, _spawn(ext, args.iface, args.reset_after)))
+        rec = inp.recorder.file(layer) if inp.recorder is not None else None
+        sources.append(_Source(ext, _spawn(ext, inp, args.reset_after), record=rec))
     if not sources:
         print("claimed layers have no runnable extractor", file=sys.stderr)
         return 2
     log(f"[run] {len(sources)} extractor(s): {', '.join(s.extractor.name for s in sources)}")
 
-    run = _Run(sources, args, emitter, log, record=record)
+    run = _Run(sources, args, emitter, log, record=record, clock=clock)
     # The supervisor respawns a dead tshark under a bounded backoff so a child death (the weekend soak
     # saw one rc=1 exit hours in) is survived, not fatal. The critical state -- tracker, grammar,
     # calibration, silos -- lives in Python and is untouched by a respawn; only tshark's dissector
     # state is lost and rebuilds itself. While one source is down the others keep being judged.
     supervisor = _Supervisor(
-        spawn=lambda ext: _spawn(ext, args.iface, args.reset_after),
+        spawn=lambda ext: _spawn(ext, inp, args.reset_after),
         log=log, emitter=emitter, on_resume=run.extend_window,
         retries=args.respawn_retries, backoff_cap=args.respawn_backoff_cap)
     run.degraded = supervisor.is_degraded    # hold timed windows open while capture is degraded
@@ -1473,6 +1774,27 @@ def _main_run(args, emitter, log, record):
         print("capture lost: every tshark died and exhausted its respawn retries "
               f"(--respawn-retries {args.respawn_retries}). Nothing is being observed.", file=sys.stderr)
         return 3
+    return run.rc
+
+
+def _replay_run(args, emitter, log, record, inp, clock, run_layers):
+    """The pcap and replay paths: replay sources merged by frame time, no supervisor."""
+    sources = _replay_sources(run_layers, inp, log)
+    if not sources:
+        print("claimed layers have no runnable extractor or no recorded lines", file=sys.stderr)
+        return 2
+    for s in sources:
+        emitter.protocol_seen(s.extractor)
+    log(f"[run] {inp.kind}: {len(sources)} extractor(s): {', '.join(s.extractor.name for s in sources)}")
+    run = _Run(sources, args, emitter, log, record=record, clock=clock)
+    try:
+        outcome = replay_multiplex(sources, on_event=run.dispatch, clock=clock, emitter=emitter, log=log,
+                                   until=run.tick)
+    except KeyboardInterrupt:
+        log("[replay] stopped")
+        return run.rc
+    if outcome == "eof":
+        run.end_of_input()
     return run.rc
 
 
