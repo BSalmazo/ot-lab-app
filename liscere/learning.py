@@ -25,43 +25,61 @@ from typing import Any, Dict, List, Optional
 
 
 class CycleTracker:
+    """Counts completed process cycles from the de-duplicated phase sequence.
+
+    A prefix can look periodic before the real cycle has shown itself (RISING, STABLE, RISING reads as
+    period 2 until the FALLING arrives), so a period is only CONFIRMED once the sequence has repeated
+    it twice in full. Until then no cycle is reported; at confirmation the boundaries already passed
+    are reported together, each with the snapshot taken when that phase change happened, so nothing
+    is lost by confirming late. After confirmation each further repetition is one cycle; a phase that
+    breaks the pattern marks the tracker broken and counting stops rather than guessing.
+    """
+
     def __init__(self):
         self.phases: List[str] = []       # de-duplicated phase sequence since the first known phase
+        self.marks: List[Any] = []        # (t, snapshot) per entry of ``phases``
         self.period: Optional[int] = None
         self.cycles = 0
         self.broken = False
-        self.last_boundary_t: Optional[float] = None
         self.boundaries: List[float] = []
+        self._reported = 0                # index up to which boundaries have been reported
 
-    def update(self, phase: str, t: float) -> bool:
-        """Feed the current phase (called on every sample; de-duplicated here). True on a completed cycle."""
-        if phase in (None, "UNKNOWN"):
-            return False
+    def update(self, phase: str, t: float, snapshot=None) -> List[Dict[str, Any]]:
+        """Feed the current phase (every sample; de-duplicated here). ``snapshot`` is called only on a
+        phase change and its result kept with that mark. Returns the cycles completed by this call,
+        each {"cycle", "t", "snapshot"}; usually empty, one, or several at confirmation."""
+        if phase in (None, "UNKNOWN") or self.broken:
+            return []
         if self.phases and self.phases[-1] == phase:
-            return False
+            return []
         self.phases.append(phase)
+        self.marks.append((t, snapshot() if snapshot is not None else None))
         n = len(self.phases)
         if self.period is None:
-            p = self._find_period()
+            p = self._confirmed_period()
             if p is None:
-                return False
+                return []
             self.period = p
-        elif self.broken or self.phases[-1] != self.phases[-1 - self.period]:
+        elif self.phases[-1] != self.phases[-1 - self.period]:
             self.broken = True
-            return False
-        # A cycle completes when the first phase of the next repetition arrives: n = k*p + 1.
-        if (n - 1) % self.period == 0 and n > self.period:
-            self.cycles += 1
-            self.last_boundary_t = t
-            self.boundaries.append(t)
-            return True
-        return False
+            return []
+        out = []
+        p = self.period
+        # every index i with i % p == 0 and i > 0 is the first phase of a new repetition: a boundary
+        for i in range(self._reported + 1, n):
+            if i % p == 0:
+                self.cycles += 1
+                tb, snap = self.marks[i]
+                self.boundaries.append(tb)
+                out.append({"cycle": self.cycles, "t": tb, "snapshot": snap})
+        self._reported = n - 1
+        return out
 
-    def _find_period(self) -> Optional[int]:
+    def _confirmed_period(self) -> Optional[int]:
         seq = self.phases
         n = len(seq)
-        for p in range(2, n // 2 + 1):
-            if all(seq[i] == seq[i - p] for i in range(p, n)) and (n - 1) % p == 0:
+        for p in range(2, n):
+            if (n - 1) % p == 0 and (n - 1) >= 2 * p and all(seq[i] == seq[i - p] for i in range(p, n)):
                 return p
         return None
 
@@ -114,7 +132,7 @@ class Stabilisation:
             self.streak = 0
         else:
             d = grammar_distance(self.prev, grammar)
-            if not d["coherent_set_changed"] and d["max_fraction_change"] < self.epsilon:
+            if not d["coherent_set_changed"] and float(d["max_fraction_change"]) < self.epsilon:
                 self.streak += 1
             else:
                 self.streak = 0

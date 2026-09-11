@@ -1508,17 +1508,27 @@ class _Run:
         grammar and update the stabilisation record (a learning_progress event, and run.json)."""
         if silo.cycles is None or now is None:
             return
-        if not silo.cycles.update(silo.tracker.phase, now):
+        learning = self.phase == "learn" and silo.learner is not None and silo.stab is not None
+
+        def snapshot():
+            # taken only on a phase change; the grammar as learned so far plus the write count
+            if not learning:
+                return None
+            return (silo.learner.export(), sum(sum(c.values()) for c in silo.learner.counts.values()))
+
+        completed = silo.cycles.update(silo.tracker.phase, now, snapshot=snapshot)
+        if not completed or not learning:
             return
-        if self.phase != "learn" or silo.learner is None or silo.stab is None:
-            return
-        writes = sum(sum(c.values()) for c in silo.learner.counts.values())
-        rec = silo.stab.on_cycle(silo.cycles.cycles, silo.learner.export(), now, writes)
-        if silo.emitter:
-            silo.emitter._emit({"type": "learning_progress", **rec, "k": silo.stab.k, "epsilon": silo.stab.epsilon})
-        self.log(f"[learn:{silo.endpoint}] cycle {rec['cycle']}: targets={rec['targets']} writes={writes} "
-                 f"max_fraction_change={rec['max_fraction_change']} set_changed={rec['coherent_set_changed']} "
-                 f"stable_cycles={rec['stable_cycles']}/{silo.stab.k} (epsilon={silo.stab.epsilon})")
+        for c in completed:
+            if c["snapshot"] is None:
+                continue
+            grammar, writes = c["snapshot"]
+            rec = silo.stab.on_cycle(c["cycle"], grammar, c["t"], writes)
+            if silo.emitter:
+                silo.emitter._emit({"type": "learning_progress", **rec, "k": silo.stab.k, "epsilon": silo.stab.epsilon})
+            self.log(f"[learn:{silo.endpoint}] cycle {rec['cycle']}: targets={rec['targets']} writes={writes} "
+                     f"max_fraction_change={rec['max_fraction_change']} set_changed={rec['coherent_set_changed']} "
+                     f"stable_cycles={rec['stable_cycles']}/{silo.stab.k} (epsilon={silo.stab.epsilon})")
         if self.record is not None:
             self.record.silo(silo.endpoint, stabilisation=silo.stab.summary(), cycles=silo.cycles.summary())
         if self.learn_until_stable and all(s.stab is not None and s.stab.stable for s in self.evaluable if not s.resumed):

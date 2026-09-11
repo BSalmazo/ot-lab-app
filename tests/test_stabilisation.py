@@ -20,8 +20,9 @@ sys.path.insert(0, os.path.join(_REPO, "scripts"))
 sys.path.insert(0, os.path.join(_REPO, "tests"))
 
 import liscere_observe as obs
-from liscere.learning import CycleTracker, Stabilisation, grammar_distance
 from test_replay import Timeline, write_capture
+
+from liscere.learning import CycleTracker, Stabilisation, grammar_distance
 
 _failures = []
 
@@ -35,8 +36,8 @@ def check(name, cond, detail=""):
 def feed(tracker, seq):
     completed = []
     for i, ph in enumerate(seq):
-        if tracker.update(ph, float(i)):
-            completed.append(i)
+        for c in tracker.update(ph, float(i)):
+            completed.append(int(c["t"]))   # index of the phase that opened the next repetition
     return completed
 
 
@@ -45,8 +46,11 @@ def test_cycles():
     bench = ["RISING", "STABLE", "RISING", "STABLE", "FALLING"] * 3 + ["RISING"]
     ct = CycleTracker()
     done = feed(ct, bench)
-    check("bench sequence: period 5, three cycles completed at the start of each repetition",
+    check("bench sequence: period 5 confirmed after two repetitions, three cycles at the start of each repetition",
           ct.period == 5 and ct.cycles == 3 and done == [5, 10, 15], f"(period={ct.period}, cycles={ct.cycles}, at={done})")
+    early = CycleTracker()
+    feed(early, ["RISING", "STABLE", "RISING"])
+    check("RISING, STABLE, RISING is not mistaken for a period of 2", early.period is None)
     tri = CycleTracker()
     feed(tri, ["RISING", "FALLING"] * 4)
     check("triangle: period 2, three cycles", tri.period == 2 and tri.cycles == 3)
@@ -81,8 +85,8 @@ def test_stabilisation():
     st = Stabilisation(k=2, epsilon=0.05)
     st.start(0.0)
     r1 = st.on_cycle(1, g(a={"RISING": 1.0}), 10.0, 3)
-    r2 = st.on_cycle(2, g(a={"RISING": 0.97, "STABLE": 0.03}), 20.0, 6)   # small drift, set unchanged
-    r3 = st.on_cycle(3, g(a={"RISING": 0.96, "STABLE": 0.04}), 30.0, 9)
+    r2 = st.on_cycle(2, g(a={"RISING": 0.98, "STABLE": 0.02}), 20.0, 6)   # drift 0.04 < epsilon, set unchanged
+    r3 = st.on_cycle(3, g(a={"RISING": 0.97, "STABLE": 0.03}), 30.0, 9)
     check("first snapshot has no reference; two quiet cycles then declare stable at cycle 3",
           r1["max_fraction_change"] is None and r2["stable_cycles"] == 1 and r3["stable"] and st.stable_at_cycle == 3,
           f"(r2={r2['stable_cycles']}, r3={r3['stable']})")
