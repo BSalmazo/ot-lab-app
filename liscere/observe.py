@@ -59,7 +59,9 @@ from typing import Optional
 
 from liscere import __version__
 from liscere.clock import FrameClock, LiveClock
+from liscere.learning import CycleTracker, Stabilisation
 from otlab_core import wire
+from otlab_core.config import PhaseConfig
 from otlab_core.engine.autocalibrate import calibrate_phase_config, write_profile
 from otlab_core.engine.discover import classify_flows
 from otlab_core.engine.evaluator import evaluate
@@ -1238,6 +1240,9 @@ class Silo:
     learner: object = None      # GrammarLearner during the learn window (streamed, per silo)
     grammar: dict = field(default_factory=dict)
     doc: object = None          # full learn document (for the single-silo learn-to-file flow)
+    cycles: object = None       # CycleTracker over the phase stream (learn and evaluate)
+    stab: object = None         # Stabilisation of the grammar per completed learn cycle
+    resumed: bool = False       # grammar (and profile) loaded from --resume-from; learning skipped
     emitter: object = None
     evaluable: bool = False
     reason: object = None
@@ -1284,6 +1289,7 @@ def _calibrate_silo(extractor, silo, log, profile_path=None):
     silo.state_flow = state_flow
     silo.state_key = state_flow.key
     silo.tracker = PhaseTracker(calib.config)
+    silo.cycles = CycleTracker()
     # A hold-resampler reconstructs the state signal during report-by-exception silence, so the
     # tracker can settle to STABLE while the value holds. Cadence is the calibrated inter-sample dt;
     # window/stable_n come from the same config the tracker uses, so the catch-up ceiling scales with
@@ -1303,6 +1309,57 @@ def _calibrate_silo(extractor, silo, log, profile_path=None):
                 "live per-variable routing cannot be trusted for this silo")
         log(f"[silo] {silo.endpoint}: WARNING -- {note}")
         silo.reason = note
+
+
+def _silo_dirname(endpoint):
+    return str(endpoint).replace(":", "_").replace("/", "_")
+
+
+def save_silo_profile(record, silo):
+    """<run>/silos/<endpoint>/profile.json: the calibrated PhaseConfig this silo's tracker uses."""
+    if record is None or silo.calib is None:
+        return
+    d = os.path.join(record.path, "silos", _silo_dirname(silo.endpoint))
+    os.makedirs(d, exist_ok=True)
+    write_profile(silo.calib.config, os.path.join(d, "profile.json"),
+                  description=f"Auto-calibrated for silo {silo.endpoint} (state {silo.state_key})")
+
+
+def save_silo_grammar(record, silo):
+    """<run>/silos/<endpoint>/grammar.json: the learned grammar document (as --grammar writes it)."""
+    if record is None or silo.doc is None:
+        return
+    d = os.path.join(record.path, "silos", _silo_dirname(silo.endpoint))
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "grammar.json"), "w") as f:
+        json.dump(silo.doc, f, indent=2)
+
+
+def load_silo_state(resume_dir, silo, log):
+    """Load a saved grammar (and profile) for this silo's endpoint from an earlier run directory.
+
+    Returns True when a grammar was loaded: the silo evaluates on it and skips learning. The profile,
+    when present, replaces the freshly calibrated phase config so the tracker judges with the same
+    numbers the grammar was learned with (the state key is still discovered from the new observe
+    window; a silo whose state signal differs is reported and not resumed)."""
+    d = os.path.join(resume_dir, "silos", _silo_dirname(silo.endpoint))
+    gpath, ppath = os.path.join(d, "grammar.json"), os.path.join(d, "profile.json")
+    if not os.path.isfile(gpath):
+        log(f"[resume] {silo.endpoint}: no saved grammar in {resume_dir}; this silo learns afresh")
+        return False
+    with open(gpath) as f:
+        silo.doc = json.load(f)
+    silo.grammar = silo.doc.get("grammar", {})
+    if os.path.isfile(ppath):
+        cfg = PhaseConfig.from_json(ppath)
+        silo.tracker = PhaseTracker(cfg)
+        silo.calib.config = cfg
+        silo.resampler = (HoldResampler(silo.calib.dt, cfg.window, cfg.stable_n)
+                          if getattr(silo.calib, "dt", 0) and silo.calib.dt > 0 else None)
+    silo.resumed = True
+    log(f"[resume] {silo.endpoint}: grammar with {len(silo.grammar)} target(s)"
+        f"{' and profile' if os.path.isfile(ppath) else ''} loaded from {resume_dir}")
+    return True
 
 
 def build_silos(extractor, observe_events, emitter, log, profile_path=None):
@@ -1408,6 +1465,10 @@ class _Run:
         self.silos, self.silos_by_ep, self.evaluable = [], {}, []
         self.reported_late = set()
         self.stop, self.rc = False, 0
+        self.stable_k = getattr(args, "stable_cycles", 3)
+        self.stable_eps = getattr(args, "stable_epsilon", 0.05)
+        self.learn_until_stable = bool(getattr(args, "learn_until_stable", False))
+        self.resume_from = getattr(args, "resume_from", None)
         # True while any source's capture is down/respawning. A timed window (observe/learn) does not
         # advance while degraded, and is extended by the downtime on resume, so calibration/learning
         # is never silently short. Set by main to the supervisor's is_degraded; default: never degraded.
@@ -1440,6 +1501,39 @@ class _Run:
             _feed_or_judge(silo.extractor, evt, silo.tracker, silo.grammar, log=self.log,
                            emitter=silo.emitter, state_key=silo.state_key,
                            resampler=silo.resampler, now=now)
+        self._track_cycle(silo, now)
+
+    def _track_cycle(self, silo, now):
+        """Count process cycles from the phase stream; at each completed learn cycle, snapshot the
+        grammar and update the stabilisation record (a learning_progress event, and run.json)."""
+        if silo.cycles is None or now is None:
+            return
+        learning = self.phase == "learn" and silo.learner is not None and silo.stab is not None
+
+        def snapshot():
+            # taken only on a phase change; the grammar as learned so far plus the write count
+            if not learning:
+                return None
+            return (silo.learner.export(), sum(sum(c.values()) for c in silo.learner.counts.values()))
+
+        completed = silo.cycles.update(silo.tracker.phase, now, snapshot=snapshot)
+        if not completed or not learning:
+            return
+        for c in completed:
+            if c["snapshot"] is None:
+                continue
+            grammar, writes = c["snapshot"]
+            rec = silo.stab.on_cycle(c["cycle"], grammar, c["t"], writes)
+            if silo.emitter:
+                silo.emitter._emit({"type": "learning_progress", **rec, "k": silo.stab.k, "epsilon": silo.stab.epsilon})
+            self.log(f"[learn:{silo.endpoint}] cycle {rec['cycle']}: targets={rec['targets']} writes={writes} "
+                     f"max_fraction_change={rec['max_fraction_change']} set_changed={rec['coherent_set_changed']} "
+                     f"stable_cycles={rec['stable_cycles']}/{silo.stab.k} (epsilon={silo.stab.epsilon})")
+        if self.record is not None:
+            self.record.silo(silo.endpoint, stabilisation=silo.stab.summary(), cycles=silo.cycles.summary())
+        if self.learn_until_stable and all(s.stab is not None and s.stab.stable for s in self.evaluable if not s.resumed):
+            self.log("[learn] every silo stable; ending the learn window early (--learn-until-stable)")
+            self._end_learn()
 
     def _resample_holds(self, now):
         """Drive each silo's hold-resampler between events: on a report-by-exception transport the
@@ -1457,6 +1551,7 @@ class _Run:
                 if silo.emitter:
                     silo.emitter.phase(silo.tracker, silo.state_key, frame_ts=round(now, 6))
                     silo.emitter.variable_value(silo.state_key, v, frame_ts=round(now, 6))
+                self._track_cycle(silo, now)
 
     # -- between-select deadline check (advances the phase) ---------------
     def tick(self):
@@ -1540,11 +1635,26 @@ class _Run:
             cal = next((s.calib for s in self.evaluable if s.extractor is ext), None)
             if cal is not None:
                 apply_derived_coalesce_window(ext, cal, log=log)
+        for s in self.evaluable:
+            save_silo_profile(self.record, s)
+        if self.resume_from:
+            for s in self.evaluable:
+                load_silo_state(self.resume_from, s, log)
+            if all(s.resumed for s in self.evaluable):
+                log("[resume] every evaluable silo has a saved grammar; skipping learn")
+                self._start_evaluate()
+                return
         if args.learn is not None:
             emitter.stage("learn", seconds=args.learn)
-            log(f"[learn] {args.learn:.0f}s -- accumulate each silo's coherence grammar")
+            log(f"[learn] {args.learn:.0f}s -- accumulate each silo's coherence grammar"
+                + (" (or until stable)" if self.learn_until_stable else ""))
+            now = self.clock.now()
             for s in self.evaluable:
+                if s.resumed:
+                    continue
                 s.learner = GrammarLearner()
+                s.stab = Stabilisation(k=self.stable_k, epsilon=self.stable_eps)
+                s.stab.start(now)
             self.phase = "learn"
         elif args.grammar:
             if not self._require_single("--grammar evaluate"):
@@ -1559,15 +1669,25 @@ class _Run:
     def _end_learn(self):
         args, log = self.args, self.log
         for s in self.evaluable:
+            if s.resumed:
+                continue
             s.doc = s.learner.export_document()
             s.grammar = s.doc.get("grammar", {})
+            if s.stab is not None:
+                s.doc["stabilisation"] = s.stab.summary()
+                st = s.stab.summary()
+                log(f"[learn:{s.endpoint}] cycles observed {st['cycles_observed']}, "
+                    f"stable after {st['cycles_to_stable'] if st['cycles_to_stable'] is not None else 'never'} "
+                    f"cycle(s) (K={st['k']}, epsilon={st['epsilon']}), wall {st['wall_seconds_to_stable']}s, "
+                    f"writes {st['writes_observed']}")
+            save_silo_grammar(self.record, s)
             if self.record is not None:
                 self.record.silo(s.endpoint, grammar=s.doc)
-        if self.record is not None:
-            self.record.update(learn_ended_at=utc_now_iso())
             for k, info in s.grammar.items():
                 log(f"[learn:{s.endpoint}] {k}: coherent_phases={info.get('learned_coherent_phases')} "
                     f"from {info.get('total_writes_observed')} writes")
+        if self.record is not None:
+            self.record.update(learn_ended_at=utc_now_iso())
         if args.grammar:
             if not self._require_single("--grammar learn-to-file"):
                 return
@@ -1618,6 +1738,18 @@ def main(argv=None):
                     help="with --learn: write the learned grammar here and stop (legacy learn-to-file); "
                          "without --learn: load this grammar and evaluate continuously (single silo)")
     ap.add_argument("--profile", default=None, help="optional path to write the auto-calibrated phase profile")
+    ap.add_argument("--resume-from", default=None,
+                    help="an earlier run directory: after observe, load each silo's saved grammar (and "
+                         "profile) from its silos/<endpoint>/ and skip learning for it")
+    ap.add_argument("--learn-until-stable", action="store_true",
+                    help="end the learn window as soon as every silo's grammar is stable (see "
+                         "--stable-cycles and --stable-epsilon); --learn remains the upper bound")
+    ap.add_argument("--stable-cycles", type=int, default=3,
+                    help="research parameter K: consecutive cycles with no change in the learned coherent "
+                         "phase sets and fraction change below epsilon (default 3)")
+    ap.add_argument("--stable-epsilon", type=float, default=0.05,
+                    help="research parameter epsilon: largest per-target change in phase fractions that "
+                         "still counts as unchanged (default 0.05)")
     ap.add_argument("--only", default=None,
                     help="comma-separated wire layers to actually RUN, e.g. 'modbus,s7comm'. The probe "
                          "still runs in full and reports everything it found; this restricts only what "
@@ -1663,6 +1795,8 @@ def main(argv=None):
     if record is not None:
         source = {"kind": inp.kind, "iface": inp.iface} if inp.kind == "live" else {"kind": inp.kind, "path": inp.path}
         record.update(args=vars(args), source=source, clock=clock.kind,
+                      stabilisation_parameters={"k": args.stable_cycles, "epsilon": args.stable_epsilon},
+                      human_hours=None,   # filled in by hand: operator time spent building this model
                       recorded=(inp.recorder.path if inp.recorder is not None else None),
                       python=sys.version.split()[0], tshark=(tshark_version() if inp.kind != "replay" else None))
         log(f"[run] {record.run_id} -> {record.path}")
