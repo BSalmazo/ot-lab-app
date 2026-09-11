@@ -4,7 +4,6 @@ pyproject.toml (both are bumped in the release PR), and the documents it links t
 `python3 tests/test_readme.py`."""
 import os
 import re
-import sys
 import tomllib
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
