@@ -30,9 +30,13 @@ Known debts (see the modules for detail):
   - OBS-Rxxx rule-id collision between the learned evaluator and the legacy declarative engine in
         app.py, left unreconciled by design.
 
+The observer probes the wire, discovers which protocols are present, and runs every claimed
+extractor at once over ONE selector loop (no threads, no protocol configuration): what runs is what
+is on the wire, not a hand-set protocol.
+
 Usage:
-    OTLAB_PROTOCOL=opcua python scripts/liscere_observe.py --iface en6 --observe 60 --learn 120
-    OTLAB_PROTOCOL=opcua python scripts/liscere_observe.py --iface en6 --observe 60 --grammar learned_grammar.json
+    python scripts/liscere_observe.py --iface en6 --observe 60 --learn 120
+    python scripts/liscere_observe.py --iface en6 --probe 30 --observe 60 --grammar learned_grammar.json
 """
 
 from __future__ import annotations
@@ -40,22 +44,26 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import select
+import selectors
 import subprocess
 import sys
 import time
-from collections import OrderedDict
+import types
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
+from otlab_core import wire
 from otlab_core.engine.autocalibrate import calibrate_phase_config, write_profile
 from otlab_core.engine.discover import classify_flows
 from otlab_core.engine.evaluator import evaluate
 from otlab_core.engine.grammar import GrammarLearner
 from otlab_core.engine.phase_tracker import PhaseTracker
-from otlab_core.extractors import get_extractor
+from otlab_core.extractors import extractor_for_layer
 
 
 # --------------------------------------------------------------------------- event emission (JSON Lines)
@@ -72,6 +80,13 @@ def emit(event, out=None):
         event = {**event, "ts": round(time.time(), 3)}
     out.write(json.dumps(event) + "\n")
     out.flush()
+
+
+def _protocol_label(extractor):
+    """The short protocol label for a silo/announcement, e.g. "MODBUS", "OPCUA", "S7COMM". Derived
+    from the extractor's own name -- so each silo is labelled by the extractor that parsed it, never
+    by a single run-wide pointer (the multi-protocol bug where the last extractor stamped them all)."""
+    return extractor.name.split("/")[0].upper()
 
 
 class Emitter:
@@ -124,12 +139,39 @@ class Emitter:
             event["seconds"] = seconds
         self._emit(event)
 
-    def silo(self, endpoint, evaluable, reason=None, peer=None):
-        # A discovered silo -- one (protocol, server endpoint) as its own unit of evaluation.
-        # `evaluable` is False for a silo that exists but could not be calibrated (too few samples,
-        # or unreadable); `reason` states why, so it is reported and never silently dropped. `peer`
-        # is the observed client host(s) talking to this silo, when known (readable silos).
+    def capture(self, protocol, state, down_s=None, attempt=None, tries=None):
+        # A capture AVAILABILITY event for one protocol -- "lost" | "resumed" | "permanently_lost".
+        # Distinct from silo(): silo() is about WHAT is on the wire (readable / unevaluable / not-run);
+        # this is about whether we are currently SEEING it. A tshark can die and be respawned mid-run;
+        # this surfaces the blip honestly instead of pretending nothing happened, and it names exactly
+        # which protocol went dark -- the monitor is never fully blind, only partially, and it says so.
+        event = {"type": "capture", "protocol": protocol, "state": state}
+        if down_s is not None:
+            event["down_s"] = round(down_s, 3)
+        if attempt is not None:
+            event["attempt"] = attempt
+        if tries is not None:
+            event["tries"] = tries
+        self._emit(event)
+
+    def silo(self, endpoint, evaluable, reason=None, peer=None, protocol=None, kind=None):
+        # A discovered silo -- one (protocol, server endpoint) as its own unit of evaluation. Each
+        # silo carries its OWN protocol label (from the extractor that parsed it) so the UI never has
+        # to guess -- the multi-protocol failure was one shared label stamped on every silo.
+        #
+        # `evaluable` False -> the silo exists but cannot be evaluated; `kind` says WHY, a distinction
+        # the UI must not erase:
+        #   "unreadable"  -- traffic no extractor can read (an encrypted variant on the port). A
+        #                    vantage boundary: we cannot see in.
+        #   "unevaluable" -- read perfectly, but no state signal to calibrate against (too sparse, or
+        #                    no cycling variable). A data problem, not a blindness.
+        # `reason` states the specific cause either way, so it is reported and never silently dropped.
+        # `peer` is the observed client host(s) talking to this silo, when known (readable silos).
         event = {"type": "silo", "endpoint": endpoint, "evaluable": evaluable, "reason": reason}
+        if protocol:
+            event["protocol"] = protocol
+        if kind:
+            event["kind"] = kind
         if peer:
             event["peer"] = peer
         self._emit(event)
@@ -137,15 +179,15 @@ class Emitter:
     def opaque_endpoint(self, endpoint, reason):
         # An endpoint whose traffic arrived on the capture filter but which no extractor can read
         # (e.g. an encrypted variant on the service port). Reported ONCE per endpoint as a silo that
-        # exists but is not evaluable -- so hundreds of opaque frames yield a single event -- and
-        # never routed to a tracker. Dedup lives in the shared bookkeeping, alongside announced keys.
+        # exists but is UNREADABLE -- so hundreds of opaque frames yield a single event -- and never
+        # routed to a tracker. Dedup lives in the shared bookkeeping, alongside announced keys.
         if not endpoint or endpoint in self._shared["opaque"]:
             return
         self._shared["opaque"].add(endpoint)
-        self.silo(endpoint, evaluable=False, reason=reason)
+        self.silo(endpoint, evaluable=False, reason=reason, kind="unreadable")
 
     def protocol_seen(self, extractor):
-        event = {"type": "protocol_seen", "protocol": extractor.name.split("/")[0].upper()}
+        event = {"type": "protocol_seen", "protocol": _protocol_label(extractor)}
         port = getattr(getattr(extractor, "config", None), "port", None)
         if port is not None:
             event["port"] = port
@@ -241,10 +283,18 @@ class Emitter:
 
 # --------------------------------------------------------------------------- tshark I/O
 
-def _tshark_cmd(extractor, iface):
+def _tshark_cmd(extractor, iface, reset_after=100000):
     cmd = [
         "tshark", "-l", "-n", "-Q", "-i", iface,
         "-f", extractor.capture_filter(),
+        # -M N: reset tshark's dissector/reassembly state every N packets. DO NOT REMOVE -- it looks
+        # superfluous and is not. tshark accumulates per-conversation reassembly state without bound;
+        # measured on the bench (one tshark, "tcp", 1h, 1.13M packets) it climbs to ~158 MiB and the
+        # Pi thrashes and dies. With -M 100000 it settles (~134 MiB) and survives -- the difference
+        # between a 24/7 run and a host that falls over. This is what makes an unbounded run possible.
+        # Cost: the ONE transaction in flight across each reset boundary is lost -- at bench rates one
+        # sample every ~6 min, invisible at 100 ms sampling. Tune the boundary with --reset-after.
+        "-M", str(reset_after),
         "-T", "fields",
         "-E", "separator=\t",
         "-E", f"occurrence={extractor.occurrence()}",
@@ -255,10 +305,13 @@ def _tshark_cmd(extractor, iface):
     return cmd
 
 
-def _spawn(extractor, iface):
+def _spawn(extractor, iface, reset_after=100000):
+    # Bytes mode (no text=, bufsize=0): the multiplex reads the raw fd with os.read and splits
+    # newlines itself. NOT a buffered readline -- select() watches the fd while readline reads through
+    # Python's TextIOWrapper, so a flushed line can sit unread until the fd next has data.
     return subprocess.Popen(
-        _tshark_cmd(extractor, iface),
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1,
+        _tshark_cmd(extractor, iface, reset_after),
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0,
     )
 
 
@@ -271,17 +324,6 @@ def _kill(proc):
             proc.kill()
         except Exception:
             pass
-
-
-def _postprocess(extractor, events):
-    """Apply any extractor-provided stream stage (e.g. Modbus write coalescing).
-
-    Neutral hook: an extractor may expose ``coalesce_writes(events) -> events`` to fold wire-level
-    repetition. Extractors without it (OPC UA) are passed through unchanged. This keeps all
-    protocol-specific stream logic in the extractor while the observer stays protocol-neutral.
-    """
-    stage = getattr(extractor, "coalesce_writes", None)
-    return stage(events) if callable(stage) else events
 
 
 def _report_opaque(extractor, cols, emitter):
@@ -297,58 +339,301 @@ def _report_opaque(extractor, cols, emitter):
         emitter.opaque_endpoint(*opq)
 
 
-def capture_events(extractor, iface, seconds, log=print, emitter=None):
-    """Capture for `seconds`, returning the parsed NormalizedEvents (bounded).
+# --------------------------------------------------------------------------- probe (discover protocols)
 
-    A frame parse_line declines is offered to _report_opaque: if the extractor recognises it as an
-    endpoint carrying traffic it cannot read, that endpoint is reported once (never as an event).
+# The probe captures with NO filter, so every application layer on the wire is seen -- including
+# traffic no extractor can read. Endpoints + the dissector chain only.
+_PROBE_FIELDS = ["frame.protocols", "ip.src", "tcp.srcport", "ip.dst", "tcp.dstport"]
+
+
+def _probe_cmd(iface, seconds):
+    cmd = ["tshark", "-l", "-n", "-Q", "-i", iface, "-a", f"duration:{int(seconds)}",
+           "-T", "fields", "-E", "separator=\t", "-E", "quote=n"]
+    for f in _PROBE_FIELDS:
+        cmd += ["-e", f]
+    return cmd
+
+
+def probe_layers(iface, seconds, log=print, emitter=None):
+    """Short, NO-filter capture -> (claimed_layers, unclaimed).
+
+    ``claimed_layers`` is the set of wire-layer substrings seen on application traffic -- the
+    extractors to run. ``unclaimed`` is {server_endpoint: sorted[app_chain]} for application traffic
+    no extractor claims; it is surfaced via ``emitter.opaque_endpoint`` (the same UNREADABLE-ENDPOINTS
+    path the opaque frames use), so the pipeline is never quiet about traffic it can see.
+
+    A protocol SILENT during the window is never claimed -- extend --probe to catch slow talkers.
+    Uses tshark's own ``-a duration:N`` (self-stops and flushes; a SIGTERM'd tshark loses its buffer),
+    with a wall-clock backstop so a misbehaving tshark can never hang the run.
     """
-    log(f"[capture] {seconds:.0f}s on {iface} ({extractor.name}, filter='{extractor.capture_filter()}')")
-    proc = _spawn(extractor, iface)
-    start = time.time()
-
-    def _parsed():
-        for line in proc.stdout:
-            cols = line.rstrip("\n").split("\t")
-            evt = extractor.parse_line(cols)
-            if evt is not None:
-                yield evt
-            else:
-                _report_opaque(extractor, cols, emitter)
-            if time.time() - start >= seconds:
+    layers = wire.wire_layers()
+    claimed, unclaimed = set(), {}
+    log(f"[probe] {seconds:.0f}s on {iface} (no filter) -- discovering protocols on the wire")
+    proc = subprocess.Popen(_probe_cmd(iface, seconds), stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, bufsize=0)
+    fd = proc.stdout.fileno()
+    os.set_blocking(fd, False)
+    buf = b""
+    deadline = time.time() + seconds + 3.0     # backstop only; -a duration is the real stop
+    try:
+        while time.time() < deadline:
+            if not select.select([fd], [], [], 0.25)[0]:
+                if proc.poll() is not None:
+                    break
+                continue
+            chunk = os.read(fd, 65536)
+            if chunk == b"":
                 break
-
-    events = []
-    try:
-        for evt in _postprocess(extractor, _parsed()):
-            events.append(evt)
+            buf += chunk
+            while b"\n" in buf:
+                raw, buf = buf.split(b"\n", 1)
+                cols = raw.decode("utf-8", "replace").split("\t")
+                protocols = cols[0] if cols else ""
+                app = wire.app_layer(protocols)
+                if not app:
+                    continue                    # transport plumbing, not application traffic
+                layer = wire.match_layer(protocols, layers)
+                if layer:
+                    claimed.add(layer)
+                else:
+                    src = wire.endpoint(cols[1] if len(cols) > 1 else "", cols[2] if len(cols) > 2 else "")
+                    dst = wire.endpoint(cols[3] if len(cols) > 3 else "", cols[4] if len(cols) > 4 else "")
+                    if src and dst:
+                        unclaimed.setdefault(wire.server_of(src, dst), set()).add(app)
     finally:
         _kill(proc)
-    log(f"[capture] {len(events)} events")
-    return events
+    log(f"[probe] claimed layers: {', '.join(sorted(claimed)) or '(none)'}")
+    for ep, chains in sorted(unclaimed.items()):
+        log(f"[probe] UNCLAIMED {ep}: {', '.join(sorted(chains))}")
+        if emitter is not None:
+            emitter.opaque_endpoint(ep, "application traffic no extractor reads: " + ", ".join(sorted(chains)))
+    return claimed, {ep: sorted(c) for ep, c in unclaimed.items()}
 
 
-def capture_stream(extractor, iface, emitter=None):
-    """Yield parsed NormalizedEvents until interrupted (for continuous evaluate).
+# --------------------------------------------------------------------------- selector multiplex (N tshark)
 
-    As in capture_events, a declined frame is offered to _report_opaque so an endpoint that goes
-    encrypted mid-run is reported the first time it is seen.
+#: Fed into an extractor's coalesce_writes generator to mean "no input right now" so the push-wrapper
+#: can drain it one event at a time. Needs only ``.op`` (coalesce checks it, then passes non-writes
+#: through); it is never a WRITE_REQUEST, so it is yielded straight back and recognised by identity.
+_NODATA = types.SimpleNamespace(op=None, target=None)
+
+
+class _Coalescer:
+    """Push-wrapper over an extractor's coalesce_writes: feed one event, get the 0+ events it yields.
+
+    coalesce_writes yields the FIRST event of a run immediately and DROPS its repeats, so nothing is
+    ever buffered pending a flush -- feeding one event yields its coalesced result at once, which is
+    what makes it work streaming (continuous evaluate) as well as bounded. An extractor without
+    coalesce_writes (OPC UA, S7) passes events through unchanged. The observer stays protocol-neutral.
     """
-    proc = _spawn(extractor, iface)
+    def __init__(self, extractor):
+        self._inbox = deque()
+        fn = getattr(extractor, "coalesce_writes", None)
+        self._gen = fn(self._src()) if callable(fn) else None
 
-    def _parsed():
-        for line in proc.stdout:
-            cols = line.rstrip("\n").split("\t")
-            evt = extractor.parse_line(cols)
-            if evt is not None:
-                yield evt
-            else:
-                _report_opaque(extractor, cols, emitter)
+    def _src(self):
+        while True:
+            yield self._inbox.popleft() if self._inbox else _NODATA
 
+    def feed(self, evt):
+        if self._gen is None:
+            return [evt]
+        self._inbox.append(evt)
+        out = []
+        for got in self._gen:                 # drains until the sentinel signals "no input now"
+            if got is _NODATA:
+                break
+            out.append(got)
+        return out
+
+
+class _Source:
+    """One extractor's live tshark: the process, its non-blocking fd, a byte buffer, its coalescer."""
+    def __init__(self, extractor, proc):
+        self.extractor = extractor
+        self.proc = proc
+        self.fd = proc.stdout.fileno()
+        self.buf = b""
+        self.coalescer = _Coalescer(extractor)
+
+    def respawn(self, proc):
+        """Point this source at a FRESH tshark after a death, keeping the SAME extractor object.
+        The critical state -- the extractor's S7 _pending / Modbus derived window, and (elsewhere) the
+        silo's tracker, grammar and calibration -- lives in Python and is untouched; only tshark's
+        dissector state was lost, and the new process rebuilds it. The byte buffer is dropped (a
+        partial line straddling the death is gone with it) and a fresh coalesce run starts -- the
+        outage gap already exceeds any coalesce window, so no open run could have survived it anyway.
+        """
+        self.proc = proc
+        self.fd = proc.stdout.fileno()
+        self.buf = b""
+        self.coalescer = _Coalescer(self.extractor)
+
+
+class _Supervisor:
+    """Respawn policy for dead tshark, kept OUTSIDE the select loop: multiplex reports a death and asks
+    which sources are due to respawn; this decides how many times and how fast, and when to give up.
+
+    Bounded exponential backoff (1, 2, 4 ... capped) so a genuinely-down interface can never fork-loop
+    -- the first retry WAITS; a respawn is never immediate. A source that dies again within a short
+    grace of respawning counts against its retry budget (interface hard-down); one that stays up
+    resets it (a transient blip), so a flap over days does not slowly exhaust the budget. After
+    ``retries`` failed attempts the layer is PERMANENTLY lost and reported; the run exits loudly (rc=3)
+    only when no runnable source remains (see main) -- a survivor keeps being judged throughout.
+    """
+
+    def __init__(self, spawn, log, emitter=None, on_resume=None, retries=36, backoff_cap=30.0,
+                 base=1.0, grace=2.0):
+        self.spawn = spawn                 # (extractor) -> a fresh Popen
+        self.log = log
+        self.emitter = emitter
+        self.on_resume = on_resume         # called with (down_seconds) when a source resumes
+        self.retries, self.cap, self.base, self.grace = retries, backoff_cap, base, grace
+        self._down = {}    # src -> {"lost_at", "tries", "retry_at", "attempting", "alive_at"}
+
+    def _label(self, src):
+        return _protocol_label(src.extractor)
+
+    def _backoff(self, tries):
+        return min(self.cap, self.base * (2 ** (tries - 1)))
+
+    def note_death(self, src, now):
+        """A source's tshark hit EOF. Start or continue its outage; schedule a respawn, or give up."""
+        rec = self._down.get(src)
+        if rec is None:                                        # first death of a new outage
+            rec = {"lost_at": now, "tries": 0, "retry_at": None, "attempting": False, "alive_at": None}
+            self._down[src] = rec
+            self.log(f"[capture] {src.extractor.name} tshark ended (rc={src.proc.poll()}); respawning "
+                     f"-- tracker/grammar/calibration are preserved (Python state, not tshark's)")
+            if self.emitter is not None:
+                self.emitter.capture(self._label(src), "lost")
+        rec["tries"] += 1
+        rec["attempting"] = False
+        if rec["tries"] > self.retries:                        # give up -> permanently lost
+            del self._down[src]
+            self.log(f"[capture] {src.extractor.name} PERMANENTLY lost after {rec['tries'] - 1} respawn "
+                     f"attempts over {now - rec['lost_at']:.0f}s")
+            if self.emitter is not None:
+                self.emitter.capture(self._label(src), "permanently_lost", tries=rec["tries"] - 1)
+            return
+        rec["retry_at"] = now + self._backoff(rec["tries"])
+        self.log(f"[capture] {src.extractor.name} respawn #{rec['tries']} in "
+                 f"{rec['retry_at'] - now:.0f}s")
+
+    def service(self, now):
+        """Per-iteration, non-blocking: respawn sources whose backoff elapsed, and promote a respawned
+        source to 'resumed' once it has survived the grace still running. Returns freshly-respawned
+        sources for the caller to register in its selector."""
+        fresh = []
+        for src, rec in list(self._down.items()):
+            if not rec["attempting"]:
+                if rec["retry_at"] is not None and now >= rec["retry_at"]:
+                    try:
+                        src.respawn(self.spawn(src.extractor))
+                    except Exception as exc:                   # launch failed -> treat as a failed try
+                        self.log(f"[capture] {src.extractor.name} respawn failed to launch: {exc}")
+                        self.note_death(src, now)
+                        continue
+                    rec["attempting"], rec["alive_at"] = True, now + self.grace
+                    fresh.append(src)
+            elif now >= rec["alive_at"] and src.proc.poll() is None:
+                self._resume(src, rec, now)                    # survived the grace, still running
+        return fresh
+
+    def mark_alive(self, src, now):
+        """First bytes from a respawned source -> it is capturing again; resume without waiting out the
+        grace. A no-op for a source that never died (the common path)."""
+        rec = self._down.get(src)
+        if rec is not None and rec["attempting"]:
+            self._resume(src, rec, now)
+
+    def _resume(self, src, rec, now):
+        down_s = now - rec["lost_at"]
+        del self._down[src]
+        self.log(f"[capture] {src.extractor.name} resumed after {down_s:.1f}s (respawn #{rec['tries']})")
+        if self.emitter is not None:
+            self.emitter.capture(self._label(src), "resumed", down_s=down_s, attempt=rec["tries"])
+        if self.on_resume is not None:
+            self.on_resume(down_s)
+
+    def pending(self):
+        return bool(self._down)
+
+    def is_degraded(self):
+        # True while any source is down or mid-respawn (not yet proven alive). A permanently-lost
+        # source is removed, so this returns False once give-up has been reached.
+        return bool(self._down)
+
+
+def multiplex(sources, on_event, emitter=None, log=print, until=None, supervisor=None):
+    """ONE selector loop over N tshark stdout fds -- single-threaded, no locks. Each line is routed to
+    the extractor that owns its fd, parsed, coalesced, and handed to ``on_event(extractor, event)``.
+    A declined frame goes to _report_opaque. ``until()`` is polled between selects (return True to
+    stop) so observe/learn/evaluate windows are just deadlines in this one loop; a 0.25 s select
+    timeout keeps it responsive during silence. ALL tshark are killed on exit -- normal, exception, or
+    Ctrl-C -- so none leaks a promiscuous socket.
+
+    With a ``supervisor``, a tshark that dies (EOF) is handed to it: the source is respawned under a
+    bounded backoff and its fd re-registered here when ready, so the observer resumes capturing rather
+    than giving up. The loop keeps running while any source is live OR down-and-retrying, and the OTHER
+    sources are serviced without pause the whole time -- one protocol's outage never touches another
+    silo's tracker, grammar or verdict flow. Without a supervisor, a dead source is simply dropped
+    (the pre-respawn behaviour, still used by the finite-window unit tests).
+
+    Returns True if ``until()`` asked to stop (a deliberate end), False if the loop fell through because
+    nothing runnable remains -- every source has died (no supervisor) or been PERMANENTLY lost (all
+    retries exhausted). In continuous evaluate that second case is a capture failure, not a clean end:
+    the caller must not treat it as success (see main).
+    """
+    sel = selectors.DefaultSelector()
+
+    def _register(src):
+        os.set_blocking(src.fd, False)
+        sel.register(src.fd, selectors.EVENT_READ, src)
+
+    for src in sources:
+        _register(src)
+    pending = (supervisor.pending if supervisor is not None else (lambda: False))
+    stopped = False
     try:
-        yield from _postprocess(extractor, _parsed())
+        while sel.get_map() or pending():
+            if until is not None and until():
+                stopped = True
+                break
+            if supervisor is not None:
+                for src in supervisor.service(time.time()):    # respawn due sources; register the new fd
+                    _register(src)
+            # CONSTANT 0.25 s block -- NOT a deadline-derived timeout. Deriving it from the next phase
+            # deadline would make it 0 in unbounded continuous evaluate (no deadline), and select(0)
+            # spins a hot loop. On an EMPTY selector (single source down, backing off) select still
+            # blocks the full 0.25 s, so a respawn wait never busy-loops. Deadlines live in until().
+            for key, _mask in sel.select(0.25):
+                src = key.data
+                chunk = os.read(src.fd, 65536)
+                if chunk == b"":                          # EOF -> this tshark exited
+                    sel.unregister(src.fd)
+                    if supervisor is not None:
+                        supervisor.note_death(src, time.time())
+                    else:
+                        log(f"[capture] {src.extractor.name} tshark ended (rc={src.proc.poll()}); "
+                            f"continuing on the {len(sel.get_map())} still live")
+                    continue
+                if supervisor is not None:
+                    supervisor.mark_alive(src, time.time())   # first bytes after a respawn -> resumed
+                src.buf += chunk
+                while b"\n" in src.buf:
+                    raw, src.buf = src.buf.split(b"\n", 1)
+                    cols = raw.decode("utf-8", "replace").split("\t")
+                    evt = src.extractor.parse_line(cols)
+                    if evt is not None:
+                        for e in src.coalescer.feed(evt):
+                            on_event(src.extractor, e)
+                    else:
+                        _report_opaque(src.extractor, cols, emitter)
     finally:
-        _kill(proc)
+        for src in sources:
+            _kill(src.proc)
+    return stopped
 
 
 # --------------------------------------------------------------------------- pipeline (pure, testable)
@@ -516,9 +801,9 @@ def run_evaluate(extractor, events, tracker, grammar, log=None, emitter=None, st
     return out
 
 
-# Phase-3 continuous evaluation lives in evaluate_continuous_silos (below), which routes each event
-# to its silo. Its no-re-learning invariant (grammars are read-only; an anomaly seen during evaluate
-# is never absorbed into "normal") is unchanged from the pre-silo single-tracker version.
+# Observe/learn/evaluate all run in ONE selector loop (see _Run and multiplex below). The no-re-
+# learning invariant holds in evaluate: grammars are frozen (learner=None), so an anomaly seen while
+# evaluating is never absorbed into "normal".
 
 
 # --------------------------------------------------------------------------- silos (demux by observed endpoint)
@@ -540,11 +825,13 @@ class Silo:
     the two remaining, deliberate N=1 differences (silo() suppression -- 2b debt -- and --profile).
     """
     endpoint: str
+    extractor: object = None    # the extractor that parsed this silo's events (multi-protocol: N run at once)
     events: list = field(default_factory=list)
     calib: object = None
     state_flow: object = None
     state_key: object = None
     tracker: object = None
+    learner: object = None      # GrammarLearner during the learn window (streamed, per silo)
     grammar: dict = field(default_factory=dict)
     doc: object = None          # full learn document (for the single-silo learn-to-file flow)
     emitter: object = None
@@ -615,20 +902,25 @@ def build_silos(extractor, observe_events, emitter, log, profile_path=None):
     """
     buckets = partition_by_server(observe_events)
     multi = len(buckets) > 1
+    label = _protocol_label(extractor)
     silos = []
     for endpoint, evs in buckets.items():
         if endpoint is None:
             log(f"[silo] {len(evs)} event(s) with no server endpoint -> unassignable, reported not evaluated")
-            emitter.silo(None, evaluable=False, reason="event carried no server endpoint")
+            # Read (the events parsed) but unassignable to a silo -> unevaluable, not unreadable.
+            emitter.silo(None, evaluable=False, reason="event carried no server endpoint",
+                         protocol=label, kind="unevaluable")
             continue
-        silo = Silo(endpoint=endpoint, events=evs, emitter=emitter.bind(endpoint))
+        silo = Silo(endpoint=endpoint, extractor=extractor, events=evs, emitter=emitter.bind(endpoint))
         _calibrate_silo(extractor, silo, log, profile_path=(None if multi else profile_path))
         # The peer(s): the distinct client HOST(s) observed talking to this silo (evt.client is set
         # by every extractor; the ephemeral client port is dropped). Observed, not configured.
         peers = sorted({e.client.rsplit(":", 1)[0] for e in evs if getattr(e, "client", None)})
-        # Every silo is announced (N=1 included): the UI keys everything by silo.
-        emitter.silo(silo.endpoint, evaluable=silo.evaluable, reason=silo.reason,
-                     peer=", ".join(peers) or None)
+        # Every silo is announced (N=1 included): the UI keys everything by silo. A non-evaluable
+        # silo here was READ (its flows were discovered) but has no state signal -> "unevaluable",
+        # distinct from an unreadable endpoint. It carries its own protocol label.
+        emitter.silo(silo.endpoint, evaluable=silo.evaluable, reason=silo.reason, protocol=label,
+                     kind=(None if silo.evaluable else "unevaluable"), peer=", ".join(peers) or None)
         silos.append(silo)
     return silos
 
@@ -646,50 +938,195 @@ def _route_or_report_late(emitter, silos_by_ep, reported_late, endpoint):
         return silo if silo.evaluable else None
     if endpoint not in reported_late:
         reported_late.add(endpoint)
-        emitter.silo(endpoint, evaluable=False,
+        # We read it -- it simply arrived too late to calibrate. Unevaluable, not unreadable.
+        emitter.silo(endpoint, evaluable=False, kind="unevaluable",
                      reason="silo first seen after the observe window; too late to calibrate")
     return None
 
 
-def evaluate_continuous_silos(extractor, iface, emitter, silos_by_ep, reported_late, log):
-    """Phase 3: watch continuously and judge every write against its silo's FROZEN grammar.
+class _Run:
+    """The observe -> learn -> evaluate pipeline as ONE selector-loop driver over N tshark.
 
-    DESIGN INVARIANT — no re-learning in phase 3. Grammars are read-only here (run through
-    _feed_or_judge with no GrammarLearner), so an anomalous action seen during evaluate can never be
-    absorbed into "normal". One stream, one extractor; each event is routed to its silo by server. A
-    silo that cannot be judged (unknown/late/not-evaluable) is reported once and skipped, never
-    misrouted to another silo's tracker. On Ctrl-C the stream is torn down and we return cleanly.
+    dispatch() is the per-event callback (routes by the current phase); tick() is the between-select
+    check that advances the phase at each window's deadline. The windows are deadlines in a single
+    loop, so the N tshark stay alive throughout -- no gap at a phase boundary drops traffic. No
+    re-learning during evaluate: grammars are frozen (learner=None), so an anomaly seen while
+    evaluating can never be absorbed into "normal".
     """
-    if emitter:
-        emitter.stage("evaluate")
-    n = sum(1 for s in silos_by_ep.values() if s.evaluable)
-    log(f"[evaluate] continuous, {n} evaluable silo(s) -- each write judged against its OWN silo's "
-        f"grammar (Ctrl-C to stop)")
-    try:
-        for evt in capture_stream(extractor, iface, emitter=emitter):
-            silo = _route_or_report_late(emitter, silos_by_ep, reported_late, getattr(evt, "server", None))
-            if silo is None:
-                continue
-            _feed_or_judge(extractor, evt, silo.tracker, silo.grammar,
-                           log=log, emitter=silo.emitter, state_key=silo.state_key)
-    except KeyboardInterrupt:
-        log("[evaluate] stopped")
-    return 0
+
+    def __init__(self, sources, args, emitter, log):
+        self.args, self.emitter, self.log = args, emitter, log
+        self.extractors = [s.extractor for s in sources]
+        self.phase = "observe"
+        now = time.time()
+        self.observe_end = now + args.observe
+        self.learn_end = (self.observe_end + args.learn) if args.learn is not None else None
+        self.obs_by_ext = {}              # extractor -> [observe-window events]
+        self.silos, self.silos_by_ep, self.evaluable = [], {}, []
+        self.reported_late = set()
+        self.stop, self.rc = False, 0
+        # True while any source's capture is down/respawning. A timed window (observe/learn) does not
+        # advance while degraded, and is extended by the downtime on resume, so calibration/learning
+        # is never silently short. Set by main to the supervisor's is_degraded; default: never degraded.
+        self.degraded = lambda: False
+        emitter.stage("observe", seconds=args.observe)
+        log(f"[observe] {args.observe:.0f}s -- discover + calibrate each silo")
+
+    # -- per-event dispatch (by phase) ------------------------------------
+    def dispatch(self, extractor, evt):
+        if self.phase == "observe":
+            self.obs_by_ext.setdefault(extractor, []).append(evt)
+            return
+        silo = _route_or_report_late(self.emitter, self.silos_by_ep, self.reported_late,
+                                     getattr(evt, "server", None))
+        if silo is None:
+            return
+        if self.phase == "learn":
+            _feed_or_judge(silo.extractor, evt, silo.tracker, None, learner=silo.learner,
+                           emitter=silo.emitter, state_key=silo.state_key)
+        elif self.phase == "evaluate":
+            _feed_or_judge(silo.extractor, evt, silo.tracker, silo.grammar, log=self.log,
+                           emitter=silo.emitter, state_key=silo.state_key)
+
+    # -- between-select deadline check (advances the phase) ---------------
+    def tick(self):
+        now = time.time()
+        # Hold a timed window open while capture is degraded: firing the boundary now would calibrate
+        # on a window silently shortened by the outage. When the source resumes, extend_window() gives
+        # the lost seconds back and the boundary fires then; if it is permanently lost, degraded()
+        # clears and the boundary fires on what was captured (under-sampled -> existing handling).
+        if self.phase == "observe" and now >= self.observe_end:
+            if not self.degraded():
+                self._end_observe()
+        elif self.phase == "learn" and self.learn_end is not None and now >= self.learn_end:
+            if not self.degraded():
+                self._end_learn()
+        return self.stop
+
+    def extend_window(self, seconds):
+        """A capture outage of `seconds` just ended; give the current timed window that live-capture
+        time back so the window measures actual observation, not wall-clock. No-op in unbounded
+        evaluate (no deadline) and for a non-positive span."""
+        if seconds <= 0:
+            return
+        if self.phase == "observe":
+            self.observe_end += seconds
+            if self.learn_end is not None:
+                self.learn_end += seconds
+            self.log(f"[observe] window +{seconds:.1f}s to cover a {seconds:.1f}s capture outage")
+        elif self.phase == "learn" and self.learn_end is not None:
+            self.learn_end += seconds
+            self.log(f"[learn] window +{seconds:.1f}s to cover a {seconds:.1f}s capture outage")
+
+    def _end_observe(self):
+        args, emitter, log = self.args, self.emitter, self.log
+        single = len(self.extractors) == 1
+        for ext in self.extractors:
+            silos = build_silos(ext, self.obs_by_ext.get(ext, []), emitter, log,
+                                profile_path=(args.profile if single else None))
+            self.silos.extend(silos)
+            if not any(s.evaluable for s in silos):
+                # A claimed extractor that yields no evaluable silo is a finding, not silently absent.
+                # We ran the reader and read the traffic -> unevaluable, not unreadable.
+                log(f"[silo] claimed {ext.name}, no evaluable silo")
+                emitter.silo(None, evaluable=False, protocol=_protocol_label(ext), kind="unevaluable",
+                             reason=f"claimed {ext.name}, no evaluable silo")
+        self.silos_by_ep = {s.endpoint: s for s in self.silos if s.endpoint}
+        self.evaluable = [s for s in self.silos if s.evaluable]
+        if not self.evaluable:
+            log("[silo] no evaluable silo; extend --observe to cover >=1.5 process cycles")
+            self.rc, self.stop = 2, True
+            return
+        # Scale each coalescing extractor's window from one of its own evaluable silos (no-op for
+        # extractors that do not coalesce). Per-silo windows still cannot share one config; documented.
+        for ext in self.extractors:
+            cal = next((s.calib for s in self.evaluable if s.extractor is ext), None)
+            if cal is not None:
+                apply_derived_coalesce_window(ext, cal, log=log)
+        if args.learn is not None:
+            emitter.stage("learn", seconds=args.learn)
+            log(f"[learn] {args.learn:.0f}s -- accumulate each silo's coherence grammar")
+            for s in self.evaluable:
+                s.learner = GrammarLearner()
+            self.phase = "learn"
+        elif args.grammar:
+            if not self._require_single("--grammar evaluate"):
+                return
+            with open(args.grammar) as f:
+                self.evaluable[0].grammar = json.load(f).get("grammar", {})
+            self._start_evaluate()
+        else:
+            log("nothing to do: pass --learn <secs> for observe->learn->evaluate, or --grammar <path>")
+            self.rc, self.stop = 1, True
+
+    def _end_learn(self):
+        args, log = self.args, self.log
+        for s in self.evaluable:
+            s.doc = s.learner.export_document()
+            s.grammar = s.doc.get("grammar", {})
+            for k, info in s.grammar.items():
+                log(f"[learn:{s.endpoint}] {k}: coherent_phases={info.get('learned_coherent_phases')} "
+                    f"from {info.get('total_writes_observed')} writes")
+        if args.grammar:
+            if not self._require_single("--grammar learn-to-file"):
+                return
+            with open(args.grammar, "w") as f:
+                json.dump(self.evaluable[0].doc, f, indent=2)
+            log(f"[learn] grammar -> {args.grammar} (stopping; omit --grammar to chain into evaluate)")
+            self.rc, self.stop = 0, True
+            return
+        self._start_evaluate()
+
+    def _require_single(self, what):
+        """The --grammar file flows hold ONE silo's grammar; with several evaluable silos, report and
+        stop rather than pick one silently."""
+        if len(self.evaluable) == 1:
+            return True
+        self.log(f"[silo] {what} is single-silo only; {len(self.evaluable)} evaluable silos reported, "
+                 f"none read/written")
+        self.rc, self.stop = 1, True
+        return False
+
+    def _start_evaluate(self):
+        self.emitter.stage("evaluate")
+        self.log(f"[evaluate] continuous, {len(self.evaluable)} evaluable silo(s) -- each write judged "
+                 f"against its OWN silo's grammar (Ctrl-C to stop)")
+        self.phase = "evaluate"
 
 
 # --------------------------------------------------------------------------- CLI
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        description="Liscere passive observer — single run: observe -> learn -> continuous evaluate (Ctrl-C to stop)")
+        description="Liscere passive observer — probe the wire, run every protocol found, "
+                    "observe -> learn -> continuous evaluate (Ctrl-C to stop)")
     ap.add_argument("--iface", required=True, help="capture interface (mirror port)")
+    ap.add_argument("--probe", type=float, default=15.0,
+                    help="probe-window seconds: discover which protocols are on the wire before running "
+                         "their extractors (a protocol silent during the probe is never claimed)")
     ap.add_argument("--observe", type=float, default=60.0, help="phase 1: observe window seconds (discover + calibrate)")
     ap.add_argument("--learn", type=float, default=None,
                     help="phase 2: learn-window seconds; then phase 3 evaluates continuously until Ctrl-C")
     ap.add_argument("--grammar", default=None,
                     help="with --learn: write the learned grammar here and stop (legacy learn-to-file); "
-                         "without --learn: load this grammar and evaluate continuously")
+                         "without --learn: load this grammar and evaluate continuously (single silo)")
     ap.add_argument("--profile", default=None, help="optional path to write the auto-calibrated phase profile")
+    ap.add_argument("--only", default=None,
+                    help="comma-separated wire layers to actually RUN, e.g. 'modbus,s7comm'. The probe "
+                         "still runs in full and reports everything it found; this restricts only what "
+                         "is RUN (one tshark costs ~145 MiB of dissector tables, so a small host cannot "
+                         "hold every claimed protocol). A layer claimed but excluded is reported, not run.")
+    ap.add_argument("--reset-after", type=int, default=100000,
+                    help="tshark -M: reset dissector state every N packets so memory stays bounded on an "
+                         "unbounded run (default 100000). Lower trades a lost in-flight transaction per "
+                         "reset for a tighter memory ceiling.")
+    ap.add_argument("--respawn-retries", type=int, default=36,
+                    help="how many times to respawn a tshark that dies before declaring its capture "
+                         "permanently lost (default 36; with the backoff cap that is ~15-20 min of "
+                         "resilience before giving up). A 24/7 monitor should persist, not give up early.")
+    ap.add_argument("--respawn-backoff-cap", type=float, default=30.0,
+                    help="cap (seconds) on the exponential respawn backoff 1,2,4,8...  (default 30). The "
+                         "first retry always waits, so a genuinely-down interface cannot fork-loop.")
     ap.add_argument("--emit-json", action=argparse.BooleanOptionalAction, default=True,
                     help="emit structured discovery events as JSON Lines on stdout (human logs go to "
                          "stderr). --no-emit-json restores plain human output on stdout, no JSON.")
@@ -700,78 +1137,79 @@ def main(argv=None):
     log = (lambda m: print(m, file=sys.stderr)) if args.emit_json else print
     emitter = Emitter(enabled=args.emit_json)
 
-    extractor = get_extractor(os.getenv("OTLAB_PROTOCOL", "opcua"))
-    if not hasattr(extractor, "group_flows"):
-        print(f"protocol {extractor.name} does not support state-signal discovery yet", file=sys.stderr)
-        return 2
-    emitter.protocol_seen(extractor)
-
-    # Phase 1 — OBSERVE: capture, then demux into silos and discover+calibrate each. Every run goes
-    # through silos; the normal bench case is simply N=1 (one silo), announced and tagged like any.
-    emitter.stage("observe", seconds=args.observe)
-    obs = capture_events(extractor, args.iface, args.observe, log=log, emitter=emitter)
-    silos = build_silos(extractor, obs, emitter, log, profile_path=args.profile)
-    evaluable = [s for s in silos if s.evaluable]
-    if not evaluable:
-        # No silo could be calibrated. For N=1 this is exactly the old "no state signal -> return 2"
-        # (discovery events were still emitted by build_silos); for N>1 every silo was reported.
-        log("[silo] no evaluable silo; extend --observe to cover >=1.5 process cycles")
+    # PROBE: discover which protocols are on the wire; surface traffic no extractor can read.
+    claimed, _unclaimed = probe_layers(args.iface, args.probe, log=log, emitter=emitter)
+    if not claimed:
+        log(f"[probe] no known protocol claimed in {args.probe:.0f}s -- nothing to run")
+        print(f"no known protocol on the wire during the {args.probe:.0f}s probe window; "
+              f"extend --probe for slow-polling devices, or check the mirror port.", file=sys.stderr)
         return 2
 
-    # Scale the write-coalescing window to the observed process (no-op for extractors that do not
-    # coalesce). One shared extractor.config cannot hold a per-silo window yet, so with N>1 this uses
-    # the first evaluable silo (documented limitation); with N=1 it is exactly the old single call.
-    apply_derived_coalesce_window(extractor, evaluable[0].calib, log=log)
+    # --only restricts which claimed layers RUN, never what the probe REPORTED. The probe already ran
+    # in full and surfaced everything it found (claimed + UNCLAIMED). A claimed layer excluded here is
+    # reported as claimed-but-not-run, not hidden -- a run must say plainly what it saw and chose not
+    # to run.
+    run_layers = set(claimed)
+    if args.only:
+        requested = {s.strip().lower() for s in args.only.split(",") if s.strip()}
+        for layer in sorted(requested - claimed):
+            log(f"[only] {layer!r} was not claimed by the probe; ignoring")
+        run_layers = claimed & requested
+        for layer in sorted(claimed - run_layers):
+            ext = extractor_for_layer(layer)
+            label = _protocol_label(ext) if ext is not None else layer.upper()
+            log(f"[only] claimed {label} ({layer}) but --only excludes it; not running "
+                f"(the probe still reported it)")
+            emitter.silo(None, evaluable=False, protocol=label, kind="not_run",
+                         reason=f"claimed but not run (--only {args.only})")
+        if not run_layers:
+            log("[only] --only excludes every claimed layer -- nothing to run")
+            print(f"--only {args.only!r} excludes every claimed layer (claimed: "
+                  f"{', '.join(sorted(claimed))}); nothing to run.", file=sys.stderr)
+            return 2
 
-    silos_by_ep = {s.endpoint: s for s in silos}   # includes non-evaluable, so they are not re-reported
-    reported_late = set()
+    # Spawn one tshark per RUN layer. extractor_for_layer maps a wire layer to its extractor.
+    sources = []
+    for layer in sorted(run_layers):
+        ext = extractor_for_layer(layer)
+        if ext is None or not hasattr(ext, "group_flows"):
+            log(f"[probe] claimed layer {layer!r} has no runnable extractor; skipped")
+            continue
+        emitter.protocol_seen(ext)
+        sources.append(_Source(ext, _spawn(ext, args.iface, args.reset_after)))
+    if not sources:
+        print("claimed layers have no runnable extractor", file=sys.stderr)
+        return 2
+    log(f"[run] {len(sources)} extractor(s): {', '.join(s.extractor.name for s in sources)}")
 
-    if args.learn is not None:
-        # Phase 2 — LEARN: learn each silo's coherence grammar from this window. Temporal trust: the
-        # environment is controlled during learn, so what is seen here is the baseline "normal".
-        emitter.stage("learn", seconds=args.learn)
-        ev = capture_events(extractor, args.iface, args.learn, log=log, emitter=emitter)
-        for endpoint, evs in partition_by_server(ev).items():
-            silo = _route_or_report_late(emitter, silos_by_ep, reported_late, endpoint)
-            if silo is None:
-                continue
-            silo.doc = run_learn(extractor, evs, silo.tracker, emitter=silo.emitter, state_key=silo.state_key)
-            silo.grammar = silo.doc.get("grammar", {})
-            for k, info in silo.grammar.items():
-                log(f"[learn:{endpoint}] {k}: coherent_phases={info.get('learned_coherent_phases')} "
-                    f"from {info.get('total_writes_observed')} writes")
-
-        if args.grammar:
-            # Legacy learn-to-file flow: write the grammar and stop (no evaluate). One file holds one
-            # silo's document, so this is single-silo only; with N>1 the silos were reported but the
-            # file is not written (a documented phase 2a-1 limitation, not a silent drop).
-            if len(evaluable) != 1:
-                log(f"[silo] --grammar learn-to-file is single-silo only; {len(evaluable)} evaluable "
-                    f"silos were reported but no grammar file was written")
-                return 1
-            with open(args.grammar, "w") as f:
-                json.dump(evaluable[0].doc, f, indent=2)
-            log(f"[learn] grammar -> {args.grammar} (stopping; omit --grammar to chain into continuous evaluate)")
-            return 0
-
-        # Phase 3 — EVALUATE (continuous), the single-run default: freeze the just-learned grammars
-        # and watch until Ctrl-C, routing each write to its silo. No re-learning.
-        return evaluate_continuous_silos(extractor, args.iface, emitter, silos_by_ep, reported_late, log)
-
-    if args.grammar:
-        # Evaluate a previously saved grammar (no learn window). The grammar file is one silo's, so
-        # this is single-silo only; with N>1 the silos were reported but the file is not loaded.
-        if len(evaluable) != 1:
-            log(f"[silo] --grammar evaluate is single-silo only; {len(evaluable)} evaluable silos "
-                f"were reported but no grammar file was loaded")
-            return 1
-        with open(args.grammar) as f:
-            evaluable[0].grammar = json.load(f).get("grammar", {})
-        return evaluate_continuous_silos(extractor, args.iface, emitter, silos_by_ep, reported_late, log)
-
-    print("nothing to do: pass --learn <secs> for a single observe->learn->evaluate run, "
-          "or --grammar <path> to evaluate a saved grammar", file=sys.stderr)
-    return 1
+    run = _Run(sources, args, emitter, log)
+    # The supervisor respawns a dead tshark under a bounded backoff so a child death (the weekend soak
+    # saw one rc=1 exit hours in) is survived, not fatal. The critical state -- tracker, grammar,
+    # calibration, silos -- lives in Python and is untouched by a respawn; only tshark's dissector
+    # state is lost and rebuilds itself. While one source is down the others keep being judged.
+    supervisor = _Supervisor(
+        spawn=lambda ext: _spawn(ext, args.iface, args.reset_after),
+        log=log, emitter=emitter, on_resume=run.extend_window,
+        retries=args.respawn_retries, backoff_cap=args.respawn_backoff_cap)
+    run.degraded = supervisor.is_degraded    # hold timed windows open while capture is degraded
+    try:
+        # ONE selector loop over the N tshark. run.dispatch handles each event; run.tick advances the
+        # phase at each window's deadline. multiplex kills every tshark on exit (normal or Ctrl-C).
+        stopped = multiplex(sources, on_event=run.dispatch, emitter=emitter, log=log, until=run.tick,
+                            supervisor=supervisor)
+    except KeyboardInterrupt:
+        log("[evaluate] stopped")
+        return run.rc
+    if not stopped:
+        # multiplex fell through because nothing runnable remains: every source has been PERMANENTLY
+        # lost (all respawn retries exhausted). For a continuous monitor that is a CAPTURE FAILURE, not
+        # a clean end -- make it loud and non-zero so it is visible, instead of a silent exit that
+        # (under restart supervision) re-probes and re-spawns captures in a churn.
+        log("[capture] every capture permanently lost -- the observer is no longer monitoring")
+        print("capture lost: every tshark died and exhausted its respawn retries "
+              f"(--respawn-retries {args.respawn_retries}). Nothing is being observed.", file=sys.stderr)
+        return 3
+    return run.rc
 
 
 if __name__ == "__main__":
