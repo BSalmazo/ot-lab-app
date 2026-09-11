@@ -29,5 +29,8 @@ uv run liscere-observe --replay runs/<run_id> --observe 60 --learn 120  # from a
 
 Replay runs on frame time, so the same input always gives the same output.
 
+On the Raspberry Pi the observer runs as a systemd service from a tagged release; see
+[deploy/pi/README.md](deploy/pi/README.md) for install, update and rollback (one command each).
+
 Developers: `make install`, `make test`, `make lint`. The `scripts/liscere_*.py` files are shims kept so
 older command lines keep working; the code is in `liscere/` (programs) and `otlab_core/` (engine).

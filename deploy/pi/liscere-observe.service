@@ -1,0 +1,33 @@
+# Liscere passive observer on the Raspberry Pi. Installed by deploy/pi/install.sh.
+# Arguments come from /etc/liscere/observe.env; the code from the release wheel in /opt/liscere.
+[Unit]
+Description=Liscere passive observer (mirror port, injects nothing)
+After=network-online.target chrony.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=liscere
+Group=liscere
+EnvironmentFile=/etc/liscere/observe.env
+WorkingDirectory=/var/lib/liscere
+# Every live run records its raw input under the run directory (--record is on by default), so any
+# bench run can be replayed exactly later. stdout is the JSON Lines stream (also kept in the run
+# record); stderr, the human log, goes to journald: journalctl -u liscere-observe.
+ExecStart=/opt/liscere/venv/bin/liscere-observe --iface ${IFACE} --probe ${PROBE} --observe ${OBSERVE} --learn ${LEARN} --runs-dir /var/lib/liscere/runs $EXTRA_ARGS
+StandardOutput=null
+StandardError=journal
+# Exit codes: 2 nothing on the wire or no evaluable silo, 3 every capture lost. Both are worth a
+# retry after a pause (a PLC that reboots, a mirror that comes back). Ctrl-C style stops (130) and
+# clean exits are not restarted.
+Restart=on-failure
+RestartSec=30
+# Capture rights come from the wireshark group (dumpcap setcap), not from running as root.
+SupplementaryGroups=wireshark
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
