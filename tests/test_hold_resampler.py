@@ -21,9 +21,10 @@ sys.path.insert(0, _REPO)
 sys.path.insert(0, os.path.join(_REPO, "scripts"))
 
 from liscere_observe import HoldResampler
-from otlab_core.engine.phase_tracker import PhaseTracker
+
 from otlab_core.engine.autocalibrate import calibrate_phase_config
-from otlab_core.extractors.opcua import OpcUaExtractor, _FIELDS
+from otlab_core.engine.phase_tracker import PhaseTracker
+from otlab_core.extractors.opcua import _FIELDS, OpcUaExtractor
 
 _IDX = {name: i for i, name in enumerate(_FIELDS)}
 _failures = []

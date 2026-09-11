@@ -39,7 +39,7 @@ already consumes (state_signal_value + a normalized target/value). engine/ is un
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any, List, Optional
+from typing import List, Optional
 
 from ..config import OpcUaConfig
 from ..contract import NormalizedEvent

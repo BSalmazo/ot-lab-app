@@ -22,7 +22,7 @@ _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
 sys.path.insert(0, os.path.join(_REPO, "scripts"))
 
-from otlab_core.extractors.opcua import OpcUaExtractor, _FIELDS
+from otlab_core.extractors.opcua import _FIELDS, OpcUaExtractor
 
 _IDX = {name: i for i, name in enumerate(_FIELDS)}
 _failures = []

@@ -10,7 +10,6 @@ the original single-silo path.
 Synthetic OPC UA events (same shape as test_observer_pipeline.py) with evt.server set per silo.
 Deterministic; runnable as `python3 tests/test_silo_demux.py`.
 """
-import contextlib
 import io
 import json
 import os
@@ -21,9 +20,10 @@ _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
 sys.path.insert(0, os.path.join(_REPO, "scripts"))
 
+import liscere_observe as obs
+
 from otlab_core.contract import NormalizedEvent
 from otlab_core.extractors.opcua import OpcUaExtractor
-import liscere_observe as obs
 
 SRV_A, SRV_B = "192.168.1.9:4840", "192.168.1.12:4840"   # two OPC UA silos in one capture
 
