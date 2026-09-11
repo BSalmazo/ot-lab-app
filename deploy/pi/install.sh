@@ -38,6 +38,10 @@ if [ ! -f /etc/liscere/observe.env ]; then
   curl -fsSL -o /etc/liscere/observe.env "$RAW/observe.env"
   echo "[install] wrote /etc/liscere/observe.env with defaults (IFACE=eth0); edit it for this bench"
 fi
+if [ ! -f /etc/liscere/liscere.toml ]; then
+  curl -fsSL -o /etc/liscere/liscere.toml "$RAW/liscere.toml"
+  echo "[install] wrote /etc/liscere/liscere.toml (no exclusions declared); edit it once the Temperature flow key is known"
+fi
 curl -fsSL -o /etc/logrotate.d/liscere "$RAW/logrotate.conf"
 curl -fsSL -o /etc/systemd/system/liscere-observe.service "$RAW/liscere-observe.service"
 
