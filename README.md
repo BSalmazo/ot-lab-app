@@ -19,5 +19,15 @@ uv run liscere-probe --iface eth0 --duration 30
 uv run liscere-observe ... 2>/dev/null | uv run liscere-ui
 ```
 
+Every run writes a record under `runs/<run_id>/` (manifest, event stream, verdicts, and the raw
+capture lines it consumed). A run can be repeated exactly, without tshark or the bench:
+
+```
+uv run liscere-observe --pcap capture.pcapng --observe 60 --learn 120   # from a capture file
+uv run liscere-observe --replay runs/<run_id> --observe 60 --learn 120  # from a recorded run
+```
+
+Replay runs on frame time, so the same input always gives the same output.
+
 Developers: `make install`, `make test`, `make lint`. The `scripts/liscere_*.py` files are shims kept so
 older command lines keep working; the code is in `liscere/` (programs) and `otlab_core/` (engine).
