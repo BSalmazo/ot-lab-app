@@ -132,7 +132,8 @@ class Stabilisation:
             self.streak = 0
         else:
             d = grammar_distance(self.prev, grammar)
-            if not d["coherent_set_changed"] and float(d["max_fraction_change"]) < self.epsilon:
+            change = d["max_fraction_change"]
+            if not d["coherent_set_changed"] and change is not None and change < self.epsilon:
                 self.streak += 1
             else:
                 self.streak = 0
