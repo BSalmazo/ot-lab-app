@@ -1,9 +1,9 @@
-"""The ProtocolExtractor interface (Phase 1B).
+"""The ProtocolExtractor interface.
 
-All protocol-specific knowledge for passive dissection sits behind this interface, so the
-capture runtime (``scripts/tshark_runtime.py``) and the analysis engine (``otlab_core.engine``)
-can stay protocol-neutral. Adding a protocol means adding an implementation of this class and
-selecting it in the runtime; no runtime or engine change should be needed beyond that.
+All protocol-specific knowledge for passive dissection sits behind this interface, so the observer
+(``liscere.observe``) and the engine (``otlab_core.engine``) stay protocol-neutral. Adding a
+protocol means adding an implementation of this class and registering it in
+``otlab_core.extractors.EXTRACTOR_CLASSES``; no observer or engine change should be needed.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ class ProtocolExtractor(ABC):
     def occurrence(self) -> str:
         """tshark ``-E occurrence=`` mode for this protocol.
 
-        Default ``"f"`` (first occurrence only) — the historical Modbus behaviour, which
+        Default ``"f"`` (first occurrence only), the historical Modbus behaviour, which
         must stay byte-identical. Protocols whose fields are legitimately multi-valued
         (e.g. OPC UA NodeId / value lists) override this to ``"a"`` (all occurrences).
         """

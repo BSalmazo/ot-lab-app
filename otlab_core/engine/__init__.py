@@ -6,12 +6,12 @@ Three pieces, none of which know anything about a protocol:
 - ``GrammarLearner`` : learns a structural target->phase grammar from observation;
 - ``evaluate``       : grades a write against a learned grammar (COHERENT/UNUSUAL/INCOHERENT/UNCERTAIN).
 
-``LearnedEngineAdapter`` bridges these to a NormalizedEvent stream. In Phase 1 the core is landed
-as a module + adapter only; it is NOT wired into the live passive path (the declarative rules in
-app.py remain the default), so current OT Lab behaviour is unchanged.
+Plus ``calibrate_phase_config`` (derives the PhaseConfig from the observed state series) and
+``classify_flows`` (discovers which flow is the state signal). The observer in ``liscere.observe``
+drives these directly: it feeds every state sample to the tracker and every write to the learner or
+the evaluator.
 """
 
-from .adapter import LearnedEngineAdapter
 from .autocalibrate import (
     CalibrationResult,
     calibrate_phase_config,
@@ -35,7 +35,6 @@ __all__ = [
     "evaluate",
     "phase_fraction",
     "Verdict",
-    "LearnedEngineAdapter",
     "calibrate_phase_config",
     "learn_phase_config",
     "write_profile",

@@ -1,42 +1,28 @@
 #!/usr/bin/env python3
-"""Liscere passive observer — reference entrypoint.
+"""Liscere passive observer: the reference entry point (console script liscere-observe).
 
-Ties the already-committed modules into the validated passive-observer pipeline, with ZERO
-process configuration:
+The pipeline, with no process configuration required:
 
+    PROBE   (which protocols are on the wire)
     OBSERVE (capture a window)
-      -> DISCOVER the state signal   (behavioural classifier + protocol role hints; Degrau 4a)
-      -> CALIBRATE the phase params  (Level-2 auto-calibration, from the discovered state flow)
+      -> DISCOVER the state signal   (behavioural classifier + protocol role hints, or a pin from config)
+      -> CALIBRATE the phase params  (auto-calibration from the discovered state flow)
       -> INFER phase                 (PhaseTracker, using the calibrated config)
-      -> LEARN the grammar           (learn mode)   |   EVALUATE coherence (evaluate mode)
+      -> LEARN the grammar           (learn window)   then   EVALUATE coherence (continuous)
 
 Neither the state signal (which NodeId/register) nor the phase parameters are configured; both are
-derived from observed traffic. tshark is driven entirely by the active extractor's
-tshark_fields()/occurrence()/capture_filter(), so the captured columns always align with
-parse_line — there is no hand-written field list here.
+derived from observed traffic (a configuration file may exclude flows or pin the state signal).
+tshark is driven entirely by each extractor's tshark_fields()/occurrence()/capture_filter(), so the
+captured columns always align with parse_line: there is no hand-written field list here.
 
-This supersedes the ad-hoc ~/OT-Lab/liscere_observe.py used during bench validation, and is the
-reference implementation of the passive observer.
-
-Standalone by design: it does NOT touch app.py or the legacy declarative engine, and does NOT
-reconcile the two engines. State samples are fed directly to PhaseTracker (bypassing
-LearnedEngineAdapter's single-sample path).
-
-Known debts (see the modules for detail):
-  - D1  single-tag telemetry: all publish Floats are treated as one state flow; multiple monitored
-        items need ClientHandle->NodeId correlation from CreateMonitoredItems (= level 4b).
-  - D4  LearnedEngineAdapter reads only the newest sample; this observer feeds ALL samples directly.
-  - D5  discovery thresholds are fixed defaults (deriving them from observation is future work).
-  - OBS-Rxxx rule-id collision between the learned evaluator and the legacy declarative engine in
-        app.py, left unreconciled by design.
-
-The observer probes the wire, discovers which protocols are present, and runs every claimed
-extractor at once over ONE selector loop (no threads, no protocol configuration): what runs is what
-is on the wire, not a hand-set protocol.
+Every claimed extractor runs at once over ONE selector loop (no threads): what runs is what is on
+the wire. Every run leaves a record (run.json, events.jsonl, verdicts.jsonl, capture/, silos/) and
+can be replayed exactly on frame time from that record or from a pcap. Known open point: the
+discovery thresholds are fixed defaults (deriving them from observation is future work).
 
 Usage:
-    python scripts/liscere_observe.py --iface en6 --observe 60 --learn 120
-    python scripts/liscere_observe.py --iface en6 --probe 30 --observe 60 --grammar learned_grammar.json
+    liscere-observe --iface eth0 --observe 60 --learn 120
+    liscere-observe --replay runs/<run_id> --observe 60 --learn 120
 """
 
 from __future__ import annotations
@@ -1145,7 +1131,7 @@ class HoldResampler:
     wire is silent, and stops the instant a real sample resumes. It is a faithful reconstruction of
     the datachange signal, not synthetic noise: only flat repeats of the last real value, never
     fabricated movement. ``PhaseTracker`` stays pure and transport-neutral -- all the transport
-    awareness lives here, in the observer/adapter layer.
+    awareness lives here, in the observer layer.
 
     Silence margin. The first flat is injected only after silence of ``margin`` x the cadence (default
     1.75x, within the 1.5-2x band the review set), so ordinary inter-sample jitter during movement
@@ -1790,7 +1776,7 @@ class _Run:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        description="Liscere passive observer — probe the wire, run every protocol found, "
+        description="Liscere passive observer: probe the wire, run every protocol found, "
                     "observe -> learn -> continuous evaluate (Ctrl-C to stop)")
     ap.add_argument("--version", action="version", version=f"liscere {__version__}")
     src = ap.add_mutually_exclusive_group(required=True)

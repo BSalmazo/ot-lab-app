@@ -5,10 +5,10 @@ the engine. Defaults reproduce the LTR-2026-03 tank values so nothing changes fo
 setup, but they are now overridable per deployment.
 
 As of the consolidation step, ``PhaseTracker`` reads its six phase-inference parameters from
-``PhaseConfig`` (defaults = LTR-2026-03). The runtime / lean observer selects a profile — the
-built-in defaults, or a named JSON such as ``profiles/opcua_tank_10hz.json`` loaded via
-``PhaseConfig.from_json`` — without editing engine code. The engine only READS these numbers; it
-never sets them.
+``PhaseConfig`` (defaults = LTR-2026-03). In practice the observer derives the config from the
+observe window (``engine.autocalibrate``) and can reload a saved one with ``--resume-from``;
+``profiles/opcua_tank_10hz.json`` is a hand-tuned reference kept for comparison. The engine only
+READS these numbers; it never sets them.
 """
 
 from __future__ import annotations
@@ -26,11 +26,9 @@ class PhaseConfig:
     behaves exactly as before. These parameters are rate/dynamics-specific: the right values
     depend on the process's sampling cadence and how fast it fills / drains.
 
-    DEBT D3 / Level-2 (auto-calibration): today these are set MANUALLY — the defaults here, or a
-    named profile such as ``profiles/opcua_tank_10hz.json`` loaded via ``from_json``. Level-2
-    auto-calibration will DERIVE them from observed sample cadence (``frame.time_epoch`` deltas)
-    and process dynamics, replacing hand-tuned profiles. Not implemented here; the engine only
-    reads this config and never sets these numbers itself.
+    These are DERIVED at run time by ``engine.autocalibrate`` from the observed state series
+    (half-cycle period, rate, window-scale noise floor); the defaults here are only the fallback when
+    the period is not measurable. The engine reads this config and never sets these numbers itself.
     """
 
     window: int = 8

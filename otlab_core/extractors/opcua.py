@@ -229,7 +229,7 @@ def _as_number(value):
     """Coerce a parsed OPC UA value to a float for the sample series, or None.
 
     Numeric types (int/float/bool/numeric string) become a float; a String value (or anything
-    non-numeric) returns None so it is NOT appended as a phase/step sample — the flow still
+    non-numeric) returns None so it is NOT appended as a phase/step sample; the flow still
     exists via its role hint (see group_flows)."""
     if value is None:
         return None
@@ -381,7 +381,7 @@ class OpcUaExtractor(ProtocolExtractor):
         """Return (target, auth_token).
 
         target is "ns=<nsindex>;i=<numeric>" for the element whose nsindex != 0, or None.
-        auth_token is the leading ns=0 NodeId element (numerics[0]) — the request's
+        auth_token is the leading ns=0 NodeId element (numerics[0]), the request's
         AuthenticationToken, kept as an actor signal.
 
         The numeric and nsindex lists can differ in length (TwoByte NodeIds carry no explicit
@@ -401,7 +401,7 @@ class OpcUaExtractor(ProtocolExtractor):
     def _read_value(self, cols: List[str], variant: Optional[int]):
         """Return (value, value_is_float) reading the typed field the variant type declares.
 
-        Decodes the common OPC UA built-in scalars — Boolean, SByte, Byte, Int16, UInt16, Int32,
+        Decodes the common OPC UA built-in scalars: Boolean, SByte, Byte, Int16, UInt16, Int32,
         UInt32, Int64, UInt64, Float, Double, String (see _VARIANT_COL). Integers come back as
         int, floats/doubles as float, Boolean as int 0/1, String as the raw text. An unknown or
         unmapped variant falls back to the generic opcua.Value (FT_FLOAT) field, as before.

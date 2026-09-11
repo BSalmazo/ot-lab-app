@@ -3,7 +3,7 @@
 
 Reads the observer's JSON-Lines stream on stdin (from `liscere_observe.py --emit-json`) and renders
 it live with `rich`. It is a mirror of the engine's discovery stream: it hardcodes NOTHING about the
-process, protocol, phases, or flows. It renders whatever events arrive — one protocol or three,
+process, protocol, phases, or flows. It renders whatever events arrive: one protocol or three,
 whatever phase name is reported, whatever flows are found. Event types it does not organise are shown
 in an "other events" area rather than dropped, so we can see if the engine emits something new.
 
@@ -105,7 +105,7 @@ class DiscoveryModel:
         if handler:
             handler(ev)
         else:
-            self.others.append(ev)   # unknown/unorganised type — shown, never dropped
+            self.others.append(ev)   # unknown/unorganised type: shown, never dropped
 
     # -- silo routing -----------------------------------------------------
     def _silo_of(self, ev, endpoint_hint=None):
@@ -413,7 +413,7 @@ def _fmt_value(x):
     """VARIABLES value cell: floats to at most one decimal (36.4, not 36.406); integer types as
     integers; whole-valued floats without a trailing .0; None -> em dash."""
     if x is None:
-        return "—"
+        return "-"
     if isinstance(x, bool):
         return str(int(x))
     if isinstance(x, int):
@@ -453,7 +453,7 @@ def build_variables(model):
             style = VERDICT_STYLES.get(nature, "white")
             dtype = v["datatype"] if (v["datatype_certain"] and v["datatype"]) else "?"
             value = _fmt_value(v["value"])
-            phase = _fmt(v["phase"]) if (nature == "STATE" and v["phase"]) else "—"
+            phase = _fmt(v["phase"]) if (nature == "STATE" and v["phase"]) else "-"
             label = NATURE_LABEL.get(nature, _fmt(nature))
             if v.get("late"):
                 label += "*"   # classified from protocol semantics, not observed behaviour

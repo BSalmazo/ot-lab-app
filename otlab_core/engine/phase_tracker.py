@@ -9,7 +9,7 @@ The six tuning parameters (window, slope thresholds, hysteresis counts, confiden
 NOT hardcoded here: they are read from a ``PhaseConfig`` (``otlab_core.config``). The defaults of
 that config are the LTR-2026-03 values, so ``PhaseTracker()`` with no argument behaves exactly as
 before. A later Level-2 module will PRODUCE a calibrated ``PhaseConfig`` from observed traffic;
-this class does not change when that happens — it just reads the config it is given.
+this class does not change when that happens; it just reads the config it is given.
 """
 
 from __future__ import annotations

@@ -3,14 +3,11 @@
 Judges a write by the degree of coherence between the current inferred phase and the learned
 phase distribution for the written target. Verdicts: COHERENT (allow), UNUSUAL (surface for
 review), INCOHERENT (alert), plus UNCERTAIN when the phase itself is unsettled. This is a
-protocol-neutral port of ``liscere_evaluator_step3.py``'s ``evaluate_write`` — it consumes a
+protocol-neutral port of ``liscere_evaluator_step3.py``'s ``evaluate_write``: it consumes a
 learned grammar and a normalized ``(target, phase, confidence, transitioning)``, no Modbus.
 
-NOTE (rule-id collision, intentionally NOT reconciled in this phase): these OBS-Rxxx ids come
-from LTR-2026-03 and overlap the namespace of the existing OT Lab declarative engine
-(app.py's OBS-R000..R005) while meaning different things. The two engines are kept separate in
-Phase 1; reconciling/renumbering is deferred to the later step that switches the passive path
-onto this learned engine.
+Rule ids OBS-R005 to OBS-R009 come from LTR-2026-03. OBS-R000 to OBS-R004 belonged to the retired
+declarative engine (tag ``legacy-engine-v1``) and are not used here.
 """
 
 from __future__ import annotations
