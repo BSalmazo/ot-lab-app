@@ -28,7 +28,7 @@ jobs:
           enable-cache: true
 
       - name: Install from the lockfile (engine, UI extra, dev tools)
-        run: uv sync --locked --extra ui --group dev
+        run: uv sync --locked --extra ui --group dev --group docs
 
       - name: Lint (ruff)
         run: uv run ruff check .
@@ -51,3 +51,6 @@ jobs:
 
       - name: Build the wheel
         run: uv build
+
+      - name: Build the docs (strict)
+        run: uv run mkdocs build --strict

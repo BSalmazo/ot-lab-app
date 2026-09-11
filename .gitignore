@@ -1,3 +1,6 @@
+# MkDocs output
+site/
+
 # Python and tool caches
 __pycache__/
 *.pyc
