@@ -22,6 +22,7 @@ ui = ["rich>=13"]
 liscere-observe = "liscere.observe:main"
 liscere-probe = "liscere.probe:main"
 liscere-ui = "liscere.ui:main"
+liscere-metrics = "liscere.metrics:main"
 
 [project.urls]
 Repository = "https://github.com/LiscereSecurity/OT-Lab"

@@ -1,0 +1,22 @@
+# Bench scenario template. Copy to SCN-BENCH-VALVEB-001.toml and fill in the node id and the windows
+# measured on the recorded cycle (rel_from/rel_to are seconds after the run's first frame).
+id = "SCN-BENCH-VALVEB-001"
+description = "ValveB=40 during heating is INCOHERENT; during add-B it is COHERENT"
+capture = "sha256:TODO"
+bench = "S7-1200 G2 five-phase batch (fill A, heat, add B, mix, discharge), WinCC Unified, 7 tags over OPC UA"
+
+[[labels]]
+target = "ns=4;i=TODO"
+value = 40.0
+rel_from = 0.0
+rel_to = 0.0
+expected = "INCOHERENT"
+note = "ValveB=40 written during heating"
+
+[[labels]]
+target = "ns=4;i=TODO"
+value = 40.0
+rel_from = 0.0
+rel_to = 0.0
+expected = "COHERENT"
+note = "ValveB=40 written during add-B"
