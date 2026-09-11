@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""bench-data-upload SESSION FILE... [--notes TEXT] [--dry-run]
+
+One command, run on the Pi, to archive bench captures in the private LiscereSecurity/Bench-Data
+repository (MODERNISATION_PLAN item 1):
+
+  1. hash every file (sha256) and read its size and modification time;
+  2. create the GitHub release named SESSION (or reuse it if it exists);
+  3. upload each file as a release asset (a file already attached with the same name is skipped);
+  4. attach a manifest fragment (manifest-SESSION.json); the repository's manifest-merge workflow
+     merges it into MANIFEST.json, so nothing needs a laptop clone;
+  5. print the entries written, so the operator can fill in the fields only a human knows.
+
+Authentication: a fine-grained personal access token restricted to Bench-Data with Contents read
+and write, in BENCH_DATA_TOKEN or /etc/liscere/bench-data.token (see Bench-Data/README.md).
+Standard library only: runs on the Pi's system Python.
+"""
+
+import argparse
+import datetime as dt
+import hashlib
+import json
+import os
+import platform
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+REPO = os.environ.get("BENCH_DATA_REPO", "LiscereSecurity/Bench-Data")
+API = "https://api.github.com"
+TOKEN_FILE = "/etc/liscere/bench-data.token"
+
+
+def log(msg):
+    print(f"[bench-data] {msg}", file=sys.stderr)
+
+
+def token():
+    t = os.environ.get("BENCH_DATA_TOKEN")
+    if not t and os.path.isfile(TOKEN_FILE):
+        with open(TOKEN_FILE) as f:
+            t = f.read().strip()
+    if not t:
+        sys.exit(f"no token: set BENCH_DATA_TOKEN or write the fine-grained token to {TOKEN_FILE} (mode 600)")
+    return t
+
+
+def request(method, url, tok, data=None, content_type="application/json", raw=False):
+    body = None
+    if data is not None:
+        body = data if raw else json.dumps(data).encode()
+    req = urllib.request.Request(url, data=body, method=method)
+    req.add_header("Authorization", f"Bearer {tok}")
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("X-GitHub-Api-Version", "2022-11-28")
+    if body is not None:
+        req.add_header("Content-Type", content_type)
+    try:
+        with urllib.request.urlopen(req) as resp:
+            expiry = resp.headers.get("github-authentication-token-expiration")
+            txt = resp.read()
+            return (json.loads(txt) if txt else {}), expiry
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")[:300]
+        raise SystemExit(f"{method} {url} -> HTTP {e.code}: {detail}")
+
+
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def tshark_version():
+    try:
+        out = subprocess.run(["tshark", "--version"], capture_output=True, text=True, timeout=10).stdout
+        return out.splitlines()[0] if out else None
+    except Exception:
+        return None
+
+
+def entry(path, session, notes):
+    st = os.stat(path)
+    return {
+        "file": os.path.basename(path),
+        "sha256": sha256(path),
+        "size": st.st_size,
+        "session": session,
+        "asset_id": None,
+        "captured_at": dt.datetime.fromtimestamp(st.st_mtime).astimezone().isoformat(timespec="seconds"),
+        "uploaded_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+        "source_host": platform.node(),
+        "tshark_version": tshark_version(),
+        "protocol": None,
+        "security_mode": None,
+        "bench": None,
+        "tags_subscribed": None,
+        "cycles": None,
+        "notes": notes,
+    }
+
+
+def get_or_create_release(tok, session, notes):
+    url = f"{API}/repos/{REPO}/releases/tags/{urllib.parse.quote(session)}"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"})
+    try:
+        with urllib.request.urlopen(req) as resp:
+            log(f"release {session} exists; adding to it")
+            return json.loads(resp.read()), resp.headers.get("github-authentication-token-expiration")
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise SystemExit(f"GET {url} -> HTTP {e.code}")
+    log(f"creating release {session}")
+    return request("POST", f"{API}/repos/{REPO}/releases", tok, {
+        "tag_name": session, "target_commitish": "main", "name": session,
+        "body": notes or f"Bench session {session}", "draft": False, "prerelease": False,
+    })
+
+
+def upload_asset(tok, release, name, data, content_type):
+    existing = {a["name"]: a for a in release.get("assets", [])}
+    if name in existing:
+        log(f"  {name}: already attached (asset {existing[name]['id']}), skipped")
+        return existing[name]["id"]
+    upload_url = release["upload_url"].split("{", 1)[0] + "?" + urllib.parse.urlencode({"name": name})
+    asset, _ = request("POST", upload_url, tok, data=data, content_type=content_type, raw=True)
+    log(f"  {name}: uploaded (asset {asset['id']}, {len(data)} bytes)")
+    return asset["id"]
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="Archive bench captures as Bench-Data release assets.")
+    ap.add_argument("session", help="session name, used as the release tag, e.g. 2026-09-15-bench")
+    ap.add_argument("files", nargs="+", help="capture files (.pcap, .pcapng, run archives)")
+    ap.add_argument("--notes", default=None, help="free text stored in every entry and in the release body")
+    ap.add_argument("--dry-run", action="store_true", help="hash and print the fragment; upload nothing")
+    args = ap.parse_args(argv)
+
+    for path in args.files:
+        if not os.path.isfile(path):
+            sys.exit(f"not a file: {path}")
+    fragment = {"schema": 1, "captures": [entry(p, args.session, args.notes) for p in args.files]}
+    for c in fragment["captures"]:
+        log(f"{c['file']}: {c['size']} bytes, sha256 {c['sha256'][:12]}..., captured {c['captured_at']}")
+    if args.dry_run:
+        json.dump(fragment, sys.stdout, indent=2)
+        print()
+        return 0
+
+    tok = token()
+    release, expiry = get_or_create_release(tok, args.session, args.notes)
+    for path, c in zip(args.files, fragment["captures"]):
+        with open(path, "rb") as f:
+            data = f.read()
+        c["asset_id"] = upload_asset(tok, release, c["file"], data, "application/octet-stream")
+    frag_name = f"manifest-{args.session}.json"
+    upload_asset(tok, release, frag_name, json.dumps(fragment, indent=2).encode(), "application/json")
+    if expiry:
+        log(f"token expires {expiry}")
+    log(f"done: {len(fragment['captures'])} file(s) in release {args.session}; the manifest-merge workflow "
+        f"will index them. Fill in protocol/security_mode/bench/tags_subscribed/cycles on MANIFEST.json.")
+    json.dump(fragment, sys.stdout, indent=2)
+    print()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

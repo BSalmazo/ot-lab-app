@@ -32,6 +32,8 @@ install -d "$HOME_DIR" /etc/liscere
 echo "[install] commands and configuration"
 curl -fsSL -o /usr/local/bin/liscere-update "$RAW/liscere-update"
 chmod 0755 /usr/local/bin/liscere-update
+curl -fsSL -o /usr/local/bin/bench-data-upload "$RAW/bench-data-upload"
+chmod 0755 /usr/local/bin/bench-data-upload
 if [ ! -f /etc/liscere/observe.env ]; then
   curl -fsSL -o /etc/liscere/observe.env "$RAW/observe.env"
   echo "[install] wrote /etc/liscere/observe.env with defaults (IFACE=eth0); edit it for this bench"

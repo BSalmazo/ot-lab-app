@@ -64,5 +64,25 @@ archived: `sudo rm -r /var/lib/liscere/runs/<run_id>`.
 tar czf run.tgz -C /var/lib/liscere/runs <run_id>
 ```
 
-Bench captures are archived per MODERNISATION_PLAN item 1 (the Bench-Data repository); the token
-setup for that upload is documented there.
+## Archiving captures (one command)
+
+Bench captures go to the private LiscereSecurity/Bench-Data repository as release assets, one
+release per session, indexed by its `MANIFEST.json`:
+
+```
+sudo bench-data-upload 2026-09-15-bench ~/shared/*.pcapng --notes "15 cycles, Temperature excluded"
+```
+
+It hashes, uploads, and attaches a manifest fragment that the repository merges automatically.
+Fields only a human knows (bench state, tags subscribed, cycles, security mode) are filled in
+afterwards on the GitHub page. `--dry-run` shows what would be written without uploading.
+
+Token, once: create a GitHub fine-grained personal access token restricted to `Bench-Data` with
+Contents read and write, 90-day expiry, and store it on the Pi:
+
+```
+sudo install -m 600 /dev/null /etc/liscere/bench-data.token
+sudo nano /etc/liscere/bench-data.token     # paste the token
+```
+
+Bench-Data's README has the step-by-step token instructions.
