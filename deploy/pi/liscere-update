@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# liscere-update [TAG | --rollback]
+#
+# One command to bring the Pi to a tagged release of LiscereSecurity/OT-Lab:
+#   1. resolve the release (latest, or the given tag such as v0.2.0);
+#   2. download its wheel and SHA256SUMS from the GitHub release assets (public repository, no token);
+#   3. verify the checksum;
+#   4. install the wheel (and the UI extra) into /opt/liscere/venv, keeping the previous wheel for
+#      --rollback;
+#   5. restart the service and print the version that is now running;
+#   6. if liscere-check is installed, run it and roll back automatically when it fails.
+#
+# Paths can be overridden for testing: LISCERE_HOME (default /opt/liscere), LISCERE_SERVICE
+# (default liscere-observe; set to "" to skip the restart), LISCERE_REPO (owner/name).
+set -euo pipefail
+
+REPO="${LISCERE_REPO:-LiscereSecurity/OT-Lab}"
+HOME_DIR="${LISCERE_HOME:-/opt/liscere}"
+SERVICE="${LISCERE_SERVICE-liscere-observe}"
+VENV="$HOME_DIR/venv"
+RELEASES="$HOME_DIR/releases"
+API="https://api.github.com/repos/$REPO/releases"
+
+log() { printf '[update] %s\n' "$*" >&2; }
+die() { printf '[update] ERROR: %s\n' "$*" >&2; exit 1; }
+
+need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required"; }
+need curl; need python3; need sha256sum
+
+mkdir -p "$RELEASES"
+if [ ! -x "$VENV/bin/pip" ]; then
+  log "creating $VENV"
+  python3 -m venv "$VENV"
+  "$VENV/bin/pip" install --quiet --upgrade pip
+fi
+
+installed_version() { "$VENV/bin/liscere-observe" --version 2>/dev/null | awk '{print $2}' || true; }
+
+restart_service() {
+  [ -n "$SERVICE" ] || return 0
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files "$SERVICE.service" >/dev/null 2>&1; then
+    log "restarting $SERVICE"
+    systemctl restart "$SERVICE" || log "warning: could not restart $SERVICE (is it installed and enabled?)"
+  fi
+}
+
+install_wheel() {
+  local wheel="$1"
+  log "installing $(basename "$wheel")"
+  "$VENV/bin/pip" install --quiet --upgrade "$wheel" rich
+}
+
+rollback() {
+  local prev
+  prev="$(cat "$RELEASES/previous" 2>/dev/null || true)"
+  [ -n "$prev" ] && [ -f "$RELEASES/$prev" ] || die "no previous release recorded; nothing to roll back to"
+  install_wheel "$RELEASES/$prev"
+  restart_service
+  log "rolled back to $(installed_version)"
+}
+
+if [ "${1:-}" = "--rollback" ]; then
+  rollback
+  exit 0
+fi
+
+tag="${1:-}"
+if [ -z "$tag" ]; then
+  url="$API/latest"
+else
+  url="$API/tags/$tag"
+fi
+log "resolving release: ${tag:-latest}"
+json="$(curl -fsSL -H 'Accept: application/vnd.github+json' "$url")" || die "cannot read $url"
+tag="$(printf '%s' "$json" | python3 -c 'import json,sys;print(json.load(sys.stdin)["tag_name"])')"
+wheel_url="$(printf '%s' "$json" | python3 -c '
+import json,sys
+assets = json.load(sys.stdin)["assets"]
+w = [a["browser_download_url"] for a in assets if a["name"].endswith(".whl")]
+print(w[0] if w else "")')"
+sums_url="$(printf '%s' "$json" | python3 -c '
+import json,sys
+assets = json.load(sys.stdin)["assets"]
+s = [a["browser_download_url"] for a in assets if a["name"] == "SHA256SUMS"]
+print(s[0] if s else "")')"
+[ -n "$wheel_url" ] || die "release $tag has no wheel asset (has the Release workflow run?)"
+[ -n "$sums_url" ] || die "release $tag has no SHA256SUMS asset"
+
+wheel="$RELEASES/$(basename "$wheel_url")"
+log "downloading $(basename "$wheel_url")"
+curl -fsSL -o "$wheel" "$wheel_url"
+curl -fsSL -o "$RELEASES/SHA256SUMS.$tag" "$sums_url"
+log "verifying checksum"
+( cd "$RELEASES" && grep " $(basename "$wheel")\$" "SHA256SUMS.$tag" | sha256sum -c --quiet - ) || die "checksum mismatch for $(basename "$wheel")"
+
+current="$(installed_version)"
+if [ -n "$current" ] && [ -f "$RELEASES/current" ]; then
+  cp "$RELEASES/current" "$RELEASES/previous"
+fi
+install_wheel "$wheel"
+basename "$wheel" > "$RELEASES/current"
+restart_service
+log "installed: ${current:-none} -> $(installed_version) ($tag)"
+
+if command -v liscere-check >/dev/null 2>&1; then
+  log "running liscere-check"
+  if ! liscere-check; then
+    log "check FAILED; rolling back"
+    rollback
+    exit 1
+  fi
+fi

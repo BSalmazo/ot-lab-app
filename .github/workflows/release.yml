@@ -1,0 +1,43 @@
+name: Release
+
+# A release is the unit that reaches the Pi. Publishing a GitHub release (from the web page or with
+# `make release VERSION=x.y.z`) builds the wheel from the tagged commit, checks the tag against the
+# version in pyproject.toml, and attaches the wheel, the sdist and SHA256SUMS to that release.
+# The Pi's liscere-update downloads exactly those files and verifies the checksum.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-attach:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the tagged commit
+        uses: actions/checkout@v5
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+
+      - name: Tag must equal the package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver="$(uv run --no-project python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          echo "tag=$tag version=$ver"
+          test "$tag" = "$ver" || { echo "::error::release tag v$tag does not match pyproject version $ver"; exit 1; }
+
+      - name: Build wheel and sdist
+        run: uv build
+
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber
