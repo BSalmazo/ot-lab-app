@@ -34,6 +34,9 @@ dev = [
     "mypy>=1.10",
     "pre-commit>=3.7",
 ]
+docs = [
+    "mkdocs-material>=9.5",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["otlab_core", "liscere"]
