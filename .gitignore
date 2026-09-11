@@ -5,6 +5,9 @@ __pycache__/
 .mypy_cache/
 .pytest_cache/
 
+# Run records written by liscere-observe (see --runs-dir)
+runs/
+
 # Virtual environments
 .venv/
 venv/

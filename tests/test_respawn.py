@@ -337,7 +337,7 @@ def main():
     _es, _eo = sys.stderr, sys.stdout
     sys.stderr, sys.stdout = ebuf, io.StringIO()
     try:
-        rc = obs.main(["--iface", "x", "--probe", "1", "--observe", "60", "--learn", "60",
+        rc = obs.main(["--no-run-dir", "--iface", "x", "--probe", "1", "--observe", "60", "--learn", "60",
                        "--respawn-retries", "2", "--respawn-backoff-cap", "0.01"])
     finally:
         sys.stderr, sys.stdout = _es, _eo

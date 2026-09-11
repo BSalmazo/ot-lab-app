@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import select
 import selectors
 import subprocess
@@ -52,6 +53,7 @@ import time
 import types
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from liscere import __version__
 from otlab_core import wire
@@ -85,6 +87,80 @@ def _protocol_label(extractor):
     return extractor.name.split("/")[0].upper()
 
 
+class RunRecord:
+    """The on-disk record of one observer run: a directory ``<runs_dir>/<run_id>/`` holding
+
+    - ``run.json``       the manifest (version, arguments, source, clock, per-silo calibration and
+                         grammar, start and end, exit code), rewritten atomically as the run advances;
+    - ``events.jsonl``   every emitted event, byte-identical to the stdout stream;
+    - ``verdicts.jsonl`` one record per verdict, the stream's verdict event plus ``run_id`` and a
+                         sequence number, so every judgement is traceable to a run without parsing
+                         the whole stream.
+
+    The record is written by default so a bench run is never lost; ``--no-run-dir`` disables it.
+    It is attached to the Emitter as a sink: it never decides what is emitted, it only keeps it.
+    """
+
+    def __init__(self, runs_dir, run_id=None):
+        self.run_id = run_id or new_run_id()
+        self.path = os.path.join(runs_dir, self.run_id)
+        os.makedirs(self.path, exist_ok=True)
+        self._events = open(os.path.join(self.path, "events.jsonl"), "a")
+        self._verdicts = open(os.path.join(self.path, "verdicts.jsonl"), "a")
+        self._seq = 0
+        self.manifest = {"run_id": self.run_id, "version": __version__,
+                         "started_at": utc_now_iso(), "silos": {}}
+
+    def sink(self, event):
+        """Emitter sink: mirror every event; index verdicts with run_id and a sequence number."""
+        self._events.write(json.dumps(event) + "\n")
+        self._events.flush()
+        if event.get("type") == "verdict":
+            self._seq += 1
+            self._verdicts.write(json.dumps({"run_id": self.run_id, "seq": self._seq, **event}) + "\n")
+            self._verdicts.flush()
+
+    def update(self, **fields):
+        self.manifest.update(fields)
+        self.write_manifest()
+
+    def silo(self, endpoint, **fields):
+        self.manifest["silos"].setdefault(str(endpoint), {}).update(fields)
+        self.write_manifest()
+
+    def write_manifest(self):
+        tmp = os.path.join(self.path, "run.json.tmp")
+        with open(tmp, "w") as f:
+            json.dump(self.manifest, f, indent=2, default=str)
+        os.replace(tmp, os.path.join(self.path, "run.json"))
+
+    def close(self, rc):
+        self.manifest["ended_at"] = utc_now_iso()
+        self.manifest["exit_code"] = rc
+        self.manifest["verdicts"] = self._seq
+        self.write_manifest()
+        self._events.close()
+        self._verdicts.close()
+
+
+def new_run_id():
+    """``<UTC timestamp>-<8 hex>``: sortable, unique, safe as a directory name."""
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(4)
+
+
+def utc_now_iso():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def tshark_version():
+    """First line of ``tshark --version``, or None when tshark is absent (recorded, never fatal)."""
+    try:
+        out = subprocess.run(["tshark", "--version"], capture_output=True, text=True, timeout=10)
+        return (out.stdout or "").splitlines()[0] if out.stdout else None
+    except Exception:
+        return None
+
+
 class Emitter:
     """Emits structured discovery events as JSON Lines, in the order they are discovered.
 
@@ -93,9 +169,11 @@ class Emitter:
     de-duplicated: one is emitted only when the inferred phase actually changes.
     """
 
-    def __init__(self, enabled=True, out=None, _tag=None, _shared=None):
+    def __init__(self, enabled=True, out=None, _tag=None, _shared=None, sink=None):
         self.enabled = enabled
         self.out = out or sys.stdout
+        # ``sink`` (a RunRecord.sink, or any callable) receives every event that would be emitted,
+        # whether or not stdout emission is enabled: the on-disk record does not depend on the UI.
         # A silo tag scopes this Emitter's events and de-dup to one silo. None = untagged (the whole
         # stream, or the N=1 case): events carry no silo field, so output is identical to the
         # pre-silo observer. De-dup state lives in `_shared` and is keyed by tag, so N silos share ONE
@@ -109,6 +187,7 @@ class Emitter:
                                  #              reclassify a non-command key; see command_found)
             "state_keys": set(), # (tag, key) that IS the discovered state signal -> never reclassified
             "opaque": set(),     # endpoints already reported as opaque -> report once, not per frame
+            "sink": sink,        # optional callable receiving every emitted event (the run record)
         }
 
     def bind(self, tag):
@@ -120,10 +199,17 @@ class Emitter:
         return Emitter(enabled=self.enabled, out=self.out, _tag=tag, _shared=self._shared)
 
     def _emit(self, event):
+        sink = self._shared.get("sink")
+        if not self.enabled and sink is None:
+            return
+        if self._tag is not None and "silo" not in event:
+            event = {**event, "silo": self._tag}   # attribute the event to its silo (N>1 only)
+        if "ts" not in event:
+            event = {**event, "ts": round(time.time(), 3)}
         if self.enabled:
-            if self._tag is not None and "silo" not in event:
-                event = {**event, "silo": self._tag}   # attribute the event to its silo (N>1 only)
             emit(event, out=self.out)
+        if sink is not None:
+            sink(event)
 
     def stage(self, stage, seconds=None):
         # A pipeline-stage transition ("observe" | "learn" | "evaluate"), emitted once per move so
@@ -242,39 +328,63 @@ class Emitter:
             "features": None, "late": True,
         })
 
-    def variable_value(self, key, value):
+    def variable_value(self, key, value, frame_ts=None):
         # The current value of a variable (latest state sample / last written command value),
         # de-duped so an unchanged value is not re-emitted. Only key + value; no name or meaning.
+        # ``frame_ts`` is the capture timestamp of the frame that carried the value, when known.
         if key is None:
             return
         lv = self._shared["last_values"]
         if lv.get((self._tag, key)) != value:
             lv[(self._tag, key)] = value
-            self._emit({"type": "variable_value", "key": key, "value": value})
+            event = {"type": "variable_value", "key": key, "value": value}
+            if frame_ts is not None:
+                event["frame_ts"] = frame_ts
+            self._emit(event)
 
     def state_signal_discovered(self, key):
         # Record the state signal so a later write can never silently reclassify it (command_found).
         self._shared["state_keys"].add((self._tag, key))
         self._emit({"type": "state_signal_discovered", "key": key})
 
-    def phase(self, tracker, state_key=None):
+    def phase(self, tracker, state_key=None, frame_ts=None):
         # state_key identifies which state variable this phase refers to (prep for multi-state;
         # today there is one). `level` is that variable's current value, not a domain "level".
+        # ``frame_ts`` is the capture timestamp of the sample that produced the change, when known.
         if tracker.phase != self._shared["last_phase"].get(self._tag):
             self._shared["last_phase"][self._tag] = tracker.phase
             level = tracker.last_level
-            self._emit({
+            event = {
                 "type": "phase", "state_key": state_key, "phase": tracker.phase,
                 "confidence": round(tracker.confidence, 3),
                 "level": round(level, 4) if level is not None else None,
-            })
+            }
+            if frame_ts is not None:
+                event["frame_ts"] = frame_ts
+            self._emit(event)
 
     def grammar_learned(self, target, phase):
         self._emit({"type": "grammar_learned", "target": target, "phase": phase})
 
-    def verdict(self, target, phase, v):
-        self._emit({"type": "verdict", "target": target, "phase": phase,
-                    "result": v.verdict, "rule": v.rule})
+    def verdict(self, target, phase, v, evt=None, tracker=None, datatype=(None, False)):
+        """One judged write, with its evidence: what was written (target, value, datatype), the
+        inferred state it was judged against (phase, confidence, transitioning), the verdict
+        (result, rule, learned fraction, reason), and where and when (client, frame_ts). The
+        first four fields are the pre-record shape; everything after is the evidence."""
+        event = {"type": "verdict", "target": target, "phase": phase,
+                 "result": v.verdict, "rule": v.rule}
+        if evt is not None:
+            event["value"] = evt.value
+            event["datatype"] = datatype[0]
+            event["datatype_certain"] = bool(datatype[1])
+            event["client"] = evt.client
+            event["frame_ts"] = evt.timestamp
+        if tracker is not None:
+            event["confidence"] = round(tracker.confidence, 3)
+            event["transitioning"] = bool(tracker.transitioning)
+        event["learned_fraction"] = v.learned_fraction
+        event["reason"] = v.reason
+        self._emit(event)
 
 
 # --------------------------------------------------------------------------- tshark I/O
@@ -795,8 +905,8 @@ def _feed_or_judge(extractor, evt, tracker, grammar, learner=None, log=None, emi
             if resampler is not None and now is not None:
                 resampler.real(s, now)
             if emitter:
-                emitter.phase(tracker, state_key)     # de-duped: emits only on phase change
-                emitter.variable_value(state_key, s)  # live current value of the state variable
+                emitter.phase(tracker, state_key, frame_ts=evt.timestamp)     # de-duped: only on change
+                emitter.variable_value(state_key, s, frame_ts=evt.timestamp)  # live value of the state variable
         return None
     if evt.op == "WRITE_REQUEST" and evt.target is not None:
         if emitter:
@@ -808,7 +918,7 @@ def _feed_or_judge(extractor, evt, tracker, grammar, learner=None, log=None, emi
             # state signal. The datatype source is per-protocol; the observer only asks (null-safe).
             emitter.command_found(key, *_write_datatype(extractor, evt))
             # last written value of this command variable (key as group_flows produced it)
-            emitter.variable_value(key, evt.value)
+            emitter.variable_value(key, evt.value, frame_ts=evt.timestamp)
         if learner is not None:
             learned = learner.observe(evt.target, tracker.phase, tracker.confidence, tracker.transitioning)
             if emitter and learned:
@@ -818,10 +928,11 @@ def _feed_or_judge(extractor, evt, tracker, grammar, learner=None, log=None, emi
         if log:
             # Name the silo (evt.server) so a verdict is attributable to an endpoint: a COHERENT at
             # one silo and an INCOHERENT at another for the same key are two grammars, not a conflict.
-            log(f"[{v.verdict:11s}] {evt.server} write {evt.target} phase={tracker.phase} "
+            log(f"[{v.verdict:11s}] {evt.server} write {evt.target}={evt.value} phase={tracker.phase} "
                 f"conf={tracker.confidence:.2f} | {v.rule} | {v.reason}")
         if emitter:
-            emitter.verdict(evt.target, tracker.phase, v)
+            emitter.verdict(evt.target, tracker.phase, v, evt=evt, tracker=tracker,
+                            datatype=_write_datatype(extractor, evt))
         return v
     return None
 
@@ -1022,6 +1133,24 @@ def _route_or_report_late(emitter, silos_by_ep, reported_late, endpoint):
     return None
 
 
+def silo_manifest(silo):
+    """The per-silo facts worth keeping in run.json: identity, evaluability, the discovered state
+    key and the calibration that produced the phase config (so a verdict can be traced back to the
+    numbers it was judged with)."""
+    out = {"protocol": _protocol_label(silo.extractor) if silo.extractor is not None else None,
+           "evaluable": silo.evaluable, "reason": silo.reason, "state_key": silo.state_key,
+           "observe_events": len(silo.events)}
+    c = silo.calib
+    if c is not None:
+        out["calibration"] = {
+            "measurable": c.measurable, "dt": c.dt, "period_samples": c.period_samples,
+            "reversals": c.reversals, "rate": c.rate, "noise_smooth": c.noise_smooth,
+            "move": c.move, "noise": c.noise, "warning": c.warning,
+            "config": vars(c.config),
+        }
+    return out
+
+
 class _Run:
     """The observe -> learn -> evaluate pipeline as ONE selector-loop driver over N tshark.
 
@@ -1032,8 +1161,9 @@ class _Run:
     evaluating can never be absorbed into "normal".
     """
 
-    def __init__(self, sources, args, emitter, log):
+    def __init__(self, sources, args, emitter, log, record=None):
         self.args, self.emitter, self.log = args, emitter, log
+        self.record = record              # RunRecord, or None with --no-run-dir
         self.extractors = [s.extractor for s in sources]
         self.phase = "observe"
         now = time.time()
@@ -1083,8 +1213,8 @@ class _Run:
             for v in r.catch_up(now):
                 silo.tracker.update(v)
                 if silo.emitter:
-                    silo.emitter.phase(silo.tracker, silo.state_key)
-                    silo.emitter.variable_value(silo.state_key, v)
+                    silo.emitter.phase(silo.tracker, silo.state_key, frame_ts=round(now, 6))
+                    silo.emitter.variable_value(silo.state_key, v, frame_ts=round(now, 6))
 
     # -- between-select deadline check (advances the phase) ---------------
     def tick(self):
@@ -1137,6 +1267,10 @@ class _Run:
                              reason=f"claimed {ext.name}, no evaluable silo")
         self.silos_by_ep = {s.endpoint: s for s in self.silos if s.endpoint}
         self.evaluable = [s for s in self.silos if s.evaluable]
+        if self.record is not None:
+            for s in self.silos:
+                self.record.silo(s.endpoint, **silo_manifest(s))
+            self.record.update(observe_ended_at=utc_now_iso())
         if not self.evaluable:
             log("[silo] no evaluable silo; extend --observe to cover >=1.5 process cycles")
             self.rc, self.stop = 2, True
@@ -1168,6 +1302,10 @@ class _Run:
         for s in self.evaluable:
             s.doc = s.learner.export_document()
             s.grammar = s.doc.get("grammar", {})
+            if self.record is not None:
+                self.record.silo(s.endpoint, grammar=s.doc)
+        if self.record is not None:
+            self.record.update(learn_ended_at=utc_now_iso())
             for k, info in s.grammar.items():
                 log(f"[learn:{s.endpoint}] {k}: coherent_phases={info.get('learned_coherent_phases')} "
                     f"from {info.get('total_writes_observed')} writes")
@@ -1232,6 +1370,12 @@ def main(argv=None):
     ap.add_argument("--respawn-backoff-cap", type=float, default=30.0,
                     help="cap (seconds) on the exponential respawn backoff 1,2,4,8...  (default 30). The "
                          "first retry always waits, so a genuinely-down interface cannot fork-loop.")
+    ap.add_argument("--runs-dir", default="runs",
+                    help="directory under which each run writes its record: <runs-dir>/<run_id>/ with "
+                         "run.json (manifest), events.jsonl (the full stream) and verdicts.jsonl "
+                         "(one record per verdict with run_id and sequence number). Default ./runs.")
+    ap.add_argument("--no-run-dir", action="store_true",
+                    help="do not write a run record (stdout stream only)")
     ap.add_argument("--emit-json", action=argparse.BooleanOptionalAction, default=True,
                     help="emit structured discovery events as JSON Lines on stdout (human logs go to "
                          "stderr). --no-emit-json restores plain human output on stdout, no JSON.")
@@ -1240,7 +1384,22 @@ def main(argv=None):
     # With JSON emission on, stdout is a pure JSON stream and human logs go to stderr, so
     # `liscere_observe.py 2>/dev/null | ui` yields clean JSON. With --no-emit-json, behave as before.
     log = (lambda m: print(m, file=sys.stderr)) if args.emit_json else print
-    emitter = Emitter(enabled=args.emit_json)
+    record = None if args.no_run_dir else RunRecord(args.runs_dir)
+    if record is not None:
+        record.update(args=vars(args), source={"kind": "live", "iface": args.iface}, clock="wall",
+                      python=sys.version.split()[0], tshark=tshark_version())
+        log(f"[run] {record.run_id} -> {record.path}")
+    emitter = Emitter(enabled=args.emit_json, sink=(record.sink if record is not None else None))
+    rc = None                                  # None in the manifest means the run did not end normally
+    try:
+        rc = _main_run(args, emitter, log, record)
+    finally:
+        if record is not None:
+            record.close(rc)
+    return rc
+
+
+def _main_run(args, emitter, log, record):
 
     # PROBE: discover which protocols are on the wire; surface traffic no extractor can read.
     claimed, _unclaimed = probe_layers(args.iface, args.probe, log=log, emitter=emitter)
@@ -1287,7 +1446,7 @@ def main(argv=None):
         return 2
     log(f"[run] {len(sources)} extractor(s): {', '.join(s.extractor.name for s in sources)}")
 
-    run = _Run(sources, args, emitter, log)
+    run = _Run(sources, args, emitter, log, record=record)
     # The supervisor respawns a dead tshark under a bounded backoff so a child death (the weekend soak
     # saw one rc=1 exit hours in) is survived, not fatal. The critical state -- tracker, grammar,
     # calibration, silos -- lives in Python and is untouched by a respawn; only tshark's dissector
