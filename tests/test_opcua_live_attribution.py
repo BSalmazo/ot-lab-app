@@ -20,10 +20,10 @@ from types import SimpleNamespace
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
 
-from otlab_core.extractors.opcua import OpcUaExtractor, _FIELDS
-from otlab_core.extractors.modbus import ModbusExtractor
-from otlab_core.extractors.s7 import S7CommExtractor
 from otlab_core.engine.phase_tracker import PhaseTracker
+from otlab_core.extractors.modbus import ModbusExtractor
+from otlab_core.extractors.opcua import _FIELDS, OpcUaExtractor
+from otlab_core.extractors.s7 import S7CommExtractor
 
 _IDX = {name: i for i, name in enumerate(_FIELDS)}
 _failures = []

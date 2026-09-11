@@ -13,9 +13,10 @@ _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
 sys.path.insert(0, os.path.join(_REPO, "scripts"))
 
+import liscere_observe as obs
+
 from otlab_core.contract import NormalizedEvent
 from otlab_core.extractors.opcua import OpcUaExtractor
-import liscere_observe as obs
 
 _failures = []
 

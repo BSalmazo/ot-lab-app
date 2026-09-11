@@ -23,8 +23,9 @@ _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
 sys.path.insert(0, os.path.join(_REPO, "scripts"))
 
-from otlab_core.extractors.s7 import S7CommExtractor
 import liscere_observe as obs
+
+from otlab_core.extractors.s7 import S7CommExtractor
 
 # S7 _FIELDS order (21 columns).
 _COLS = [

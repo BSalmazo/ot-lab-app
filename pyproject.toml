@@ -1,0 +1,69 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "liscere"
+version = "0.1.0"
+description = "Liscere passive observer: infers the operational state of an industrial process from mirrored control traffic and judges whether each supervisory write is coherent with it."
+readme = "README.md"
+license = { file = "LICENSE" }
+# The Raspberry Pi is assumed to run Python 3.11 (Raspberry Pi OS Bookworm). Confirm on the bench
+# and lower this to 3.9 if the Pi runs Bullseye; the code needs nothing newer than 3.9.
+requires-python = ">=3.11"
+# The engine and the observer run on the standard library plus the system tshark binary.
+dependencies = []
+
+[project.optional-dependencies]
+# Only the terminal UI needs a third-party package.
+ui = ["rich>=13"]
+
+[project.scripts]
+liscere-observe = "liscere.observe:main"
+liscere-probe = "liscere.probe:main"
+liscere-ui = "liscere.ui:main"
+
+[project.urls]
+Repository = "https://github.com/LiscereSecurity/OT-Lab"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "pre-commit>=3.7",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["otlab_core", "liscere"]
+
+[tool.hatch.build.targets.sdist]
+include = ["otlab_core", "liscere", "scripts", "tests", "profiles", "README.md", "LICENSE", "pyproject.toml"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+# Start narrow: undefined names, unused imports, import order, syntax-level errors. Style rules that
+# would touch existing engine code for cosmetic reasons (line length, semicolons, one-letter names)
+# are deliberately not enabled yet; widen the set in its own PR once the tree is clean.
+select = ["F", "I", "E4", "E9"]
+[tool.ruff.lint.per-file-ignores]
+# Tests and shims put the repository root on sys.path before importing the package.
+"tests/*" = ["E402"]
+"scripts/*" = ["E402"]
+
+[tool.mypy]
+files = ["otlab_core", "liscere"]
+python_version = "3.11"
+ignore_missing_imports = true
+# Permissive baseline. The current error count is recorded in CI (non-blocking); ratchet to zero
+# in follow-up PRs, then make the step blocking.
+check_untyped_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# tests/test_scripts.py runs every tests/test_*.py as the standalone script it is, so the
+# existing script-style tests are exercised without being rewritten.
+addopts = "-q"

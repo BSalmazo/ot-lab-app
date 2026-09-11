@@ -21,16 +21,15 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from otlab_core.config import PhaseConfig
-from otlab_core.engine.phase_tracker import PhaseTracker
 from otlab_core.engine.autocalibrate import (
-    calibrate_phase_config,
-    _moving_average,
     _move,
+    _moving_average,
     _noise,
-    _half_cycle_period,
-    unfold,
+    calibrate_phase_config,
     learn_phase_config,
+    unfold,
 )
+from otlab_core.engine.phase_tracker import PhaseTracker
 
 STEP = 0.167      # per-sample ramp magnitude -> move
 HALF = 588        # half-cycle length in samples -> period P
