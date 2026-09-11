@@ -560,8 +560,13 @@ class S7CommExtractor(ProtocolExtractor):
 
     # -- discovery surface (mirrors Modbus) -----------------------------------------------------
 
-    def extract_state_samples(self, evt: NormalizedEvent) -> List[float]:
-        """Read-response values as the process-variable series (all items, in wire order); else []."""
+    def extract_state_samples(self, evt: NormalizedEvent, state_key: Optional[str] = None) -> List[float]:
+        """Read-response values as the process-variable series (all items, in wire order); else [].
+
+        ``state_key`` is accepted for the observer's uniform live routing but NOT honoured here: S7 is
+        a polled request/response transport (read responses attribute via the config key already), so
+        there is no multi-item publish to route and no per-poll silence. Passing it changes nothing.
+        """
         if evt.op != "READ_RESPONSE":
             return []
         want = getattr(self.config, "state_signal_key", None) if self.config else None

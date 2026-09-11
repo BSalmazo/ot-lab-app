@@ -289,7 +289,7 @@ class ModbusExtractor(ProtocolExtractor):
             return [(register, value)]
         return []
 
-    def extract_state_samples(self, evt: NormalizedEvent) -> List[float]:
+    def extract_state_samples(self, evt: NormalizedEvent, state_key: Optional[str] = None) -> List[float]:
         """The process-variable sample(s) this event carries, in wire order; else [].
 
         The state signal is the value(s) of FC3 read responses. With a configured
@@ -297,6 +297,11 @@ class ModbusExtractor(ProtocolExtractor):
         value is a state sample (valid when a single register is polled, as on the bench). This
         mirrors the OPC UA extractor's extract_state_samples and replaces the old element-[5]
         LEVEL_REGISTER hardcode.
+
+        ``state_key`` is accepted for the observer's uniform live routing but NOT honoured here:
+        Modbus is a polled request/response transport that carries one register's value per read
+        response, so there is no multi-item message to route and no per-poll silence. Passing it
+        changes nothing (the bench polls a single register); attribution stays via the config.
         """
         if evt.op != "READ_RESPONSE" or evt.raw.get("exception_code") is not None:
             return []

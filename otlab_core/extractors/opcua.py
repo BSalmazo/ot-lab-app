@@ -10,8 +10,23 @@ Field names and semantics are EMPIRICALLY CONFIRMED against the lab's own pcaps 
   These are MULTI-VALUED lists under ``-E occurrence=a``: e.g. numeric "847832407,0,23",
   nsindex "0,4". The first element (ns=0) is the request AuthenticationToken, NOT the target;
   the target is the element whose nsindex != 0 (here ns=4, i=23). Never take element [0].
-- Value = the typed field indicated by ``opcua.variant.has_value`` (0x0a=Float; the tank level is
-  a Float ~47.x). Float -> opcua.Float, Int32 -> opcua.Int32, else opcua.Value.
+- Value = the typed field the Variant Type declares (``opcua.variant.has_value``, e.g. 0x0a=Float).
+  Read GENERICALLY: the type byte dispatches to the matching field (Float->opcua.Float,
+  Double->opcua.Double, every Int/UInt width, Byte/SByte, Boolean->opcua.Boolean, ...), never a
+  Float+Int32 hardcode; an unmapped/array type is reported, not guessed (see _VARIANT_COL).
+- A subscription PublishResponse (829) batches an array of MonitoredItemNotification, each a
+  (ClientHandle, Variant value). tshark emits parallel positional lists under -E occurrence=a --
+  opcua.ClientHandle and opcua.variant.has_value zip item-for-item, the value in the type's own
+  field -- so the extractor splits ONE flow per handle (opcua:sub:<handle>) instead of fusing every
+  monitored node into one serpentining signal. The handle number is the honest key: the
+  handle->NodeId->name map lives in CreateMonitoredItems at setup, which may predate the capture.
+  Types are MIXED within one message and dispatched PER ITEM. Bench-confirmed (180s full-cycle
+  capture): the PLC's Real tags are Float (0x0a -> opcua.Float), its Int tags are Int16
+  (0x04 -> opcua.Int16, NOT Int32 -- a live -e opcua.Int32 was empty while the ints changed). One
+  observed message: ClientHandle 1,2,6,7,7 / has_value 0x0a,0x04,0x04,0x0a,0x0a. Over a full cycle
+  seven handles (the seven tags) appeared; a command only publishes when it changes, so a short
+  one-phase capture legitimately sees only the moving signals -- the observe window must cover a
+  full process cycle (the same >=1.5-cycle rule the discover logic already applies).
 - Under SignAndEncrypt the MSG body is opaque: service/nodeid/value are empty; only the envelope
   (transport.type, transport.scid, size) survives -> security_mode "encrypted".
 - Security policy / mode fields (opcua.security.spu / opcua.MessageSecurityMode) live in the OPN
@@ -108,7 +123,15 @@ _FIELDS = [
     "opcua.UInt64",            # 23
     "opcua.Double",            # 24
     "opcua.String",            # 25
+    "opcua.ClientHandle",      # 26  per-MonitoredItemNotification handle (subscription publishes)
+    "opcua.AttributeId",       # 27  per-WriteValue attribute (13=Value); its count = N write targets
 ]
+
+_CLIENTHANDLE_COL = 26     # opcua.ClientHandle: the per-item handle list in a PublishResponse
+_ATTRIBUTEID_COL = 27      # opcua.AttributeId: one per WriteValue -> count = number of write targets
+_VARIANT_TYPE_COL = 13     # opcua.variant.has_value: the per-item Variant Type byte (aligned with above)
+_VARIANT_ARRAY_BIT = 0x80  # Variant encoding byte: bit 7 = IsArray; low 6 bits = BuiltInType id
+_VARIANT_BUILTIN_MASK = 0x3F
 
 
 def _to_int(value, default=None):
@@ -178,6 +201,28 @@ def _parse_bool(raw):
         return 0
     n = _to_int(s)
     return None if n is None else (1 if n != 0 else 0)
+
+
+def _value_list(cols: List[str], col: int, kind: str) -> list:
+    """The positional value list for one variant column, parsed by its FT kind (float/int/bool/str).
+
+    tshark emits one comma-separated list PER field under -E occurrence=a, so opcua.Float holds only
+    the Float items, opcua.Int32 only the Int32 items, etc. Callers zip these by a per-column cursor
+    to reconstruct each MonitoredItemNotification's value in wire order. String is split on comma too
+    (a value containing a comma would split wrong -- acceptable for the numeric process signals this
+    targets; noted, not silently wrong)."""
+    raw = _col(cols, col)
+    if raw is None or str(raw).strip() == "":
+        return []
+    if kind == "float":
+        return _float_list(raw)
+    if kind == "int":
+        return _int_list(raw)
+    if kind == "bool":
+        return [_parse_bool(tok) for tok in str(raw).split(",") if tok.strip() != ""]
+    if kind == "str":
+        return list(str(raw).split(","))
+    return _float_list(raw)
 
 
 def _as_number(value):
@@ -262,6 +307,25 @@ class OpcUaExtractor(ProtocolExtractor):
         # A response may carry MANY Float samples in one message (occurrence=a comma-list),
         # in wire order (first = older, last = newest). Keep them ALL; never assume a count.
         float_samples = _float_list(_col(cols, 10))
+        # A subscription PublishResponse carries per-item (ClientHandle, Variant, value); split it into
+        # per-handle items so each monitored node is its OWN signal (opcua:sub:<handle>) rather than
+        # fusing them into one serpentining flow. Empty for reads/writes (no ClientHandle on the wire).
+        sub_items, unhandled_variants = ([], [])
+        if op == "PUBLISH_RESPONSE":
+            sub_items, unhandled_variants = self._parse_sub_items(cols)
+        # A WriteRequest carries N (target NodeId, Variant value) write items -- the command path. Split
+        # them out (see _parse_write_items) so each written node is its own command flow, and use the
+        # first item to fill the event's single target/value/variant (backward-compatible with the
+        # earlier single-target parse and with directly-built write events that have no AttributeId).
+        write_items = []
+        if op == "WRITE_REQUEST":
+            write_items, wu = self._parse_write_items(cols)
+            if write_items:
+                unhandled_variants = unhandled_variants + wu
+                target = write_items[0]["target"]
+                value = write_items[0]["value"]
+                value_is_float = isinstance(value, float)
+                variant = write_items[0]["variant_type"] if write_items[0]["variant_type"] is not None else variant
 
         is_req = op.endswith("REQUEST")
         is_resp = op.endswith("RESPONSE")
@@ -304,6 +368,9 @@ class OpcUaExtractor(ProtocolExtractor):
                 "variant_type": variant,
                 "value_is_float": value_is_float,
                 "float_samples": float_samples,   # ALL Float samples in this message, wire order
+                "sub_items": sub_items,           # per-handle [(handle, variant_type, value)] (publishes)
+                "write_items": write_items,       # per-target [(target, variant_type, value)] (writes)
+                "unhandled_variants": unhandled_variants,  # variant type ids seen but not yet readable
                 "transport_type": transport_type,
             },
         )
@@ -355,29 +422,182 @@ class OpcUaExtractor(ProtocolExtractor):
         except Exception:
             return None, is_float
 
-    def extract_state_samples(self, evt: NormalizedEvent) -> List[float]:
-        """ALL process-variable samples carried by this event, in wire order (oldest -> newest).
+    def _parse_sub_items(self, cols: List[str]):
+        """Split a subscription PublishResponse into per-MonitoredItemNotification items.
 
-        A single OPC UA response can batch several Float samples in one message (the
-        ``opcua.Float`` comma-list under ``-E occurrence=a``). This returns every one of them,
-        in order, making NO assumption about how many a message carries or about the sampling
-        rate: 1, 2, ... N are all returned as-is; a keep-alive with no Float returns ``[]``.
+        Each notification carries a ClientHandle and a DataValue whose Variant holds one value. Under
+        -E occurrence=a the dissector emits parallel, POSITIONALLY-ALIGNED lists: opcua.ClientHandle
+        and opcua.variant.has_value (the per-item Variant Type byte) run item-for-item, exactly like
+        Modbus regnum16/regval. The value itself lives in the TYPE's own field (opcua.Float holds only
+        the Float items, opcua.Int32 only the Int32 items, ...), so a per-column cursor reconstructs
+        each item's value in wire order -- generic across variant types, no Float/Int hardcode.
 
-        Replaces Modbus "element [5]": the process variable is the Float value(s) carried in a
-        read/publish response.
-
-        DEBT D1 (single-tag assumption): with no configured state_signal_node we infer the state
-        signal as "the Float(s) in a read/publish response". Valid ONLY because a single tag is
-        subscribed. For multiple monitored items, a PublishResponse conveys values keyed by
-        ClientHandle (not NodeId), so correct attribution needs a ClientHandle->NodeId map built
-        from CreateMonitoredItems. Not handled here.
+        Returns (items, unhandled) where each item is {handle, variant_type, value, unhandled}. An
+        array variant (encoding bit 7) or a BuiltInType with no mapped field is REPORTED, not silently
+        dropped: its item is kept with value=None and unhandled=True, and its type id is collected in
+        `unhandled`, so a signal of a type this extractor cannot yet read still surfaces as a handle.
+        The handle number is the honest key -- ClientHandle->NodeId->name lives in CreateMonitoredItems
+        at setup, which may predate the capture; we never invent a name.
         """
-        if evt.op not in ("READ_RESPONSE", "PUBLISH_RESPONSE"):
-            return []
-        node = self.config.state_signal_node
-        if node and evt.target is not None and evt.target != node:
-            return []
-        return list(evt.raw.get("float_samples") or [])
+        handles = _int_list(_col(cols, _CLIENTHANDLE_COL))
+        if not handles:
+            return [], []
+        values, unhandled = self._zip_values(cols, _int_list(_col(cols, _VARIANT_TYPE_COL)))
+        items = []
+        for i, handle in enumerate(handles):
+            vt, value, unh = values[i] if i < len(values) else (None, None, True)
+            items.append({"handle": handle, "variant_type": vt, "value": value, "unhandled": unh})
+        return items, unhandled
+
+    @staticmethod
+    def _zip_values(cols: List[str], type_bytes: list):
+        """Reconstruct each item's value from the per-Variant-Type byte list, in wire order.
+
+        Shared by the subscription (per ClientHandle) and write (per NodeId) paths: given the parallel
+        ``opcua.variant.has_value`` list (one Variant Type byte per item), read each item's value from
+        that type's OWN field via a per-column cursor (opcua.Float holds only the Float items, etc.).
+        Returns [(variant_type, value, unhandled)] in order. An array variant (encoding bit 7) or a
+        BuiltInType with no mapped field is REPORTED (value=None, unhandled=True, id collected), never
+        silently dropped -- the same honesty as UNCLAIMED. Generic across variant types, no hardcode.
+        """
+        out: list = []
+        unhandled: list = []
+        col_lists: dict = {}   # column index -> parsed value list (parsed once)
+        cursors: dict = {}     # column index -> next position within that type's list
+        for raw_vt in type_bytes:
+            builtin = raw_vt & _VARIANT_BUILTIN_MASK if raw_vt is not None else None
+            is_array = raw_vt is not None and bool(raw_vt & _VARIANT_ARRAY_BIT)
+            mapping = None if (builtin is None or is_array) else _VARIANT_COL.get(builtin)
+            if mapping is None:                          # array, unknown type, or missing type byte
+                unhandled.append(raw_vt)
+                out.append((raw_vt, None, True))
+                continue
+            col, kind = mapping
+            if col not in col_lists:
+                col_lists[col] = _value_list(cols, col, kind)
+                cursors[col] = 0
+            idx = cursors[col]
+            cursors[col] += 1
+            vals = col_lists[col]
+            out.append((builtin, vals[idx] if idx < len(vals) else None, False))
+        return out, unhandled
+
+    @staticmethod
+    def _ns_align(numerics: list, nsindexes: list) -> list:
+        """A namespace index per opcua.nodeid.numeric position (default ns=0).
+
+        The two lists differ in length: a NodeId in ns=0 (or a TwoByte encoding) carries no explicit
+        namespace and emits no nsindex, so the nsindexes tail-align onto the numerics -- the SAME
+        rule _select_target already uses (numeric "847832407,0,23", nsindex "0,4" -> the 23 is ns=4).
+        A position with no aligned nsindex is ns=0 (a plain-integer NodeId, e.g. the write target 45).
+        """
+        ns_by_pos = [0] * len(numerics)
+        if nsindexes:
+            offset = len(numerics) - len(nsindexes)
+            for j, ns in enumerate(nsindexes):
+                pos = offset + j
+                if 0 <= pos < len(numerics):
+                    ns_by_pos[pos] = ns
+        return ns_by_pos
+
+    def _parse_write_items(self, cols: List[str]):
+        """Split a WriteRequest into per-target (node, value) write items.
+
+        There is NO write-target-specific NodeId field in the dissector (verified with tshark -G
+        fields); the WriteValue NodeIds share the generic opcua.nodeid.numeric list with the request
+        envelope (AuthenticationToken, a TypeId). But every WriteValue emits an ``opcua.AttributeId``
+        (13 = Value), so N = count(AttributeId) is the authoritative number of write targets, and the
+        targets are the LAST N of nodeid.numeric -- the leading entries are the envelope. That is far
+        safer than a hardcoded "skip the first two": the count comes from the structure, not a guess.
+        Values dispatch through the shared variant table and pair to targets by position (value None
+        for a value-less write -- the command still surfaces). Returns (items, unhandled), each item
+        {target, variant_type, value, unhandled}; empty when no AttributeId (caller falls back to the
+        single-target _select_target path for directly-built events).
+        """
+        n = len(_int_list(_col(cols, _ATTRIBUTEID_COL)))
+        if n == 0:
+            return [], []
+        numerics = _int_list(_col(cols, 8))
+        targets = numerics[-n:] if len(numerics) >= n else numerics
+        base = len(numerics) - len(targets)
+        ns_by_pos = self._ns_align(numerics, _int_list(_col(cols, 9)))
+        values, unhandled = self._zip_values(cols, _int_list(_col(cols, _VARIANT_TYPE_COL)))
+        items = []
+        for i, num in enumerate(targets):
+            ns = ns_by_pos[base + i] if (base + i) < len(ns_by_pos) else 0
+            vt, value, unh = values[i] if i < len(values) else (None, None, True)
+            items.append({"target": f"ns={ns};i={num}", "variant_type": vt, "value": value, "unhandled": unh})
+        return items, unhandled
+
+    @staticmethod
+    def resolve_state_key(state_key) -> Optional[int]:
+        """Resolve a discovered state flow key to its concrete ClientHandle (int), or None.
+
+        The live phase feed attributes to ONE variable. The discovered key is the flow key
+        ``group_flows`` produces ("opcua:sub:<handle>") or a bare handle; both resolve to the integer
+        handle. Anything else returns None so the observer can FAIL LOUD rather than silently starve
+        the tracker (return nothing) or leak every handle (the D1 misattribution). Resolution is
+        exact and format-checked, so a drift between the flow-key format and this filter cannot
+        degrade quietly.
+        """
+        if state_key is None:
+            return None
+        s = str(state_key).strip()
+        prefix = "opcua:sub:"
+        if s.startswith(prefix):
+            s = s[len(prefix):]
+        try:
+            return int(s)
+        except (TypeError, ValueError):
+            return None
+
+    def extract_state_samples(self, evt: NormalizedEvent, state_key: Optional[str] = None) -> List[float]:
+        """The process-variable sample(s) this event carries, in wire order (oldest -> newest).
+
+        A subscription PublishResponse batches per-item (ClientHandle, value): each handle is its OWN
+        signal. The live observer passes the discovered state flow key as ``state_key`` so ONLY that
+        ClientHandle's notifications become samples -- correct attribution across a multi-item
+        subscription, even while the state signal HOLDS and other handles keep publishing (the D1
+        misattribution otherwise collapses the held value to another variable's 0/1). ``state_key``
+        takes precedence over the configured ``state_signal_node``; when neither is set every readable
+        item is a sample (the single-item default / discovery pass). A key that is SET but does not
+        resolve to a handle yields NO samples (never every handle): the observer resolves and logs
+        that loudly at silo setup, so it is never a silent leak.
+
+        A ReadResponse carries one value (or a Float batch) the same way. A publish with no per-item
+        breakdown (no ClientHandle on the wire, or a synthetic event) falls back to the flat
+        ``opcua.Float`` list as a single fused signal, unchanged. Numeric types become floats; a
+        String / unreadable variant contributes no sample. Keep-alive -> [].
+        """
+        if evt.op == "PUBLISH_RESPONSE":
+            items = evt.raw.get("sub_items")
+            if items:
+                want = state_key if state_key is not None else self.config.state_signal_node
+                if want is None:
+                    handle = None                        # no attribution requested: every item (discovery / default)
+                else:
+                    handle = self.resolve_state_key(want)
+                    if handle is None:
+                        return []                        # requested but unresolvable: nothing, never leak all
+                out: List[float] = []
+                for item in items:
+                    if handle is not None and item["handle"] != handle:
+                        continue
+                    num = _as_number(item.get("value"))
+                    if num is not None:
+                        out.append(num)
+                return out
+            # legacy / no ClientHandle: the flat Float list is the single fused signal.
+            node = self.config.state_signal_node
+            if node and evt.target is not None and evt.target != node:
+                return []
+            return list(evt.raw.get("float_samples") or [])
+        if evt.op == "READ_RESPONSE":
+            node = self.config.state_signal_node
+            if node and evt.target is not None and evt.target != node:
+                return []
+            return list(evt.raw.get("float_samples") or [])
+        return []
 
     def extract_state_signal(self, evt: NormalizedEvent) -> Optional[float]:
         """The single newest state sample, or None.
@@ -395,12 +615,17 @@ class OpcUaExtractor(ProtocolExtractor):
         Protocol-specific ROLE HINTS reinforce (they do not replace) the core's behavioural
         decision (otlab_core.engine.discover):
 
-        - PublishResponse (829) Floats -> ONE flow, role_hint="telemetry" (the state candidate),
-          unfolding each message's multi-sample Float list into the full per-sample series.
-          DEBT D1 (single-tag): all publish Floats are treated as one flow. Multi-tag correlation
-          (ClientHandle -> NodeId from CreateMonitoredItems) is level 4b.
-        - WriteRequest (673) -> flows keyed by target NodeId (the ns!=0 element, from the existing
-          tail-aligned target parse), role_hint="command".
+        - PublishResponse (829) -> ONE flow PER ClientHandle, key "opcua:sub:<handle>",
+          role_hint="telemetry" (each a state candidate). The core discovers which handle is the
+          state signal, exactly as it does for s7:db1:0 / modbus:hr:2 -- no domain knowledge here.
+          A handle whose variant type this extractor cannot read yet still yields its flow (reported,
+          not dropped), with its unknown type id shown. A publish with no per-item breakdown (no
+          ClientHandle, or a synthetic event) falls back to the single fused "opcua:publish:telemetry".
+        - WriteRequest (673) -> ONE command flow PER written NodeId, key "opcua:write:ns=<n>;i=<id>",
+          role_hint="command", value dispatched through the variant table. N targets = the last N of
+          opcua.nodeid.numeric (N = count of AttributeId), so the request envelope is not mistaken for
+          a target; multi-node writes yield N flows. A directly-built event (no AttributeId) falls back
+          to the single target on evt.target.
         - ReadResponse (634) -> a "read" flow, role_hint="read" (metadata).
         """
         from ..engine.discover import Flow  # local import: keep extractor import lightweight
@@ -412,27 +637,71 @@ class OpcUaExtractor(ProtocolExtractor):
         variants: dict = {}   # key -> list[variant_type id]
         servers: dict = {}    # key -> observed server endpoint "ip:port" (from the traffic)
         for evt in events:
-            key = self.variable_key(evt)
-            if key is None:
-                continue
             if evt.op == "PUBLISH_RESPONSE":
-                roles.setdefault(key, "telemetry")
-                if evt.server:
-                    servers.setdefault(key, evt.server)
-                for s in self.extract_state_samples(evt):
-                    samples.setdefault(key, []).append((evt.timestamp, float(s)))
-            elif evt.op == "WRITE_REQUEST":
-                # FIX #1: the command flow exists as soon as its target NodeId is seen — the same
-                # target-based gate the evaluator uses — so a command ALWAYS yields a variable_found
-                # (hence a VARIABLES row), even when its value did not parse to a number (unknown
-                # type / encrypted). A numeric value, when present, is recorded as a sample.
+                # One flow per ClientHandle. Each item is read exactly ONCE (positional), so the two
+                # notifications a subscription may batch for one handle are two genuine samples, kept
+                # both -- never one value counted twice.
+                items = evt.raw.get("sub_items")
+                if items:
+                    for item in items:
+                        key = f"opcua:sub:{item['handle']}"
+                        roles.setdefault(key, "telemetry")
+                        if evt.server:
+                            servers.setdefault(key, evt.server)
+                        vt = item.get("variant_type")
+                        if vt is not None:               # keep the type even for an unreadable item,
+                            variants.setdefault(key, []).append(vt)   # so its flow reports its type id
+                        num = _as_number(item.get("value"))
+                        if num is not None:
+                            samples.setdefault(key, []).append((evt.timestamp, num))
+                else:
+                    key = "opcua:publish:telemetry"      # legacy / no ClientHandle: single fused flow
+                    roles.setdefault(key, "telemetry")
+                    if evt.server:
+                        servers.setdefault(key, evt.server)
+                    for s in self.extract_state_samples(evt):
+                        samples.setdefault(key, []).append((evt.timestamp, float(s)))
+                    vt = evt.raw.get("variant_type")
+                    if vt is not None:
+                        variants.setdefault(key, []).append(vt)
+                continue
+            if evt.op == "WRITE_REQUEST":
+                # One COMMAND flow per written NodeId. The command flow exists as soon as its target
+                # is seen (the same target-based gate the evaluator uses), so it ALWAYS yields a
+                # VARIABLES row even when the value did not parse (unknown type / encrypted); a numeric
+                # value, when present, is a sample. write_items is the split WriteRequest; a directly-
+                # built event (no AttributeId) falls back to the single target on evt.target.
+                witems = evt.raw.get("write_items")
+                if witems:
+                    for item in witems:
+                        wkey = f"opcua:write:{item['target']}"
+                        roles.setdefault(wkey, "command")
+                        if evt.server:
+                            servers.setdefault(wkey, evt.server)
+                        vt = item.get("variant_type")
+                        if vt is not None:
+                            variants.setdefault(wkey, []).append(vt)
+                        num = _as_number(item.get("value"))
+                        if num is not None:
+                            samples.setdefault(wkey, []).append((evt.timestamp, num))
+                    continue
+                key = self.variable_key(evt)
+                if key is None:
+                    continue
                 roles.setdefault(key, "command")
                 if evt.server:
                     servers.setdefault(key, evt.server)
                 num = _as_number(evt.value)
                 if num is not None:
                     samples.setdefault(key, []).append((evt.timestamp, num))
-            elif evt.op == "READ_RESPONSE":
+                vt = evt.raw.get("variant_type")
+                if vt is not None:
+                    variants.setdefault(key, []).append(vt)
+                continue
+            key = self.variable_key(evt)
+            if key is None:
+                continue
+            if evt.op == "READ_RESPONSE":
                 num = _as_number(evt.value)
                 if num is None:
                     continue
@@ -459,11 +728,18 @@ class OpcUaExtractor(ProtocolExtractor):
 
     @staticmethod
     def _modal_datatype(variant_ids):
-        """The declared type for a flow: the most common Variant Type across its samples."""
-        if not variant_ids:
+        """The declared type for a flow: the most common Variant Type across its samples. A variant
+        this extractor does not map yet is surfaced by its raw id ("variant:0x2d", uncertain) instead
+        of a bare "?", so an unreadable type is reported specifically -- the same honesty as UNCLAIMED.
+        """
+        ids = [v for v in variant_ids if v is not None]
+        if not ids:
             return None, False
-        modal = Counter(variant_ids).most_common(1)[0][0]
-        return variant_typename(modal)
+        modal = Counter(ids).most_common(1)[0][0]
+        name, certain = variant_typename(modal)
+        if name is None:
+            return f"variant:0x{int(modal) & 0xFF:02x}", False
+        return name, certain
 
     def variable_key(self, evt):
         """The flow/variable key an event belongs to (the same keys group_flows produces).
