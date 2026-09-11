@@ -14,7 +14,7 @@ WorkingDirectory=/var/lib/liscere
 # Every live run records its raw input under the run directory (--record is on by default), so any
 # bench run can be replayed exactly later. stdout is the JSON Lines stream (also kept in the run
 # record); stderr, the human log, goes to journald: journalctl -u liscere-observe.
-ExecStart=/opt/liscere/venv/bin/liscere-observe --iface ${IFACE} --probe ${PROBE} --observe ${OBSERVE} --learn ${LEARN} --runs-dir /var/lib/liscere/runs $EXTRA_ARGS
+ExecStart=/opt/liscere/venv/bin/liscere-observe --iface ${IFACE} --probe ${PROBE} --observe ${OBSERVE} --learn ${LEARN} --runs-dir /var/lib/liscere/runs --config /etc/liscere/liscere.toml $EXTRA_ARGS
 StandardOutput=null
 StandardError=journal
 # Exit codes: 2 nothing on the wire or no evaluable silo, 3 every capture lost. Both are worth a

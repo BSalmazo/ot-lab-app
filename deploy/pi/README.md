@@ -37,6 +37,7 @@ exists (planned), a failing check rolls the update back automatically.
 |---|---|
 | Code | `/opt/liscere/venv` (release wheels kept in `/opt/liscere/releases`) |
 | Arguments | `/etc/liscere/observe.env` |
+| Configuration (exclusions, pinned state signal) | `/etc/liscere/liscere.toml` |
 | Run records | `/var/lib/liscere/runs/<run_id>/` (`run.json`, `events.jsonl`, `verdicts.jsonl`, `capture/`) |
 | Human log | `journalctl -u liscere-observe -f` |
 | Service | `systemctl status liscere-observe` |

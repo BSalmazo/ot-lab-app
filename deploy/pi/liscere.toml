@@ -1,0 +1,12 @@
+# Liscere deployment configuration for this bench. Installed to /etc/liscere/liscere.toml; the
+# service passes it with --config. Every field is optional; an absent field means "nothing declared".
+
+[observer]
+# Flow keys never considered as the process state signal (still reported, marked EXCLUDED).
+# The bench's Temperature tag must be excluded during learning; its flow key (opcua:sub:<handle>)
+# is not yet known, so the list ships empty. Fill it in once found, e.g. ["opcua:sub:3"].
+exclude_flows = []
+
+# Pin the state signal instead of letting discovery choose (most distinct values). Leave unset to
+# discover. A pinned key that is not observed makes the silo non-evaluable, reported with the reason.
+# state_signal = "opcua:sub:1"

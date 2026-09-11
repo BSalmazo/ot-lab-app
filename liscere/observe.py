@@ -51,6 +51,7 @@ import selectors
 import subprocess
 import sys
 import time
+import tomllib
 import types
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
@@ -306,6 +307,15 @@ class Emitter:
                 "reversals": f.reversals,
             },
         })
+
+    def excluded_flow(self, flow):
+        # A flow removed from state-signal discovery by configuration. Surfaced with nature EXCLUDED
+        # (and its features, so a reader can still see what it looked like) rather than dropped.
+        self._shared["announced"][(self._tag, flow.key)] = "EXCLUDED"
+        self._emit({"type": "variable_found", "key": flow.key, "nature": "EXCLUDED",
+                    "datatype": getattr(flow, "datatype", None),
+                    "datatype_certain": bool(getattr(flow, "datatype_certain", False)),
+                    "features": None, "excluded": True})
 
     def command_found(self, key, datatype, datatype_certain):
         """A WRITE_REQUEST is protocol PROOF the key is a command, so surface it as a late command
@@ -1022,7 +1032,42 @@ def apply_derived_coalesce_window(extractor, calib, log=print):
         log(f"[calibrate] coalesce_window_s -> {w:.3f}s (period not measurable; config default)")
 
 
-def discover_and_calibrate(extractor, events, profile_path=None, log=print, emitter=None):
+@dataclass
+class Settings:
+    """Deployment configuration (MODERNISATION_PLAN item 9): the few things the bench needs declared
+    rather than discovered. Read from a TOML file (--config); every field has a "nothing declared"
+    default so a run without a file behaves exactly as before.
+
+    - ``exclude_flows``: flow keys (as group_flows names them, e.g. "opcua:sub:3") that are never
+      candidates for the state signal. They are still reported, marked EXCLUDED, so the exclusion is
+      visible in every run. This is where the bench's Temperature exclusion belongs once its handle is
+      known; until then the shipped file holds an empty list.
+    - ``state_signal``: pin the state flow key instead of the most-distinct-values rule. A pinned key
+      that is not observed makes the silo non-evaluable, reported with the reason: a wrong pin must
+      never fall back silently to discovery.
+    """
+    exclude_flows: list = field(default_factory=list)
+    state_signal: Optional[str] = None
+    path: Optional[str] = None
+
+    @classmethod
+    def load(cls, path):
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+        obs = data.get("observer", {})
+        excl = obs.get("exclude_flows", [])
+        if not isinstance(excl, list) or not all(isinstance(x, str) for x in excl):
+            raise ValueError(f"{path}: [observer].exclude_flows must be a list of flow keys")
+        pin = obs.get("state_signal")
+        if pin is not None and not isinstance(pin, str):
+            raise ValueError(f"{path}: [observer].state_signal must be a string flow key")
+        return cls(exclude_flows=list(excl), state_signal=pin, path=str(path))
+
+    def as_manifest(self):
+        return {"path": self.path, "exclude_flows": list(self.exclude_flows), "state_signal": self.state_signal}
+
+
+def discover_and_calibrate(extractor, events, profile_path=None, log=print, emitter=None, settings=None):
     """First pass: discover the state flow, then auto-calibrate the phase params from it.
 
     Returns (CalibrationResult, DiscoveryResult, state_flow) or (None, DiscoveryResult, None) when
@@ -1032,13 +1077,33 @@ def discover_and_calibrate(extractor, events, profile_path=None, log=print, emit
         raise RuntimeError(f"{extractor.name} does not support state-signal discovery yet")
 
     flows = extractor.group_flows(events)
+    settings = settings or Settings()
+    excluded = [fl for fl in flows if fl.key in settings.exclude_flows]
+    candidates = [fl for fl in flows if fl.key not in settings.exclude_flows]
     if emitter:
         for fl in flows:
             emitter.flow_found(fl)
-    disc = classify_flows(flows)
+    disc = classify_flows(candidates)
     if emitter:
         for v in disc.flows:
             emitter.variable_found(v)
+        for fl in excluded:
+            # Reported, never hidden: the exclusion is a declared decision and must stay visible.
+            emitter.excluded_flow(fl)
+    for fl in excluded:
+        log(f"  EXCLUDED          {fl.key:26s} role={fl.role_hint:9s} (by configuration, {settings.path})")
+
+    if settings.state_signal is not None:
+        # A pin replaces the most-distinct-values rule. It must name an observed, non-excluded flow.
+        pinned = next((fl for fl in candidates if fl.key == settings.state_signal), None)
+        if pinned is None:
+            log(f"[discover] configured state_signal {settings.state_signal!r} was not observed in this "
+                f"silo (or is excluded); silo not evaluable")
+            disc.state_flow_key = None
+            disc.pin_failed = True
+        else:
+            log(f"[discover] state signal pinned by configuration: {settings.state_signal}")
+            disc.state_flow_key = settings.state_signal
 
     log("[discover] flows:")
     for v in disc.flows:
@@ -1047,7 +1112,8 @@ def discover_and_calibrate(extractor, events, profile_path=None, log=print, emit
             f"unique={f.unique_values} range={f.value_range:.2f} step={f.median_step:.4f} rev={f.reversals}")
 
     if disc.state_flow_key is None:
-        log("[discover] no state signal found; extend --observe to cover >=1.5 process cycles")
+        if not getattr(disc, "pin_failed", False):
+            log("[discover] no state signal found; extend --observe to cover >=1.5 process cycles")
         return None, disc, None
 
     state_flow = next(f for f in flows if f.key == disc.state_flow_key)
@@ -1262,7 +1328,7 @@ def partition_by_server(events):
     return buckets
 
 
-def _calibrate_silo(extractor, silo, log, profile_path=None):
+def _calibrate_silo(extractor, silo, log, profile_path=None, settings=None):
     """Discover + calibrate ONE silo from its own event partition. Sets evaluable/reason.
 
     A silo is evaluable iff a state signal was DISCOVERED (calib is not None) -- exactly the
@@ -1277,9 +1343,13 @@ def _calibrate_silo(extractor, silo, log, profile_path=None):
     """
     log(f"[silo] {silo.endpoint}: {len(silo.events)} observe events")
     calib, _disc, state_flow = discover_and_calibrate(
-        extractor, silo.events, profile_path=profile_path, log=log, emitter=silo.emitter)
+        extractor, silo.events, profile_path=profile_path, log=log, emitter=silo.emitter, settings=settings)
     if calib is None:
-        silo.reason = "no state signal discovered (needs a bounded, cycling signal within --observe)"
+        if getattr(_disc, "pin_failed", False):
+            silo.reason = (f"configured state_signal {settings.state_signal!r} not observed in this silo "
+                           f"(config {settings.path})")
+        else:
+            silo.reason = "no state signal discovered (needs a bounded, cycling signal within --observe)"
         return
     if not calib.measurable:
         # Discovered but the period could not be measured: proceed on default config (as v2-dev does),
@@ -1362,7 +1432,7 @@ def load_silo_state(resume_dir, silo, log):
     return True
 
 
-def build_silos(extractor, observe_events, emitter, log, profile_path=None):
+def build_silos(extractor, observe_events, emitter, log, profile_path=None, settings=None):
     """Partition the observe window by server and discover+calibrate each silo independently.
 
     EVERY run comes through here; one silo is N=1. Returns the Silos in first-seen order.
@@ -1391,7 +1461,7 @@ def build_silos(extractor, observe_events, emitter, log, profile_path=None):
                          protocol=label, kind="unevaluable")
             continue
         silo = Silo(endpoint=endpoint, extractor=extractor, events=evs, emitter=emitter.bind(endpoint))
-        _calibrate_silo(extractor, silo, log, profile_path=(None if multi else profile_path))
+        _calibrate_silo(extractor, silo, log, profile_path=(None if multi else profile_path), settings=settings)
         # The peer(s): the distinct client HOST(s) observed talking to this silo (evt.client is set
         # by every extractor; the ephemeral client port is dropped). Observed, not configured.
         peers = sorted({e.client.rsplit(":", 1)[0] for e in evs if getattr(e, "client", None)})
@@ -1611,7 +1681,8 @@ class _Run:
         single = len(self.extractors) == 1
         for ext in self.extractors:
             silos = build_silos(ext, self.obs_by_ext.get(ext, []), emitter, log,
-                                profile_path=(args.profile if single else None))
+                                profile_path=(args.profile if single else None),
+                                settings=getattr(args, "settings", None))
             self.silos.extend(silos)
             if not any(s.evaluable for s in silos):
                 # A claimed extractor that yields no evaluable silo is a finding, not silently absent.
@@ -1766,6 +1837,9 @@ def main(argv=None):
     ap.add_argument("--respawn-backoff-cap", type=float, default=30.0,
                     help="cap (seconds) on the exponential respawn backoff 1,2,4,8...  (default 30). The "
                          "first retry always waits, so a genuinely-down interface cannot fork-loop.")
+    ap.add_argument("--config", default=None,
+                    help="deployment configuration (TOML): [observer] exclude_flows and state_signal. "
+                         "Default: /etc/liscere/liscere.toml or ./liscere.toml when one exists")
     ap.add_argument("--runs-dir", default="runs",
                     help="directory under which each run writes its record: <runs-dir>/<run_id>/ with "
                          "run.json (manifest), events.jsonl (the full stream) and verdicts.jsonl "
@@ -1787,6 +1861,16 @@ def main(argv=None):
     inp = _input_from_args(args)
     if inp is None:
         return 2
+    cfg_path = args.config
+    if cfg_path is None:
+        cfg_path = next((c for c in ("/etc/liscere/liscere.toml", "liscere.toml") if os.path.isfile(c)), None)
+    try:
+        args.settings = Settings.load(cfg_path) if cfg_path else Settings()
+    except (OSError, ValueError, tomllib.TOMLDecodeError) as exc:
+        print(f"--config: {exc}", file=sys.stderr)
+        return 2
+    if cfg_path:
+        log(f"[config] {cfg_path}: exclude_flows={args.settings.exclude_flows} state_signal={args.settings.state_signal}")
     record = None if args.no_run_dir else RunRecord(args.runs_dir)
     record_input = args.record if args.record is not None else (inp.kind != "replay")
     if record is not None and record_input:
@@ -1794,9 +1878,10 @@ def main(argv=None):
     clock = inp.clock
     if record is not None:
         source = {"kind": inp.kind, "iface": inp.iface} if inp.kind == "live" else {"kind": inp.kind, "path": inp.path}
-        record.update(args=vars(args), source=source, clock=clock.kind,
+        record.update(args={k: v for k, v in vars(args).items() if k != "settings"}, source=source, clock=clock.kind,
                       stabilisation_parameters={"k": args.stable_cycles, "epsilon": args.stable_epsilon},
                       human_hours=None,   # filled in by hand: operator time spent building this model
+                      config=args.settings.as_manifest(),
                       recorded=(inp.recorder.path if inp.recorder is not None else None),
                       python=sys.version.split()[0], tshark=(tshark_version() if inp.kind != "replay" else None))
         log(f"[run] {record.run_id} -> {record.path}")
