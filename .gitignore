@@ -8,8 +8,13 @@ __pycache__/
 .mypy_cache/
 .pytest_cache/
 
-# Run records written by liscere-observe (see --runs-dir)
+# Run records and loose run outputs written by liscere-observe / liscere-metrics
 runs/
+/*.jsonl
+/learned_grammar*.json
+/metrics.json
+/*.pcap
+/*.pcapng
 
 # Virtual environments
 .venv/

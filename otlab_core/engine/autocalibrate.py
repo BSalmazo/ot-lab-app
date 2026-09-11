@@ -10,7 +10,7 @@ the measured RATE. There are NO absolute-time constants, NO assumed sample rate,
 tuned to a specific testbed. The only literals are dimensionless detector thresholds (a "is it
 moving" epsilon, a smoothing span, a sign deadband, a fit span).
 
-DESIGN PRINCIPLE — scale consistency. Calibration statistics must be measured at the SAME scale as
+DESIGN PRINCIPLE: scale consistency. Calibration statistics must be measured at the SAME scale as
 the DECISION statistic. ``PhaseTracker`` decides direction from the WINDOWED least-squares slope,
 so the slope thresholds and confidence scale derive from the observed RATE (the windowed slope a
 clean ramp actually produces: level range over the half-cycle period) and from a noise floor
@@ -32,7 +32,7 @@ the result as DIAGNOSTICS only; they no longer drive the config.
 
 This supersedes manually-authored phase profiles (e.g. ``profiles/opcua_tank_10hz.json``): during
 learn mode a first pass observes the clean process, measures, and derives the ``PhaseConfig`` the
-``PhaseTracker`` then consumes. ``PhaseTracker``'s inference logic is unchanged — this only
+``PhaseTracker`` then consumes. ``PhaseTracker``'s inference logic is unchanged; this only
 PRODUCES its config.
 """
 
@@ -174,7 +174,7 @@ def calibrate_phase_config(samples: Sequence[Tuple[float, float]]) -> Calibratio
             period_samples=(period or 0.0), reversals=n_reversals, warning=_FALLBACK_WARNING,
         )
 
-    # DERIVE — window/stable_n/reversal_n are dimensionless ratios of P (unchanged, sound under
+    # DERIVE: window/stable_n/reversal_n are dimensionless ratios of P (unchanged, sound under
     # quantisation because _half_cycle_period already smooths).
     window = max(3, round(period / 30))
     reversal_n = max(2, round(period / 120))

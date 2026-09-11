@@ -1,12 +1,8 @@
-"""Modbus/TCP passive extractor (Phase 1B).
+"""Modbus/TCP passive extractor.
 
-This is a faithful refactor of the parsing that lived in ``scripts/tshark_runtime.py`` on the
-``v2-dev`` baseline. The field list, the drop conditions, the register/value/quantity
-derivation, and the summary string are reproduced exactly, so the event this produces
-serialises (via ``NormalizedEvent.to_wire_dict``) to byte-identical JSON.
-
-The runtime no longer hardcodes ``"modbus" not in protocols`` — that protocol-recognition check
-now lives here, where it belongs, inside the Modbus extractor.
+The parse is the one validated on the bench pcaps with tshark 4.4.15; ``tests/test_modbus_parity.py``
+pins its field list, drop conditions, register/value/quantity derivation and summary string.
+Protocol recognition (``"modbus" in frame.protocols``) lives here, not in the observer.
 """
 
 from __future__ import annotations

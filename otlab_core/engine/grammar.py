@@ -1,7 +1,7 @@
 """Operational grammar learning (brought in from LTR-2026-03, protocol-neutral).
 
 ``GrammarLearner`` observes normal operation and learns, per control target, the distribution of
-operational phases in which that target is written — a structural artefact->phase association,
+operational phases in which that target is written: a structural artefact->phase association,
 never a value baseline. It is a protocol-neutral port of ``liscere_learn.py``: where the original
 keyed on Modbus register numbers and carried a register_name, this keys on an opaque ``target``
 (an int register today, an OPC UA node id tomorrow) and carries no protocol-specific naming.

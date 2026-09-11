@@ -1,8 +1,8 @@
-"""State-signal discovery via behavioural flow classification (Degrau 4, level 4a).
+"""State-signal discovery via behavioural flow classification.
 
 Protocol-agnostic CORE. Given a set of ``Flow`` objects (a stream of (timestamp, value) samples
 plus a protocol-supplied ``role_hint``), it classifies each flow behaviourally and identifies which
-flow — if any — is the process STATE signal, so the observer can DISCOVER the state variable
+flow, if any, is the process STATE signal, so the observer can DISCOVER the state variable
 instead of being told a NodeId / register.
 
 The classification criterion is behavioural and lives here; each ProtocolExtractor enriches the
@@ -10,11 +10,11 @@ decision with protocol-specific role hints that REINFORCE, not replace, it. Ther
 protocol-specific logic in this module.
 
 Verdicts:
-  STATE             — a continuously-varying process variable (many distinct values, small
+  STATE            : a continuously-varying process variable (many distinct values, small
                       per-sample step relative to its range, at least one direction reversal).
-  COMMAND           — an operator-written control point (by role hint).
-  CONSTANT_METADATA — a static read/telemetry value (by role hint + very few distinct values).
-  AMBIGUOUS         — none of the above.
+  COMMAND          : an operator-written control point (by role hint).
+  CONSTANT_METADATA: a static read/telemetry value (by role hint + very few distinct values).
+  AMBIGUOUS        : none of the above.
 
 DEBT D5 (thresholds): STATE_MIN_UNIQUE / STATE_STEP_FRAC / STATE_MIN_REVERSALS are fixed defaults.
 Deriving them from observation (as Level-2 does for the phase params) is future work.

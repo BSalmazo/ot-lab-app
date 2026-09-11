@@ -34,6 +34,12 @@ jobs:
       - name: Build wheel and sdist
         run: uv build
 
+      - name: SBOM (CycloneDX) of the installed environment
+        run: |
+          uv sync --locked --extra ui
+          uv run --with cyclonedx-bom cyclonedx-py environment --of JSON -o dist/sbom.cdx.json .venv
+          uv run python -c "import json;d=json.load(open('dist/sbom.cdx.json'));print('components:',len(d.get('components',[])))"
+
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
 

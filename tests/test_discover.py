@@ -3,7 +3,7 @@
 
 Reproduces the validated result on representative OPC UA traffic: the classifier identifies the
 level (telemetry) flow as STATE, the write flow as COMMAND (role hint), and the read flow as
-CONSTANT_METADATA — with exactly ONE flow discovered as the state signal, the telemetry one.
+CONSTANT_METADATA, with exactly ONE flow discovered as the state signal, the telemetry one.
 
 Deterministic (seeded); runnable as `python3 tests/test_discover.py`.
 """
@@ -122,7 +122,7 @@ def main():
         check("read datatype uncertain (no variant on the wire)", read.datatype_certain is False)
 
     # FIX #1: a command whose value did NOT parse (unknown type / encrypted) must STILL produce a
-    # COMMAND flow — the flow is gated on the target, like the evaluator, not on a parsed value.
+    # COMMAND flow: the flow is gated on the target, like the evaluator, not on a parsed value.
     valueless = [write_event(0.0, "ns=4;i=99", None)]
     vflows = {v.key: v for v in classify_flows(ex.group_flows(valueless)).flows}
     vc = vflows.get("opcua:write:ns=4;i=99")
