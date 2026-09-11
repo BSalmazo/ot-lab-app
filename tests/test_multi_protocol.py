@@ -267,7 +267,7 @@ def main():
     ebuf = io.StringIO()
     _real_stderr, sys.stderr = sys.stderr, ebuf
     try:
-        rc = obs.main(["--iface", "x", "--probe", "1", "--observe", "1", "--learn", "1"])
+        rc = obs.main(["--no-run-dir", "--iface", "x", "--probe", "1", "--observe", "1", "--learn", "1"])
     finally:
         sys.stderr = _real_stderr
         obs.probe_layers = real_probe
@@ -312,7 +312,7 @@ def main():
     _real_stderr, _real_stdout = sys.stderr, sys.stdout
     sys.stderr, sys.stdout = cbuf, io.StringIO()   # the observer's JSON stream is noise here
     try:
-        rc_cap = obs.main(["--iface", "x", "--probe", "1", "--observe", "60", "--learn", "60",
+        rc_cap = obs.main(["--no-run-dir", "--iface", "x", "--probe", "1", "--observe", "60", "--learn", "60",
                            "--respawn-retries", "0"])   # no respawn -> a death is immediately permanent
     finally:
         sys.stderr, sys.stdout = _real_stderr, _real_stdout
@@ -338,7 +338,7 @@ def main():
         spawned = []
         obs._spawn = lambda ext, iface, reset_after=None: (spawned.append(ext.name), FakeProc(b""))[1]
         obuf = io.StringIO(); sys.stderr, sys.stdout = io.StringIO(), obuf
-        obs.main(["--iface", "x", "--probe", "1", "--observe", "60", "--learn", "60",
+        obs.main(["--no-run-dir", "--iface", "x", "--probe", "1", "--observe", "60", "--learn", "60",
                   "--respawn-retries", "0", "--only", "modbus,s7comm"])
         sys.stderr, sys.stdout = _es3, _eo3
         run_silos = [json.loads(l) for l in obuf.getvalue().splitlines() if json.loads(l).get("type") == "silo"]
@@ -354,7 +354,7 @@ def main():
         spawned2 = []
         obs._spawn = lambda ext, iface, reset_after=None: (spawned2.append(ext.name), FakeProc(b""))[1]
         lbuf = io.StringIO(); sys.stderr, sys.stdout = lbuf, io.StringIO()
-        obs.main(["--iface", "x", "--probe", "1", "--observe", "60", "--learn", "60",
+        obs.main(["--no-run-dir", "--iface", "x", "--probe", "1", "--observe", "60", "--learn", "60",
                   "--respawn-retries", "0", "--only", "modbus,profinet"])
         sys.stderr, sys.stdout = _es3, _eo3
         check("--only naming an unclaimed layer is noted, and the rest still runs",
@@ -365,7 +365,7 @@ def main():
         obs.probe_layers = lambda iface, secs, log=print, emitter=None: ({"modbus"}, {})
         obs._spawn = lambda ext, iface, reset_after=None: FakeProc(b"")
         xbuf = io.StringIO(); sys.stderr, sys.stdout = xbuf, io.StringIO()
-        rc_only = obs.main(["--iface", "x", "--probe", "1", "--only", "opcua"])
+        rc_only = obs.main(["--no-run-dir", "--iface", "x", "--probe", "1", "--only", "opcua"])
         sys.stderr, sys.stdout = _es3, _eo3
         check("--only excluding every claimed layer -> rc 2 with a clear message (no hang)",
               rc_only == 2 and "excludes every claimed layer" in xbuf.getvalue(), f"(rc={rc_only})")
